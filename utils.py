@@ -12,6 +12,7 @@ from requests.adapters import HTTPAdapter, Retry
 
 
 def seq_identity(seq_a, seq_b):
+     # pairwise2.align.globalxx(seq_a, seq_b, score_only=True / float(max(len(seq_a), len(seq_b)))
      return pairwise2.align.globalxx(seq_a, seq_b, score_only=True) / float(min(len(seq_a), len(seq_b)))
 
 

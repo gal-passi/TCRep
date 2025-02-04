@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+from numpy.f2py.auxfuncs import throw_error
+
 from utils import *
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
@@ -14,7 +16,6 @@ import numpy as np
 
 class TCRdb():
     """Curation of data from TCRdb http://bioinfo.life.hust.edu.cn/TCRdb/#/"""
-
     def __init__(self):
         """Constructor for TCRdb"""
         _dir = TCR_DB_PATH
@@ -22,9 +23,10 @@ class TCRdb():
             _index = json.load(f)
 
 
-class Study():
+class Study:
     def __init__(self, study_id):
         # set name from variable name. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
+        # TODO: name is basically _id which is actually study_id, so why not just call it study_id?
         self.name = study_id
 
         try:
@@ -36,6 +38,7 @@ class Study():
                 os.makedirs(save_dir)
             self._desc = ''
             self._samples = {'usable': [], 'uncertain': [], 'background': []}
+            # self._columns = {'seq': 'AASeq', 'study': 'RunId', 'study_id': 'study_id', 'patient_id': 'patient_id', 'tissue': 'tissue', 'cell_type': 'cell_type'}
             self._columns = {'seq': 'AASeq', 'v': 'Vregion', 'd': 'Dregion', 'j': 'Jregion', 'study': 'RunId'}
 
         self._data_path = os.path.join(os.path.dirname(__file__), TCR_DB_PATH)
@@ -48,7 +51,7 @@ class Study():
             self._samples['usable'].append(val)
             return self
         if isinstance(val, Sample):
-            self._samples['usable'].append(val.name)
+            self._samples['usable'].append(val.sample_id)
             return self
 
     def __sub__(self, val):
@@ -56,7 +59,7 @@ class Study():
             self._samples['background'].append(val)
             return self
         if isinstance(val, Sample):
-            self._samples['uncertain'].append(val.name)
+            self._samples['uncertain'].append(val.sample_id)
             return self
 
     def __xor__(self, val):
@@ -64,7 +67,7 @@ class Study():
             self._samples['uncertain'].append(val)
             return self
         if isinstance(val, Sample):
-            self._samples['uncertain'].append(val.name)
+            self._samples['uncertain'].append(val.sample_id)
             return self
 
     def save(self):
@@ -90,13 +93,22 @@ class Study():
         """
         sample_ids = [sample_ids] if isinstance(sample_ids, str) else sample_ids
         df = pd.read_table(os.path.join(self._data_path, f"{self._id}.tsv"))
+
+        # get info about each sample from the study and merge to the large df with info about each sample
+        samples = [Sample(self._id, sample_id) for sample_id in sample_ids]
+        samples_df = pd.DataFrame([s.__dict__ for s in samples])
+        temp = df[df[self._columns['study']].isin(sample_ids)]
+        merged_df = temp.merge(samples_df, left_on='RunId', right_on='sample_id', how='left')
+        merged_df.drop(columns=['study_id', 'sample_id'], inplace=True)
+
+        # return only the specified columns (or all columns if not specified)
         if ret_columns:
             if isinstance(ret_columns, str):
                 ret_columns = [ret_columns]
             assert isinstance(ret_columns, list), 'ret_columns must be in [list | str]'
         else:
-            ret_columns = df.columns
-        return df[df[self._columns['study']].isin(sample_ids)][ret_columns]
+            ret_columns = merged_df.columns
+        return merged_df[ret_columns]
 
     def build_train_test_classification(self, pos_examples=None, neg_examples=None, seq_identity_threshold=1.0,
                                         validation_ration=0.1, test_ratio=0.1, save=True, path=None):
@@ -189,59 +201,127 @@ class Study():
         return sequences
 
 
-class Sample():
+class Sample:
     """holds data about individual samples in a study"""
-
-    def __init__(self, id, study_id, origin=''):
-        # set name from variable name. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
-        self.name = id
-        self.study = study_id
+    # def __init__(self, id, study_id, origin=''):
+    def __init__(self, study_id, sample_id, patient_id='', tissue='', cell_type=''):
+        # set sample_id from variable sample_id. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
+        self.study_id = study_id
+        self.sample_id = sample_id
         try:
             self.load()
         except:
-            self.origin = origin
+            self.patient_id = patient_id
+            self.tissue = tissue
+            self.cell_type = cell_type
             self.save()
 
     def save(self):
-        """save class as self.name.txt"""
-        save_dir = os.path.join(STUDY_SAVE_DIR, self.study, f"{self.name}.txt")
+        """save class as self.study_id.txt"""
+        save_dir = os.path.join(STUDY_SAVE_DIR, self.study_id, f"{self.sample_id}.txt")
         with open(save_dir, 'w') as file:
             json.dump(self.__dict__, file)
 
     def load(self):
-        """try load self.name.txt"""
-        load_dir = os.path.join(STUDY_SAVE_DIR, self.study, f"{self.name}.txt")
+        """try load self.study_id.txt"""
+        load_dir = os.path.join(STUDY_SAVE_DIR, self.study_id, f"{self.sample_id}.txt")
         with open(load_dir, 'r') as file:
             data = file.read()
             self.__dict__ = json.loads(data)
 
 
-def build_study(study_id, study_desc, columns, usable_samples, uncertain_samples, background_samples):
+def build_study(study_id, study_df, study_desc, usable, uncertain, background):
     """
-    builds a new study entery
+    builds a new study entry
     :param study_id: str
+    :param study_df: pandas df
     :param study_desc: str
-    :param columns: name of columns in df in this order [sequence, Vgene, Dgene, Jgene, samples_id]
-    :param usable_samples: list [[samples ids, sample_origin], ]
-    :param uncertain_samples: list [[samples ids, sample_origin], ]
-    :param background_samples: list [[samples ids, sample_origin], ]
     :return: Study
     """
-    obj = Study(study_id)
-    obj._desc = study_desc
-    for i, key in enumerate(obj._columns.keys()):
-        obj._columns[key] = columns[i]
-    for sample_id, orig in usable_samples:
-        sample = Sample(sample_id, study_id, orig)
-        obj += sample
-    for sample_id, orig in uncertain_samples:
-        sample = Sample(sample_id, study_id, orig)
-        obj ^= sample
-    for sample_id, orig in background_samples:
-        sample = Sample(sample_id, study_id, orig)
-        obj -= sample
-    obj.save()
-    return obj
+    if study_id == 'PRJNA393498':
+        return build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ47':
+        return build_study_immunoSEQ47(study_id, study_df, study_desc, usable, uncertain, background)
+    throw_error('study_id not found!')
+
+
+def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        if tissue == 'Synovial fluid':
+            patient_id = comment.split(' ')[-1].split('_')[0]
+            if comment[-1] == '4' or comment[-1] == '8':
+                cell_type = "CD" + comment[-1]
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                study += sample
+                found_usable.append(sample_id)
+            elif comment.endswith('TRBV9'):
+                cell_type = "Other (TRBV9)"
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                study += sample
+                found_usable.append(sample_id)
+            else:
+                # adding to uncertain if there is no cell type (we want only CD4 or CD8)
+                cell_type = "Other"
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                study ^= sample
+                found_uncertain.append(sample_id)
+        else:
+            if comment[-2:] == '_4' or comment[-2:] == '_8':
+                patient_id = comment.split(' ')[-1].split('_')[0]
+                cell_type = "CD" + comment[-1]
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                study -= sample
+                found_background.append(sample_id)
+            else:
+                cell_type = 'Other'
+                if '-' in comment:
+                    patient_id = comment.split(' ')[-1].split('-')[0]
+                elif '_' in comment:
+                    patient_id = comment.split(' ')[-1].split('_')[0]
+                    cell_type = f"Other ({comment.split('_')[-1]})"
+                else:
+                    patient_id = comment.split(' ')[-1]
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                study -= sample
+                found_background.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_immunoSEQ47(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type'][:-1]
+        patient_id = comment.split('_')[0]
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
 
 
 if __name__ == '__main__':

@@ -1,5 +1,11 @@
 import os
 from os.path import join as pjoin
+import warnings
+import warnings
+# TODO: Test if this removes the warnings!
+from Bio import BiopythonDeprecationWarning
+warnings.filterwarnings("ignore", category=BiopythonDeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 
 #  SETUP PARAMETERS
 BASE_DIRECTORY = os.getcwd()
@@ -7,7 +13,7 @@ STUDIES_DATABASE = 'db'
 TCR_DATABASES = {'tcrdb': 'tcrdb'}
 OBJECTS_DATABASE = 'objects'
 OBJECTS_TYPES = ['studies']
-INIT_STUDIES = ['PRJNA393498']
+INIT_STUDIES = ['PRJNA393498', 'immunoSEQ47']
 
 #  REQUESTS CONSTANTS
 

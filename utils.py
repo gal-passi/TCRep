@@ -12,8 +12,7 @@ from requests.adapters import HTTPAdapter, Retry
 
 
 def seq_identity(seq_a, seq_b):
-     # pairwise2.align.globalxx(seq_a, seq_b, score_only=True / float(max(len(seq_a), len(seq_b)))
-     return pairwise2.align.globalxx(seq_a, seq_b, score_only=True) / float(min(len(seq_a), len(seq_b)))
+     return pairwise2.align.globalxx(seq_a, seq_b, score_only=True) / float(max(len(seq_a), len(seq_b)))
 
 
 def format_runids(runids, desc=''):
@@ -46,8 +45,8 @@ def calculate_distance_matrix(train_seq, test_seq, matric=seq_identity, chunks =
                 overlapping_seqs[thr] += list(np.unique(values))
             del D
 
-    with open(f'{name_to_save}.txt', 'w') as file:
-        json.dump(overlapping_seqs, file)
+    # with open(f'{name_to_save}.txt', 'w') as file:
+    #     json.dump(overlapping_seqs, file)
 
     return overlapping_seqs
 

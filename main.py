@@ -143,7 +143,7 @@ def process_and_evaluate(cd4_syn, cd4_bld, pad, to_plot=True):
     return np.mean(scores), np.std(scores)
 
 
-def get_cached_embeddings(sequences, cache_dir="cache/esm_c/", embed_fn=None):
+def get_cached_embeddings(sequences, name='', cache_dir="cache/esm_c/", embed_fn=None):
     """
     Load cached embeddings if available, otherwise compute and cache them.
 
@@ -156,7 +156,7 @@ def get_cached_embeddings(sequences, cache_dir="cache/esm_c/", embed_fn=None):
         numpy array of embeddings
     """
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f"embeddings_{hash(tuple(sequences))}.npy")
+    cache_file = os.path.join(cache_dir, f"embeds_{name}.npy")
 
     # Load with pickle
     if os.path.exists(cache_file):
@@ -289,10 +289,10 @@ if __name__ == '__main__':
     # cd4_bld = embed(list(sr_cd4_bld_vld.index))
     # cd8_bld = embed(list(sr_cd8_bld_vld.index))
     # Modified embedding code
-    cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld.index), embed_fn=embed)
-    cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld.index), embed_fn=embed)
-    cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld.index), embed_fn=embed)
-    cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld.index), embed_fn=embed)
+    cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld.index), name='cd4_syn', embed_fn=embed)
+    cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld.index), name='cd8_syn', embed_fn=embed)
+    cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld.index), name='cd4_bld', embed_fn=embed)
+    cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld.index), name='cd8_bld', embed_fn=embed)
 
     mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, pad=20)  # 20 is the max size for all seqs
     print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

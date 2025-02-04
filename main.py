@@ -158,14 +158,20 @@ def get_cached_embeddings(sequences, cache_dir="cache/esm_c/", embed_fn=None):
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, f"embeddings_{hash(tuple(sequences))}.npy")
 
+    # Load with pickle
     if os.path.exists(cache_file):
-        return np.load(cache_file)
+        with open(cache_file, 'rb') as f:
+            return pickle.load(f)
 
     if embed_fn is None:
         raise ValueError("embed_fn must be provided if embeddings are not cached")
 
+    # Compute embeddings
     embeddings = embed_fn(sequences)
-    np.save(cache_file, embeddings)
+
+    # saving with pickle
+    with open(cache_file, 'wb') as f:
+        pickle.dump(embeddings, f)
     return embeddings
 
 
@@ -266,6 +272,7 @@ if __name__ == '__main__':
     else:
         # Filter sequences that appear in at least two different patients
         out = [get_valid_seqs(d) for d in all_dfs]
+        # TODO: Find out why are there less samples in my case than in Sapir's case
         sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = out
         # df_cd4_syn_vld, df_cd8_syn_vld, df_cd4_bld_vld, df_cd8_bld_vld = df_cd4_syn[df_cd4_syn['AASeq'].isin(sr_cd4_syn_vld.index)], \
         #                                                                   df_cd8_syn[df_cd8_syn['AASeq'].isin(sr_cd8_syn_vld.index)], \

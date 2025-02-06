@@ -16,6 +16,7 @@ from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score
+from itertools import combinations
 
 
 STUDY_ID = 'PRJNA393498'
@@ -149,21 +150,45 @@ def get_valid_seqs(df, df_ind, name_opt):
 def calculate_valid_seqs(df, df_ind):
     # Step 1: Create patient-wise groups
     seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
+    # Sorting sequences according to length (MIGHT NOT BE NEEDED!)
+    # for key in seqs_by_patient.keys():
+    #     seqs_by_patient[key] = np.array(sorted(seqs_by_patient[key], key=len), dtype=object)
+
     # Step 2: Compare sequences across different patients
     valid_sequences = set()
-    for (pid1, seqs1), (pid2, seqs2) in tqdm(product(seqs_by_patient.items(), repeat=2),
-                                             total=len(seqs_by_patient) ** 2):
-        if pid1 == pid2:
-            continue  # Skip same patient
+    for (pid1, seqs1), (pid2, seqs2) in tqdm(combinations(seqs_by_patient.items(), 2),
+                                             total=len(seqs_by_patient) * (len(seqs_by_patient) - 1) // 2):
+        # Sort seqs1 by length
+        seqs1_by_len = {}
+        for seq in seqs1:
+            seq_len = len(seq)
+            if seq_len not in seqs1_by_len:
+                seqs1_by_len[seq_len] = []
+            seqs1_by_len[seq_len].append(seq)
 
-        # Calculate pairwise identity matrix
-        pwc_mat = pairwise_scores(seqs1, seqs2, score=seq_identity)
-        sim_inxs = np.where(pwc_mat >= 0.9)
+        # Convert lists to numpy arrays for efficiency
+        seqs1_by_len = {k: np.array(v, dtype=object) for k, v in seqs1_by_len.items()}
 
-        # Add matching sequences to valid set
-        for x, y in zip(sim_inxs[0], sim_inxs[1]):
-            valid_sequences.add(seqs1[x])
-            valid_sequences.add(seqs2[y])
+        # Sort seqs2 by length for efficient filtering
+        seqs2_by_len = np.array(sorted(seqs2, key=len), dtype=object)
+        seqs2_lens = np.array([len(seq) for seq in seqs2_by_len])
+
+        # Iterate over length groups in seqs1
+        for length, group1 in seqs1_by_len.items():
+            # Select seqs2 that are in the range [length-2, length+2]
+            min_len, max_len = length - 2, length + 2
+            mask = (seqs2_lens >= min_len) & (seqs2_lens <= max_len)
+            group2 = seqs2_by_len[mask]
+
+            if len(group2) > 0:
+                # Compute pairwise identity matrix
+                pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
+                sim_inxs = np.where(pwc_mat >= 0.9)
+
+                # Add matching sequences to valid set
+                for x, y in zip(sim_inxs[0], sim_inxs[1]):
+                    valid_sequences.add(group1[x])
+                    valid_sequences.add(group2[y])
 
     cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
     with open(cache_pkl, 'wb') as f:
@@ -197,9 +222,9 @@ if __name__ == '__main__':
     dist_option = args.dist_option
     study_ind = args.study_ind
     print("RUN CONFIGURATION:")
-    print(f"df_ind: {df_ind}")
-    print(f"dist_option: {dist_option}")
-    print(f"study_ind: {study_ind}")
+    print(f"\tdf_ind: {df_ind}")
+    print(f"\tdist_option: {dist_option}")
+    print(f"\tstudy_ind: {study_ind}")
     print()
 
     if dist_option == 1:
@@ -225,6 +250,8 @@ if __name__ == '__main__':
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
     all_valid_seqs = [get_valid_seqs(df, i, name_opt) for i, df in enumerate(all_dfs)]
+
+    valid_sequences = calculate_valid_seqs(df_cd4_syn, 0)
 
     if any(item is None for item in all_valid_seqs):
         if all_valid_seqs[df_ind] is None:

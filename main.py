@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 import torch
 import os
-from Bio import pairwise2
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.model_selection import KFold
 from tqdm import tqdm
@@ -21,45 +20,11 @@ from sklearn.metrics import accuracy_score
 
 STUDY_ID = 'PRJNA393498'
 STUDY_ID2 = 'immunoSEQ47'
+STUDIES = [STUDY_ID, STUDY_ID2]
+VALID_SEQ_CACHE = "cache/valid_sequences"
 
 
-# Function to compute global sequence identity
-def sequence_identity(seq1, seq2):
-    alignments = pairwise2.align.globalxx(seq1, seq2, one_alignment_only=True)
-    score = alignments[0].score  # Number of matching characters
-    return score / max(len(seq1), len(seq2))  # Normalize by longest sequence
-
-
-# TODO: Too slow because there are too many sequences
-def do_k_fold(seqs):
-    # Compute pairwise identity matrix
-    n = len(seqs)
-    identity_matrix = np.zeros((n, n))
-
-    for i in tqdm(range(n)):
-        for j in range(i + 1, n):
-            identity_matrix[i, j] = identity_matrix[j, i] = sequence_identity(seqs[i], seqs[j])
-
-    # Cluster sequences based on identity (adjust threshold as needed)
-    clustering = AgglomerativeClustering(n_clusters=None, distance_threshold=0.9, affinity='precomputed',
-                                         linkage='complete')
-    clusters = clustering.fit_predict(1 - identity_matrix)  # Convert similarity to distance (1 - identity)
-
-    # Assign clusters to folds
-    unique_clusters = np.unique(clusters)
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    folds = {i: [] for i in range(5)}
-
-    for fold_idx, cluster_idx in enumerate(kf.split(unique_clusters)):
-        for cluster in unique_clusters[cluster_idx[1]]:
-            folds[fold_idx].extend(np.where(clusters == cluster)[0])
-
-    # Display fold assignments
-    for fold, indices in folds.items():
-        print(f"Fold {fold + 1}: {[seqs[i] for i in indices]}")
-
-
-def get_valid_seqs(df):
+def get_valid_seqs_original(df):
     valid_seqs = df.groupby('AASeq')['patient_id'].nunique()
     return valid_seqs[valid_seqs >= 2]
 
@@ -97,17 +62,13 @@ def pad_and_flatten(tensor_list, pad):
     return np.array(padded_data)
 
 
-def process_and_evaluate(cd4_syn, cd4_bld, pad, to_plot=True):
+def process_and_evaluate(syn, bld, pad, to_plot=True, cd_type='4'):
     # Prepare data
-    X_syn = pad_and_flatten(cd4_syn, pad)
-    X_bld = pad_and_flatten(cd4_bld, pad)
+    X_syn = pad_and_flatten(syn, pad)
+    X_bld = pad_and_flatten(bld, pad)
 
     X = np.vstack([X_syn, X_bld])
-    y = np.array([0] * len(cd4_syn) + [1] * len(cd4_bld))
-
-    # Apply t-SNE
-    tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-    X_tsne = tsne.fit_transform(X)
+    y = np.array([0] * len(syn) + [1] * len(bld))
 
     # Apply t-SNE
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
@@ -116,12 +77,12 @@ def process_and_evaluate(cd4_syn, cd4_bld, pad, to_plot=True):
     # Plotting if needed
     if to_plot:
         plt.figure(figsize=(10, 6))
-        plt.scatter(X_tsne[:len(cd4_syn), 0], X_tsne[:len(cd4_syn), 1],
+        plt.scatter(X_tsne[:len(syn), 0], X_tsne[:len(syn), 1],
                     c='blue', label='Synovial Fluid')
-        plt.scatter(X_tsne[len(cd4_syn):, 0], X_tsne[len(cd4_syn):, 1],
+        plt.scatter(X_tsne[len(bld):, 0], X_tsne[len(bld):, 1],
                     c='red', label='Blood')
         plt.legend()
-        plt.title('t-SNE Visualization of CD4 Data')
+        plt.title(f't-SNE Visualization of CD{cd_type} Data')
         plt.xlabel('t-SNE 1')
         plt.ylabel('t-SNE 2')
         plt.show()
@@ -156,7 +117,7 @@ def get_cached_embeddings(sequences, name='', cache_dir="cache/esm_c/", embed_fn
         numpy array of embeddings
     """
     os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(cache_dir, f"embeds_{name}.npy")
+    cache_file = os.path.join(cache_dir, f"embeds_{name}.pkl")
 
     # Load with pickle
     if os.path.exists(cache_file):
@@ -175,8 +136,42 @@ def get_cached_embeddings(sequences, name='', cache_dir="cache/esm_c/", embed_fn
     return embeddings
 
 
+def get_valid_seqs(df, df_ind, name_opt):
+    cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}{name_opt}.pkl")
+    if os.path.exists(cache_pkl):
+        with open(cache_pkl, 'rb') as f:
+            valid_sequences = pickle.load(f)
+        return df[df['AASeq'].isin(valid_sequences)]['AASeq'].unique()
+    else:
+        return None
+
+
+def calculate_valid_seqs(df, df_ind):
+    # Step 1: Create patient-wise groups
+    seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
+    # Step 2: Compare sequences across different patients
+    valid_sequences = set()
+    for (pid1, seqs1), (pid2, seqs2) in tqdm(product(seqs_by_patient.items(), repeat=2),
+                                             total=len(seqs_by_patient) ** 2):
+        if pid1 == pid2:
+            continue  # Skip same patient
+
+        # Calculate pairwise identity matrix
+        pwc_mat = pairwise_scores(seqs1, seqs2, score=seq_identity)
+        sim_inxs = np.where(pwc_mat >= 0.9)
+
+        # Add matching sequences to valid set
+        for x, y in zip(sim_inxs[0], sim_inxs[1]):
+            valid_sequences.add(seqs1[x])
+            valid_sequences.add(seqs2[y])
+
+    cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
+    with open(cache_pkl, 'wb') as f:
+        pickle.dump(valid_sequences, f)
+    return valid_sequences
+
+
 if __name__ == '__main__':
-    study = Study(STUDY_ID)
     # return numpy array of unique sequences - see docstring
     # sequence = study.build_train_representations(samples=None, save=False, path=None)
     # print(sequence)
@@ -196,11 +191,23 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--df_ind', type=int, default=0)
     parser.add_argument('--dist_option', type=int, default=0)
+    parser.add_argument('--study_ind', type=int, default=0)
     args = parser.parse_args()
     df_ind = args.df_ind
     dist_option = args.dist_option
+    study_ind = args.study_ind
+    print("RUN CONFIGURATION:")
     print(f"df_ind: {df_ind}")
     print(f"dist_option: {dist_option}")
+    print(f"study_ind: {study_ind}")
+    print()
+
+    if dist_option == 1:
+        name_opt = '_opt1'
+    else:
+        name_opt = ''
+
+    study = Study(STUDIES[study_ind])
 
     # reading synovial samples
     samples_syn = study._samples['usable']
@@ -216,93 +223,45 @@ if __name__ == '__main__':
     df_cd8_bld = df_cd8_bld[df_cd8_bld['patient_id'].isin(df_cd8_syn['patient_id'].unique())]
 
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
-
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
+    all_valid_seqs = [get_valid_seqs(df, i, name_opt) for i, df in enumerate(all_dfs)]
 
-    df = all_dfs[df_ind]
-    valid_sequences = set()
+    if any(item is None for item in all_valid_seqs):
+        if all_valid_seqs[df_ind] is None:
+            df = all_dfs[df_ind]
+            print(f"Calculating Valid Sequences of DF: {df_ind}!")
+            valid_sequences = calculate_valid_seqs(df, df_ind)
+            print(f"Done calculating valid sequences of df: {df_ind}!")
+            all_valid_seqs[df_ind] = valid_sequences
+        else:
+            for i, df in enumerate(all_dfs):
+                if all_valid_seqs[i] is None:
+                    print(f"Calculating Valid Sequences of DF: {i}!")
+                    if dist_option == 0:
+                        valid_sequences = get_valid_seqs_original(df)
+                    else:
+                        valid_sequences = calculate_valid_seqs(df, i)
+                    print(f"Done calculating valid sequences of df: {i}!")
+                    all_valid_seqs[i] = valid_sequences
+    # OTHER OPTION: Use exact sequences that appear in two or more patients in the same Tissue
+    #     # Filter sequences that appear in at least two different patients
+    #     # TODO: Find out why are there less samples in my case than in Sapir's case
+    #     out = [get_valid_seqs_original(d) for d in all_dfs]
 
-    # TODO: Method 0 is probably very slow when compared to Method 1!
-    if dist_option == 0:
-        # Step 1: Create patient-wise groups
-        seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
-
-        # Step 2: Compare sequences across different patients
-        valid_sequences = set()
-
-        for (pid1, seqs1), (pid2, seqs2) in tqdm(product(seqs_by_patient.items(), repeat=2),
-                                                 total=len(seqs_by_patient) ** 2):
-            if pid1 == pid2:
-                continue  # Skip same patient
-
-            for seq1 in tqdm(seqs1):
-                for seq2 in seqs2:
-                    if sequence_identity(seq1, seq2) >= 0.9:  # 90% sequence identity threshold
-                    # if ratio(seq1, seq2) >= 0.9:  # 90% sequence identity
-                        valid_sequences.add(seq1)
-                        valid_sequences.add(seq2)
-
-        # save valid sequences as pkl
-        with open(f'valid_sequences_{df_ind}.pkl', 'wb') as f:
-            pickle.dump(valid_sequences, f)
-        print('done!')
-    elif dist_option == 1:
-        # Step 1: Create patient-wise groups
-        seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
-
-        # Step 2: Compare sequences across different patients
-        valid_sequences = set()
-
-        for (pid1, seqs1), (pid2, seqs2) in tqdm(product(seqs_by_patient.items(), repeat=2),
-                                                 total=len(seqs_by_patient) ** 2):
-            if pid1 == pid2:
-                continue  # Skip same patient
-
-            # Calculate pairwise identity matrix
-            pwc_mat = pairwise_scores(seqs1, seqs2, score=seq_identity)
-            sim_inxs = np.where(pwc_mat >= 0.9)
-
-            # Add matching sequences to valid set
-            for x, y in zip(sim_inxs[0], sim_inxs[1]):
-                valid_sequences.add(seqs1[x])
-                valid_sequences.add(seqs2[y])
-
-        with open(f'valid_sequences_{df_ind}_opt1.pkl', 'wb') as f:
-            pickle.dump(valid_sequences, f)
-    else:
-        # Filter sequences that appear in at least two different patients
-        out = [get_valid_seqs(d) for d in all_dfs]
-        # TODO: Find out why are there less samples in my case than in Sapir's case
-        sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = out
-        # df_cd4_syn_vld, df_cd8_syn_vld, df_cd4_bld_vld, df_cd8_bld_vld = df_cd4_syn[df_cd4_syn['AASeq'].isin(sr_cd4_syn_vld.index)], \
-        #                                                                   df_cd8_syn[df_cd8_syn['AASeq'].isin(sr_cd8_syn_vld.index)], \
-        #                                                                     df_cd4_bld[df_cd4_bld['AASeq'].isin(sr_cd4_bld_vld.index)], \
-        #                                                                     df_cd8_bld[df_cd8_bld['AASeq'].isin(sr_cd8_bld_vld.index)]
-
-    # Step 3: Keep only matching sequences
-    # filtered_df = df[df['AASeq'].isin(valid_sequences)]
+    sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
     # TODO: Maybe need to remove samples that are only in blood but not in synovial!
-
-    # cd4_syn = embed(list(sr_cd4_syn_vld.index))
-    # cd8_syn = embed(list(sr_cd8_syn_vld.index))
-    # cd4_bld = embed(list(sr_cd4_bld_vld.index))
-    # cd8_bld = embed(list(sr_cd8_bld_vld.index))
     # Modified embedding code
-    cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld.index), name='cd4_syn', embed_fn=embed)
-    cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld.index), name='cd8_syn', embed_fn=embed)
-    cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld.index), name='cd4_bld', embed_fn=embed)
-    cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld.index), name='cd8_bld', embed_fn=embed)
+    cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld), name='cd4_syn' + name_opt, embed_fn=embed)
+    cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld), name='cd8_syn' + name_opt, embed_fn=embed)
+    cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), name='cd4_bld' + name_opt, embed_fn=embed)
+    cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), name='cd8_bld' + name_opt, embed_fn=embed)
 
-    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, pad=20)  # 20 is the max size for all seqs
+    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, pad=22, cd_type="4")  # 20 is the max size for all seqs
     print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
 
-    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, pad=20)  # 20 is the max size for all seqs
+    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, pad=22, cd_type="8")  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-
-    pass
-
-
 
     # seqs_cd4 = df_cd4["AASeq"].drop_duplicates().reset_index(drop=True)
     # # seqs_cd8 = df_cd8["AASeq"].drop_duplicates().reset_index(drop=True)
@@ -316,17 +275,3 @@ if __name__ == '__main__':
     # seqs_cd4[fold_inxs[0][1]]
 
     # do_k_fold(seqs_cd4)
-
-
-#
-# from esm.models.esmc import ESMC
-# from esm.sdk.api import ESMProtein, LogitsConfig
-#
-# protein = ESMProtein(sequence="AAAAA")
-# client = ESMC.from_pretrained("esmc_300m").to("cpu") # or "cuda"
-# protein_tensor = client.encode(protein)
-# logits_output = client.logits(
-#    protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
-# )
-# print(logits_output.logits, logits_output.embeddings)
-#

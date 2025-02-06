@@ -2,7 +2,8 @@ from Levenshtein import ratio as levenshtein_ratio
 from scipy.spatial.distance import pdist
 import numpy as np
 import math
-from Bio import pairwise2
+# from Bio import pairwise2
+from Bio.Align import PairwiseAligner
 from Bio.Seq import Seq
 from multiprocessing import cpu_count, Pool
 from itertools import combinations_with_replacement, product
@@ -12,7 +13,10 @@ from requests.adapters import HTTPAdapter, Retry
 
 
 def seq_identity(seq_a, seq_b):
-     return pairwise2.align.globalxx(seq_a, seq_b, score_only=True) / float(max(len(seq_a), len(seq_b)))
+    aligner = PairwiseAligner()
+    aligner.mode = 'global'
+    return aligner.score(seq_a, seq_b) / max(len(seq_a), len(seq_b))
+    # return pairwise2.align.globalxx(seq_a, seq_b, score_only=True) / float(max(len(seq_a), len(seq_b)))
 
 
 def format_runids(runids, desc=''):

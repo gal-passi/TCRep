@@ -10,6 +10,11 @@ from itertools import combinations_with_replacement, product
 import json
 import requests
 from requests.adapters import HTTPAdapter, Retry
+from Levenshtein import distance
+
+
+def levenshtein_dist(seq_a, seq_b):
+    return 1 if distance(seq_a, seq_b) <= 2 else 0
 
 
 def seq_identity(seq_a, seq_b):

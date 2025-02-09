@@ -1,3 +1,5 @@
+import warnings
+warnings.simplefilter("ignore", category=FutureWarning)
 from Curation import Study
 import pandas as pd
 import numpy as np
@@ -8,7 +10,7 @@ from sklearn.model_selection import KFold
 from tqdm import tqdm
 from itertools import product
 from Levenshtein import ratio  # pip install python-Levenshtein
-from utils import seq_identity, calculate_distance_matrix, pairwise_scores
+from utils import seq_identity, calculate_distance_matrix, pairwise_scores, levenshtein_dist
 import pickle
 import argparse
 import matplotlib.pyplot as plt
@@ -63,7 +65,7 @@ def pad_and_flatten(tensor_list, pad):
     return np.array(padded_data)
 
 
-def process_and_evaluate(syn, bld, pad, to_plot=True, cd_type='4'):
+def process_and_evaluate(syn, bld, pad, to_plot=True, cd_type='4', name_opt=''):
     # Prepare data
     X_syn = pad_and_flatten(syn, pad)
     X_bld = pad_and_flatten(bld, pad)
@@ -86,6 +88,8 @@ def process_and_evaluate(syn, bld, pad, to_plot=True, cd_type='4'):
         plt.title(f't-SNE Visualization of CD{cd_type} Data')
         plt.xlabel('t-SNE 1')
         plt.ylabel('t-SNE 2')
+        # save plot
+        plt.savefig(f"plots/tsne_cd{cd_type}{name_opt}.png")
         plt.show()
 
     # K-fold cross validation
@@ -182,6 +186,7 @@ def calculate_valid_seqs(df, df_ind):
 
             if len(group2) > 0:
                 # Compute pairwise identity matrix
+                # pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist)
                 pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
                 sim_inxs = np.where(pwc_mat >= 0.9)
 
@@ -189,6 +194,21 @@ def calculate_valid_seqs(df, df_ind):
                 for x, y in zip(sim_inxs[0], sim_inxs[1]):
                     valid_sequences.add(group1[x])
                     valid_sequences.add(group2[y])
+        # # Calculate pairwise identity matrix
+        # pwc_mat = pairwise_scores(seqs1, seqs2, score=seq_identity)
+        # sim_inxs = np.where(pwc_mat >= 0.9)
+        #
+        # # Add matching sequences to valid set
+        # for x, y in zip(sim_inxs[0], sim_inxs[1]):
+        #     valid_sequences.add(seqs1[x])
+        #     valid_sequences.add(seqs2[y])
+
+    # print(len(valid_sequences))
+    # cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
+    # if os.path.exists(cache_pkl):
+    #     with open(cache_pkl, 'rb') as f:
+    #         print(len(pickle.load(f)))
+    # exit(0)
 
     cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
     with open(cache_pkl, 'wb') as f:
@@ -225,7 +245,7 @@ if __name__ == '__main__':
     print(f"\tdf_ind: {df_ind}")
     print(f"\tdist_option: {dist_option}")
     print(f"\tstudy_ind: {study_ind}")
-    print()
+    print("\n")
 
     if dist_option == 1:
         name_opt = '_opt1'
@@ -250,8 +270,6 @@ if __name__ == '__main__':
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
     all_valid_seqs = [get_valid_seqs(df, i, name_opt) for i, df in enumerate(all_dfs)]
-
-    valid_sequences = calculate_valid_seqs(df_cd4_syn, 0)
 
     if any(item is None for item in all_valid_seqs):
         if all_valid_seqs[df_ind] is None:
@@ -284,10 +302,17 @@ if __name__ == '__main__':
     cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), name='cd4_bld' + name_opt, embed_fn=embed)
     cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), name='cd8_bld' + name_opt, embed_fn=embed)
 
-    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, pad=22, cd_type="4")  # 20 is the max size for all seqs
+    cd4_syn = [x for x in cd4_syn if x.shape[1] <= 20]
+    cd4_bld = [x for x in cd4_bld if x.shape[1] <= 20]
+    print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}")
+    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, pad=20, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+    print()
 
-    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, pad=22, cd_type="8")  # 20 is the max size for all seqs
+    cd8_syn = [x for x in cd8_syn if x.shape[1] <= 20]
+    cd8_bld = [x for x in cd8_bld if x.shape[1] <= 20]
+    print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}")
+    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, pad=20, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
 
     # seqs_cd4 = df_cd4["AASeq"].drop_duplicates().reset_index(drop=True)

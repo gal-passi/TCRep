@@ -32,6 +32,7 @@ VALID_SEQ_CACHE = "cache/valid_sequences"
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
     valid_seqs = df.groupby('AASeq')['patient_id'].nunique()
     valid_seqs = valid_seqs[valid_seqs >= 2]
+    valid_seqs = set(valid_seqs.index)
 
     base_path = os.path.join(VALID_SEQ_CACHE, study_name)
     os.makedirs(base_path, exist_ok=True)

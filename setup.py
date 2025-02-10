@@ -106,3 +106,10 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     build_study(study_id, study_df, "Multifactorial Heterogeneity of Virus-specific T Cells and Association with the Progression of Human Chronic Hepatitis B Infection",
                 [], [], [])
+
+
+    study_id = "immunoSEQ77"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Somatic mutations in clonally expanded cytotoxic T lymphocytes in patients with newly diagnosed rheumatoid arthritis",
+                [], [], [])

@@ -23,13 +23,22 @@ from itertools import combinations
 
 STUDY_ID = 'PRJNA393498'
 STUDY_ID2 = 'immunoSEQ47'
-STUDIES = [STUDY_ID, STUDY_ID2]
+STUDY_ID3 = 'immunoSEQ77'
+HEALTHY_STUDY_ID = STUDY_ID3
+STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 
 
-def get_valid_seqs_original(df):
+def get_valid_seqs_original(df, df_ind, name_opt, study_name):
     valid_seqs = df.groupby('AASeq')['patient_id'].nunique()
-    return valid_seqs[valid_seqs >= 2]
+    valid_seqs = valid_seqs[valid_seqs >= 2]
+
+    base_path = os.path.join(VALID_SEQ_CACHE, study_name)
+    os.makedirs(base_path, exist_ok=True)
+    cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
+    with open(cache_pkl, 'wb') as f:
+        pickle.dump(valid_seqs, f)
+    return valid_seqs
 
 
 def embed(seqs):
@@ -156,7 +165,7 @@ def get_valid_seqs(df, df_ind, name_opt, study_name):
         return None
 
 
-def calculate_valid_seqs(df, df_ind):
+def calculate_valid_seqs(df, df_ind, name_opt, study_name):
     # Step 1: Create patient-wise groups
     seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
 
@@ -197,14 +206,9 @@ def calculate_valid_seqs(df, df_ind):
                     valid_sequences.add(group1[x])
                     valid_sequences.add(group2[y])
 
-    # print(len(valid_sequences))
-    # cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
-    # if os.path.exists(cache_pkl):
-    #     with open(cache_pkl, 'rb') as f:
-    #         print(len(pickle.load(f)))
-    # exit(0)
-
-    cache_pkl = os.path.join(VALID_SEQ_CACHE, f"valid_sequences_{df_ind}_opt1.pkl")
+    base_path = os.path.join(VALID_SEQ_CACHE, study_name)
+    os.makedirs(base_path, exist_ok=True)
+    cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
     with open(cache_pkl, 'wb') as f:
         pickle.dump(valid_sequences, f)
     return valid_sequences
@@ -247,6 +251,7 @@ if __name__ == '__main__':
         name_opt = ''
 
     study = Study(STUDIES[study_ind])
+    study_healthy = Study(HEALTHY_STUDY_ID)
 
     # reading synovial samples
     samples_syn = study._samples['usable']
@@ -261,15 +266,23 @@ if __name__ == '__main__':
     df_cd8_bld = df_bld[df_bld['cell_type'] == 'CD8']
     df_cd8_bld = df_cd8_bld[df_cd8_bld['patient_id'].isin(df_cd8_syn['patient_id'].unique())]
 
+    # TODO: Incorporate healthy study samples to the pipeline
+    # reading healthy study:
+    samples_h = study_healthy._samples['usable']
+    df_h = study_healthy.read_sample(samples_h)
+
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
     all_valid_seqs = [get_valid_seqs(df, i, name_opt, study.name) for i, df in enumerate(all_dfs)]
 
     if any(item is None for item in all_valid_seqs):
-        if all_valid_seqs[df_ind] is None:
+        if df_ind != -1 and all_valid_seqs[df_ind] is None:
             df = all_dfs[df_ind]
             print(f"Calculating Valid Sequences of DF: {df_ind}!")
-            valid_sequences = calculate_valid_seqs(df, df_ind)
+            if dist_option == 0:
+                valid_sequences = get_valid_seqs_original(df, df_ind, name_opt, study.name)
+            else:
+                valid_sequences = calculate_valid_seqs(df, df_ind, name_opt, study.name)
             print(f"Done calculating valid sequences of df: {df_ind}!")
             all_valid_seqs[df_ind] = valid_sequences
         else:
@@ -277,9 +290,9 @@ if __name__ == '__main__':
                 if all_valid_seqs[i] is None:
                     print(f"Calculating Valid Sequences of DF: {i}!")
                     if dist_option == 0:
-                        valid_sequences = get_valid_seqs_original(df)
+                        valid_sequences = get_valid_seqs_original(df, i, name_opt, study.name)
                     else:
-                        valid_sequences = calculate_valid_seqs(df, i)
+                        valid_sequences = calculate_valid_seqs(df, i, name_opt, study.name)
                     print(f"Done calculating valid sequences of df: {i}!")
                     all_valid_seqs[i] = valid_sequences
 

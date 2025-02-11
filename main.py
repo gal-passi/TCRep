@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import os
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.model_selection import KFold
 from tqdm import tqdm
 from itertools import product
 from Levenshtein import ratio  # pip install python-Levenshtein
@@ -16,7 +15,7 @@ import argparse
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import KFold
+from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import accuracy_score
 from itertools import combinations
 
@@ -30,9 +29,12 @@ VALID_SEQ_CACHE = "cache/valid_sequences"
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
-    valid_seqs = df.groupby('AASeq')['patient_id'].nunique()
-    valid_seqs = valid_seqs[valid_seqs >= 2]
-    valid_seqs = set(valid_seqs.index)
+    if df_ind <= 1:
+        valid_seqs = df.groupby('AASeq')['patient_id'].nunique()
+        valid_seqs = valid_seqs[valid_seqs >= 2]
+        valid_seqs = set(valid_seqs.index)
+    else:
+        valid_seqs = set(df['AASeq'].unique())
 
     base_path = os.path.join(VALID_SEQ_CACHE, study_name)
     os.makedirs(base_path, exist_ok=True)
@@ -57,7 +59,7 @@ def embed(seqs):
         logits_output = client.logits(
             protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
         )
-        embeds.append(logits_output.embeddings)  # can also output: logits_output.logits
+        embeds.append(logits_output.embeddings.cpu())  # can also output: logits_output.logits
     return embeds
 
 
@@ -75,45 +77,77 @@ def pad_and_flatten(tensor_list, pad):
     return np.array(padded_data)
 
 
-def process_and_evaluate(syn, bld, pad, study_name, to_plot=True, cd_type='4', name_opt=''):
+def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
+                         pad, to_plot=True, cd_type='4', name_opt=''):
     # Prepare data
-    X_syn = pad_and_flatten(syn, pad)
-    X_bld = pad_and_flatten(bld, pad)
+    X_syn = torch.cat([x.sum(dim=1) for x in syn])
+    X_bld = torch.cat([x.sum(dim=1) for x in bld])
+    X_hlt = torch.cat([x.sum(dim=1) for x in healthy])
+    # X_syn = pad_and_flatten(syn, pad)
+    # X_bld = pad_and_flatten(bld, pad)
+    # X_hlt = pad_and_flatten(healthy, pad)
 
-    X = np.vstack([X_syn, X_bld])
-    y = np.array([0] * len(syn) + [1] * len(bld))
+    X = X_syn
+    y = np.array([0] * len(syn))
 
     # Apply t-SNE
-    tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-    X_tsne = tsne.fit_transform(X)
+    # tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+    # X_tsne = tsne.fit_transform(X)
 
     # Plotting if needed
-    if to_plot:
-        plt.figure(figsize=(10, 6))
-        plt.scatter(X_tsne[:len(syn), 0], X_tsne[:len(syn), 1],
-                    c='blue', label='Synovial Fluid')
-        plt.scatter(X_tsne[len(bld):, 0], X_tsne[len(bld):, 1],
-                    c='red', label='Blood')
-        plt.legend()
-        plt.title(f't-SNE Visualization of CD{cd_type} Data')
-        plt.xlabel('t-SNE 1')
-        plt.ylabel('t-SNE 2')
-        # save plot
-        plots_folder = f"plots/{study_name}"
-        os.makedirs(plots_folder, exist_ok=True)
-        plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
-        plt.show()
+    # if to_plot:
+    #     plt.figure(figsize=(10, 6))
+    #     plt.scatter(X_tsne[:len(syn), 0], X_tsne[:len(syn), 1],
+    #                 c='blue', label='Synovial Fluid')
+    #     plt.scatter(X_tsne[len(bld):, 0], X_tsne[len(bld):, 1],
+    #                 c='red', label='Blood')
+    #     plt.legend()
+    #     plt.title(f't-SNE Visualization of CD{cd_type} Data')
+    #     plt.xlabel('t-SNE 1')
+    #     plt.ylabel('t-SNE 2')
+    #     # save plot
+    #     plots_folder = f"plots/{study_name}"
+    #     os.makedirs(plots_folder, exist_ok=True)
+    #     plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
+    #     plt.show()
 
     # K-fold cross validation
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    scores = []
+    if k_fold_type == 0:  # random k-fold
+        kf = KFold(n_splits=5, shuffle=True, random_state=42)
+        folds_indices = kf.split(X)
+        blood_indices = [x[0] for x in kf.split(X_bld)]
+    else:  # patient k-fold
+        folds_indices = [((np.delete(syn_mask, i, axis=0) == 1).any(axis=0), syn_mask[i] == 1)
+                         for i in range(len(syn_mask))]
+        blood_indices = [mask == 1 for mask in bld_mask]
 
-    for train_idx, test_idx in kf.split(X_tsne):
-        X_train, X_test = X_tsne[train_idx], X_tsne[test_idx]
+    scores = []
+    for i, (train_idx, test_idx) in enumerate(folds_indices):
+        X_train, X_test = X[train_idx], X[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
 
+        # Adding the same healthy data to the training set (for each fold)
+        # X_hlt_rnd = X_hlt
+        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), len(X_train) * 2, replace=False)]
+        X_train = np.vstack([X_train, X_hlt_rnd])
+        y_train = np.hstack([y_train, np.array([1] * len(X_hlt_rnd))])
+
+        # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
+        X_bld_rnd = X_bld[blood_indices[i]]
+        # X_bld_rnd = X_bld
+        # X_bld_rnd = X_bld[np.random.choice(len(X_bld), len(y_test) * 1, replace=False)]
+        X_test = np.vstack([X_test, X_bld_rnd])
+        y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
+
+        # X_stack = np.vstack([X_train, X_test])
+        # tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+        # X_tsne = tsne.fit_transform(X_stack)
+        # X_train, X_test = X_tsne[:len(X_train)], X_tsne[len(X_train):]
+
         # Train and evaluate KNN
-        knn = KNeighborsClassifier(n_neighbors=3)
+
+        # print((y_train == 0).sum(), (y_train == 1).sum(), (y_test == 0).sum(), (y_test == 1).sum())
+        knn = KNeighborsClassifier(n_neighbors=3, metric="minkowski")
         knn.fit(X_train, y_train)
         score = accuracy_score(y_test, knn.predict(X_test))
         scores.append(score)
@@ -155,6 +189,10 @@ def get_cached_embeddings(sequences, study_name, name='', cache_dir="cache/esm_c
 
 
 def get_valid_seqs(df, df_ind, name_opt, study_name):
+    if df_ind >= 2:
+        valid_seqs = set(df['AASeq'].unique())
+        return valid_seqs
+
     base_path = os.path.join(VALID_SEQ_CACHE, study_name)
     os.makedirs(base_path, exist_ok=True)
     cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
@@ -192,14 +230,14 @@ def calculate_valid_seqs(df, df_ind, name_opt, study_name):
         # Iterate over length groups in seqs1
         for length, group1 in seqs1_by_len.items():
             # Select seqs2 that are in the range [length-2, length+2]
-            min_len, max_len = length - 2, length + 2
+            min_len, max_len = length - 1, length + 1
             mask = (seqs2_lens >= min_len) & (seqs2_lens <= max_len)
             group2 = seqs2_by_len[mask]
 
             if len(group2) > 0:
                 # Compute pairwise identity matrix
-                # pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist)
-                pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
+                pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist)
+                # pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
                 sim_inxs = np.where(pwc_mat >= 0.9)
 
                 # Add matching sequences to valid set
@@ -213,6 +251,48 @@ def calculate_valid_seqs(df, df_ind, name_opt, study_name):
     with open(cache_pkl, 'wb') as f:
         pickle.dump(valid_sequences, f)
     return valid_sequences
+
+
+def plot_length_histogram(arr, title_text="sequences"):
+    """
+    Plots a histogram of string lengths in a given ndarray.
+
+    Parameters:
+        arr (numpy.ndarray): Array of strings.
+        title_text (str): Custom text to insert in the title.
+    """
+    lengths = np.vectorize(len)(arr)
+
+    plt.hist(lengths, bins=range(min(lengths), max(lengths) + 2), edgecolor='black', alpha=0.7)
+    plt.xlabel("String Length")
+    plt.ylabel("Frequency")
+    plt.title(f"Histogram of {title_text} lengths")
+    plt.xticks(range(min(lengths), max(lengths) + 1))
+    plt.show()
+
+
+def bound_and_sample_blood(syn, blood):
+    lengths = set([len(x) for x in syn])
+    min_len, max_len = min(lengths), max(lengths)
+    blood = np.array(sorted(list(blood)))
+    mask = np.vectorize(lambda s: min_len <= len(s) <= max_len)(blood)
+    blood = blood[mask]
+    blood = np.random.choice(blood, len(syn) * 2, replace=False)
+    return blood
+
+
+def get_patient_ids_masks(df, sequences):
+    unique_patient_ids = sorted(df["patient_id"].unique())
+    masks = []
+    for patient in unique_patient_ids:
+        # Get sequences that belong to the current patient
+        patient_seqs = set(df.loc[df["patient_id"] == patient, "AASeq"])
+        # Create a mask for sequences
+        mask = np.array([1 if seq in patient_seqs else 0 for seq in sequences])
+        masks.append(mask)
+    # Convert to ndarray
+    masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
+    return masks
 
 
 if __name__ == '__main__':
@@ -233,23 +313,23 @@ if __name__ == '__main__':
 
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
-    parser.add_argument('--df_ind', type=int, default=0)
+    parser.add_argument('--df_ind', type=int, default=-1)
     parser.add_argument('--dist_option', type=int, default=0)
     parser.add_argument('--study_ind', type=int, default=0)
+    parser.add_argument('--k_fold_type', type=int, default=0)
     args = parser.parse_args()
     df_ind = args.df_ind
     dist_option = args.dist_option
     study_ind = args.study_ind
+    k_fold_type = args.k_fold_type
     print("RUN CONFIGURATION:")
     print(f"\tdf_ind: {df_ind}")
     print(f"\tdist_option: {dist_option}")
     print(f"\tstudy_ind: {study_ind}")
+    print(f"\tk_fold_type: {k_fold_type}")  # 0 - random, 1 - patient
     print("\n")
 
-    if dist_option == 1:
-        name_opt = '_opt1'
-    else:
-        name_opt = ''
+    name_opt = '_opt1' if dist_option == 1 else ''
 
     study = Study(STUDIES[study_ind])
     study_healthy = Study(HEALTHY_STUDY_ID)
@@ -267,10 +347,11 @@ if __name__ == '__main__':
     df_cd8_bld = df_bld[df_bld['cell_type'] == 'CD8']
     df_cd8_bld = df_cd8_bld[df_cd8_bld['patient_id'].isin(df_cd8_syn['patient_id'].unique())]
 
-    # TODO: Incorporate healthy study samples to the pipeline
     # reading healthy study:
     samples_h = study_healthy._samples['usable']
     df_h = study_healthy.read_sample(samples_h)
+    df_h_cd8 = df_h[df_h['cell_type'] == 'CD8']
+    valid_seqs_cd8_h = df_h_cd8["AASeq"].unique()
 
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
@@ -299,21 +380,42 @@ if __name__ == '__main__':
 
     sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
-    # Modified embedding code
+    # bounding the length of sequences to be min and max of synovial samples,
+    # then sampling *2 samples from blood to match *2 the number of synovial samples
+    np.random.seed(42)
+    sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld)
+    sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld)
+    valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h)
+
+    # getting patient id masks in order to do k-fold by patient (according to synovial samples)
+    cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld)
+    cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld)
+    cd8_syn_patient_id_masks = get_patient_ids_masks(df_cd8_syn, sr_cd8_syn_vld)
+    cd8_bld_patient_id_masks = get_patient_ids_masks(df_cd8_bld, sr_cd8_bld_vld)
+
+    # Calculating embeddings (or loading if it is available)
     cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld), study.name, name='cd4_syn' + name_opt, embed_fn=embed)
     cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld), study.name, name='cd8_syn' + name_opt, embed_fn=embed)
     cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), study.name, name='cd4_bld' + name_opt, embed_fn=embed)
     cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), study.name, name='cd8_bld' + name_opt, embed_fn=embed)
 
-    cd4_syn = [x for x in cd4_syn if x.shape[1] <= 20]
-    cd4_bld = [x for x in cd4_bld if x.shape[1] <= 20]
-    print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}")
-    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, study_name=study.name, pad=20, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
-    print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-    print()
+    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study.name, name='cd8_h' + name_opt, embed_fn=embed)
 
-    cd8_syn = [x for x in cd8_syn if x.shape[1] <= 20]
-    cd8_bld = [x for x in cd8_bld if x.shape[1] <= 20]
+    # cd4_syn = [x for x in cd4_syn if x.shape[1] <= 20]
+    # cd4_bld = [x for x in cd4_bld if x.shape[1] <= 20]
+    # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}")
+    # mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, study_name=study.name, pad=20, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
+    # print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+    # print()
+
+
+    # cd8_syn = [x for x in cd8_syn if x.shape[1] <= 17]
+    # cd8_bld = [x for x in cd8_bld if x.shape[1] <= 17]
+    # cd8_h = [x for x in cd8_h if x.shape[1] <= 17]
     print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}")
-    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, study_name=study.name, pad=20, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
+                                             cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
+                                             k_fold_type,
+                                             study_name=study.name, pad=17, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+    # mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, study_name=study.name, pad=20, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

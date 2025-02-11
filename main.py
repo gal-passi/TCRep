@@ -26,6 +26,7 @@ STUDY_ID3 = 'immunoSEQ77'
 HEALTHY_STUDY_ID = STUDY_ID3
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3]
 VALID_SEQ_CACHE = "cache/valid_sequences"
+TO_DISPLAY_LENGTHS_HIST = False
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -63,53 +64,42 @@ def embed(seqs):
     return embeds
 
 
-def pad_and_flatten(tensor_list, pad):
-    # Find max length
-    max_len = max(max(tensor.shape[1] for tensor in tensor_list), pad)
-
-    # Pad and flatten each tensor
-    padded_data = []
-    for tensor in tensor_list:
-        pad_width = ((0, 0), (0, max_len - tensor.shape[1]), (0, 0))
-        padded = np.pad(tensor, pad_width, mode='constant', constant_values=0)
-        padded_data.append(padded.reshape(-1))
-
-    return np.array(padded_data)
-
-
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
-                         pad, to_plot=True, cd_type='4', name_opt=''):
+                         to_plot=False, cd_type='4', name_opt=''):
     # Prepare data
     X_syn = torch.cat([x.sum(dim=1) for x in syn])
     X_bld = torch.cat([x.sum(dim=1) for x in bld])
     X_hlt = torch.cat([x.sum(dim=1) for x in healthy])
-    # X_syn = pad_and_flatten(syn, pad)
-    # X_bld = pad_and_flatten(bld, pad)
-    # X_hlt = pad_and_flatten(healthy, pad)
 
     X = X_syn
     y = np.array([0] * len(syn))
 
-    # Apply t-SNE
-    # tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-    # X_tsne = tsne.fit_transform(X)
-
     # Plotting if needed
-    # if to_plot:
-    #     plt.figure(figsize=(10, 6))
-    #     plt.scatter(X_tsne[:len(syn), 0], X_tsne[:len(syn), 1],
-    #                 c='blue', label='Synovial Fluid')
-    #     plt.scatter(X_tsne[len(bld):, 0], X_tsne[len(bld):, 1],
-    #                 c='red', label='Blood')
-    #     plt.legend()
-    #     plt.title(f't-SNE Visualization of CD{cd_type} Data')
-    #     plt.xlabel('t-SNE 1')
-    #     plt.ylabel('t-SNE 2')
-    #     # save plot
-    #     plots_folder = f"plots/{study_name}"
-    #     os.makedirs(plots_folder, exist_ok=True)
-    #     plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
-    #     plt.show()
+    if to_plot:
+        # Apply t-SNE
+        tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+        X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
+        X_tsne_syn = X_tsne[:len(syn)]
+        X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
+        X_tsne_hlt = X_tsne[len(syn) + len(bld):]
+
+        # plotting
+        plt.figure(figsize=(12, 8))
+        plt.scatter(X_tsne_hlt[:, 0], X_tsne_hlt[:, 1],
+                    c='green', label='Blood (healthy)', alpha=0.4)
+        plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
+                    c='red', label='Blood', alpha=0.4)
+        plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
+                    c='blue', label='Synovial Fluid', alpha=0.4)
+        plt.legend()
+        plt.title(f't-SNE Visualization of CD{cd_type} Data')
+        plt.xlabel('t-SNE 1')
+        plt.ylabel('t-SNE 2')
+        # save plot
+        plots_folder = f"plots/{study_name}"
+        os.makedirs(plots_folder, exist_ok=True)
+        plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
+        plt.show()
 
     # K-fold cross validation
     if k_fold_type == 0:  # random k-fold
@@ -253,31 +243,58 @@ def calculate_valid_seqs(df, df_ind, name_opt, study_name):
     return valid_sequences
 
 
-def plot_length_histogram(arr, title_text="sequences"):
+def plot_length_histogram(*arrays, labels=None, title_text="sequences"):
     """
-    Plots a histogram of string lengths in a given ndarray.
+    Plots histograms of string lengths for multiple ndarrays with bars side by side.
 
     Parameters:
-        arr (numpy.ndarray): Array of strings.
+        *arrays (numpy.ndarray): Multiple arrays of strings.
+        labels (list, optional): List of labels corresponding to each array.
         title_text (str): Custom text to insert in the title.
     """
-    lengths = np.vectorize(len)(arr)
+    if labels is None:
+        labels = [f"Dataset {i + 1}" for i in range(len(arrays))]
 
-    plt.hist(lengths, bins=range(min(lengths), max(lengths) + 2), edgecolor='black', alpha=0.7)
+    plt.figure(figsize=(12, 6))
+
+    # Calculate the range for bins
+    all_lengths = np.concatenate([np.vectorize(len)(arr) for arr in arrays])
+    min_length = min(all_lengths)
+    max_length = max(all_lengths)
+    bins = range(min_length, max_length + 2)
+
+    # Calculate bar width based on number of arrays
+    width = 0.8 / len(arrays)
+
+    # Plot histograms side by side
+    for i, (arr, label) in enumerate(zip(arrays, labels)):
+        lengths = np.vectorize(len)(arr)
+        # Calculate histogram data manually
+        counts, _ = np.histogram(lengths, bins=bins)
+        # Calculate bar positions
+        bar_positions = np.array(list(bins[:-1])) + (i * width)
+        plt.bar(bar_positions, counts, width=width, alpha=0.8,
+                label=label, edgecolor='black')
+
     plt.xlabel("String Length")
     plt.ylabel("Frequency")
     plt.title(f"Histogram of {title_text} lengths")
-    plt.xticks(range(min(lengths), max(lengths) + 1))
+    plt.legend()
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+    # Adjust x-axis to center the grouped bars
+    plt.xticks(list(bins[:-1]), bins[:-1])
+
     plt.show()
 
 
-def bound_and_sample_blood(syn, blood):
+def bound_and_sample_blood(syn, blood, ratio=2):
     lengths = set([len(x) for x in syn])
     min_len, max_len = min(lengths), max(lengths)
     blood = np.array(sorted(list(blood)))
     mask = np.vectorize(lambda s: min_len <= len(s) <= max_len)(blood)
     blood = blood[mask]
-    blood = np.random.choice(blood, len(syn) * 2, replace=False)
+    blood = np.random.choice(blood, len(syn) * ratio, replace=False)
     return blood
 
 
@@ -296,21 +313,6 @@ def get_patient_ids_masks(df, sequences):
 
 
 if __name__ == '__main__':
-    # return numpy array of unique sequences - see docstring
-    # sequence = study.build_train_representations(samples=None, save=False, path=None)
-    # print(sequence)
-
-    # study = Study(STUDY_ID2)
-    # # return numpy array of unique sequences - see docstring
-    # sequence = study.build_train_representations(samples=None, save=False, path=None)
-    # print(sequence)
-
-    # use esm_2 to extract representation
-    # model_checkpoint = "facebook/esm2_t4815B__UR50D"
-    # pad to length of the longest sequence - can be done through esm parameters (no need to change sequences)
-    # save a dictionary of {seq : representation} - make sure to save on lab folder may be heavy
-
-
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--df_ind', type=int, default=-1)
@@ -331,6 +333,7 @@ if __name__ == '__main__':
 
     name_opt = '_opt1' if dist_option == 1 else ''
 
+    # Load study
     study = Study(STUDIES[study_ind])
     study_healthy = Study(HEALTHY_STUDY_ID)
 
@@ -380,6 +383,23 @@ if __name__ == '__main__':
 
     sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
+
+    # Display histogram of lengths:
+    if TO_DISPLAY_LENGTHS_HIST:
+        plot_length_histogram(df_cd4_bld["AASeq"], df_cd4_syn["AASeq"],
+                              labels=["Blood", "Synovial"],
+                              title_text="CD4 Sequences")
+        plot_length_histogram(df_cd8_bld["AASeq"], df_cd8_syn["AASeq"],
+                              labels=["Blood", "Synovial"],
+                              title_text="CD8 Sequences")
+
+        plot_length_histogram(np.array(list(sr_cd4_bld_vld)), np.array(sr_cd4_syn_vld),
+                              labels=["Blood", "Synovial"],
+                              title_text="CD4 Filtered Sequences")
+        plot_length_histogram(np.array(list(sr_cd8_bld_vld)), np.array(sr_cd8_syn_vld),
+                              labels=["Blood", "Synovial"],
+                              title_text="CD8 Filtered Sequences")
+
     # bounding the length of sequences to be min and max of synovial samples,
     # then sampling *2 samples from blood to match *2 the number of synovial samples
     np.random.seed(42)
@@ -401,21 +421,14 @@ if __name__ == '__main__':
 
     cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study.name, name='cd8_h' + name_opt, embed_fn=embed)
 
-    # cd4_syn = [x for x in cd4_syn if x.shape[1] <= 20]
-    # cd4_bld = [x for x in cd4_bld if x.shape[1] <= 20]
+    # TODO: Add CD4 when available:
     # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}")
     # mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, study_name=study.name, pad=20, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
     # print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
     # print()
 
-
-    # cd8_syn = [x for x in cd8_syn if x.shape[1] <= 17]
-    # cd8_bld = [x for x in cd8_bld if x.shape[1] <= 17]
-    # cd8_h = [x for x in cd8_h if x.shape[1] <= 17]
-    print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}")
+    print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
     mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
                                              cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
-                                             k_fold_type,
-                                             study_name=study.name, pad=17, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
-    # mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_bld, study_name=study.name, pad=20, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+                                             k_fold_type, study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

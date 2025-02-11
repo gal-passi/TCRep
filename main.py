@@ -129,14 +129,7 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         X_test = np.vstack([X_test, X_bld_rnd])
         y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
 
-        # X_stack = np.vstack([X_train, X_test])
-        # tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-        # X_tsne = tsne.fit_transform(X_stack)
-        # X_train, X_test = X_tsne[:len(X_train)], X_tsne[len(X_train):]
-
         # Train and evaluate KNN
-
-        # print((y_train == 0).sum(), (y_train == 1).sum(), (y_test == 0).sum(), (y_test == 1).sum())
         knn = KNeighborsClassifier(n_neighbors=3, metric="minkowski")
         knn.fit(X_train, y_train)
         score = accuracy_score(y_test, knn.predict(X_test))
@@ -406,7 +399,7 @@ if __name__ == '__main__':
     sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld)
     sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld)
     valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h)
-
+    # 9990-2 + 10002-2 + 10002-2 + 10002-2
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
     cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld)
     cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld)

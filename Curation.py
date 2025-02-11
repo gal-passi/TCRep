@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 from trainer import build_datasets
 from definitions import *
 import numpy as np
+import shutil
 
 
 class TCRdb():
@@ -35,6 +36,9 @@ class Study:
             self._id = study_id
             save_dir = os.path.join(STUDY_SAVE_DIR, self.name)
             if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            else:
+                shutil.rmtree(save_dir)
                 os.makedirs(save_dir)
             self._desc = ''
             self._samples = {'usable': [], 'uncertain': [], 'background': []}
@@ -270,7 +274,7 @@ def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, b
             elif comment.endswith('TRBV9'):
                 cell_type = "Other (TRBV9)"
                 sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-                study += sample
+                study ^= sample
                 found_usable.append(sample_id)
             else:
                 # adding to uncertain if there is no cell type (we want only CD4 or CD8)

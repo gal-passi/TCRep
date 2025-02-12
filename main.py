@@ -26,7 +26,7 @@ STUDY_ID3 = 'immunoSEQ77'
 HEALTHY_STUDY_ID = STUDY_ID3
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3]
 VALID_SEQ_CACHE = "cache/valid_sequences"
-TO_DISPLAY_LENGTHS_HIST = False
+TO_DISPLAY_LENGTHS_HIST = True
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -376,9 +376,9 @@ if __name__ == '__main__':
 
     sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
-
     # Display histogram of lengths:
     if TO_DISPLAY_LENGTHS_HIST:
+        print("Displaying Histograms of Lengths")
         plot_length_histogram(df_cd4_bld["AASeq"], df_cd4_syn["AASeq"],
                               labels=["Blood", "Synovial"],
                               title_text="CD4 Sequences")
@@ -425,3 +425,6 @@ if __name__ == '__main__':
                                              cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
                                              k_fold_type, study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+
+# TODO: After re-running the full code:
+#  Try checking once again if the histograms and all results are still the same...

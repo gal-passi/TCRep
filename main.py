@@ -23,10 +23,12 @@ from itertools import combinations
 STUDY_ID = 'PRJNA393498'
 STUDY_ID2 = 'immunoSEQ47'
 STUDY_ID3 = 'immunoSEQ77'
+STUDY_ID4 = 'PRJNA258001'
 HEALTHY_STUDY_ID = STUDY_ID3
-STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3]
+HEALTHY_STUDY_ID2 = STUDY_ID4
+STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
 VALID_SEQ_CACHE = "cache/valid_sequences"
-TO_DISPLAY_LENGTHS_HIST = True
+TO_DISPLAY_LENGTHS_HIST = False
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -328,7 +330,8 @@ if __name__ == '__main__':
 
     # Load study
     study = Study(STUDIES[study_ind])
-    study_healthy = Study(HEALTHY_STUDY_ID)
+    study_healthy = Study(HEALTHY_STUDY_ID2)
+    # study_healthy = Study(HEALTHY_STUDY_ID)
 
     # reading synovial samples
     samples_syn = study._samples['usable']
@@ -348,6 +351,8 @@ if __name__ == '__main__':
     df_h = study_healthy.read_sample(samples_h)
     df_h_cd8 = df_h[df_h['cell_type'] == 'CD8']
     valid_seqs_cd8_h = df_h_cd8["AASeq"].unique()
+    df_h_cd4 = df_h[df_h['cell_type'] == 'CD4']
+    valid_seqs_cd4_h = df_h_cd4["AASeq"].unique()
 
     # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
@@ -399,7 +404,7 @@ if __name__ == '__main__':
     sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld)
     sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld)
     valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h)
-    # 9990-2 + 10002-2 + 10002-2 + 10002-2
+    valid_seqs_cd4_h = bound_and_sample_blood(sr_cd4_syn_vld, valid_seqs_cd4_h)
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
     cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld)
     cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld)
@@ -412,19 +417,18 @@ if __name__ == '__main__':
     cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), study.name, name='cd4_bld' + name_opt, embed_fn=embed)
     cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), study.name, name='cd8_bld' + name_opt, embed_fn=embed)
 
-    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study.name, name='cd8_h' + name_opt, embed_fn=embed)
+    cd4_h = get_cached_embeddings(list(valid_seqs_cd4_h), study_healthy.name, name='cd4_h' + name_opt, embed_fn=embed)
+    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study_healthy.name, name='cd8_h' + name_opt, embed_fn=embed)
 
-    # TODO: Add CD4 when available:
-    # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}")
-    # mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_bld, study_name=study.name, pad=20, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
-    # print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-    # print()
-
+    # Evaluating CD4 and CD8
+    print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
+    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
+                                             cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
+                                             k_fold_type, study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
+    print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+    print()
     print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
     mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
                                              cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
                                              k_fold_type, study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
     print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-
-# TODO: After re-running the full code:
-#  Try checking once again if the histograms and all results are still the same...

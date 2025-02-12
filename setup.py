@@ -113,3 +113,10 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "Somatic mutations in clonally expanded cytotoxic T lymphocytes in patients with newly diagnosed rheumatoid arthritis",
                 [], [], [])
+
+
+    study_id = "PRJNA258001"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "T-cell receptor repertoires in HIV-infected patients and healthy controls",
+                [], [], [])

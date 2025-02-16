@@ -62,16 +62,17 @@ def embed(seqs):
         logits_output = client.logits(
             protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
         )
-        embeds.append(logits_output.embeddings.cpu())  # can also output: logits_output.logits
+        # SAVING MEAN OF EMBEDDINGS! To save the full embedding (1, seq_len, 960) remove the mean function
+        embeds.append(logits_output.embeddings.mean(dim=1).cpu())  # can also output: logits_output.logits
     return embeds
 
 
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
-                         to_plot=False, cd_type='4', name_opt=''):
+                         ratio=3, to_plot=False, cd_type='4', name_opt=''):
     # Prepare data
-    X_syn = torch.cat([x.sum(dim=1) for x in syn])
-    X_bld = torch.cat([x.sum(dim=1) for x in bld])
-    X_hlt = torch.cat([x.sum(dim=1) for x in healthy])
+    X_syn = torch.cat([x for x in syn])
+    X_bld = torch.cat([x for x in bld])
+    X_hlt = torch.cat([x for x in healthy])
 
     X = X_syn
     y = np.array([0] * len(syn))
@@ -109,8 +110,11 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         folds_indices = kf.split(X)
         blood_indices = [x[0] for x in kf.split(X_bld)]
     else:  # patient k-fold
-        folds_indices = [((np.delete(syn_mask, i, axis=0) == 1).any(axis=0), syn_mask[i] == 1)
-                         for i in range(len(syn_mask))]
+        folds_indices = []
+        for i in range(len(syn_mask)):
+            train_dx = ((np.delete(syn_mask, i, axis=0) == 1).any(axis=0))
+            test_dx = ~train_dx  # OR: test_dx = syn_mask[i] == 1
+            folds_indices.append((train_dx, test_dx))
         blood_indices = [mask == 1 for mask in bld_mask]
 
     scores = []
@@ -120,22 +124,91 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
 
         # Adding the same healthy data to the training set (for each fold)
         # X_hlt_rnd = X_hlt
-        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), len(X_train) * 2, replace=False)]
+        n = min(len(X_train) * ratio, len(X_hlt))
+        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), n, replace=False)]
         X_train = np.vstack([X_train, X_hlt_rnd])
         y_train = np.hstack([y_train, np.array([1] * len(X_hlt_rnd))])
 
         # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
-        X_bld_rnd = X_bld[blood_indices[i]]
-        # X_bld_rnd = X_bld
-        # X_bld_rnd = X_bld[np.random.choice(len(X_bld), len(y_test) * 1, replace=False)]
+        # X_bld_rnd = X_bld[blood_indices[i]]
+        m = min(len(y_test) * ratio, len(X_bld))
+        X_bld_rnd = X_bld[np.random.choice(len(X_bld), m, replace=False)]
         X_test = np.vstack([X_test, X_bld_rnd])
         y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
+        # print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
 
         # Train and evaluate KNN
-        knn = KNeighborsClassifier(n_neighbors=3, metric="minkowski")
+        knn = KNeighborsClassifier(n_neighbors=9, metric="minkowski")
         knn.fit(X_train, y_train)
-        score = accuracy_score(y_test, knn.predict(X_test))
+        y_pred = knn.predict(X_test)
+        score = accuracy_score(y_test, y_pred)
         scores.append(score)
+
+        # Initialize variables
+        # best_score = 0
+        # best_n_neighbors = 0
+        # n_neighbors_range = range(1, 11)  # Range of values to check for n_neighbors
+        # for n_neighbors in n_neighbors_range:
+        #     knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
+        #     knn.fit(X_train, y_train)
+        #     y_pred = knn.predict(X_test)
+        #     score = accuracy_score(y_test, y_pred)
+        #     scores.append(score)
+        #
+        #     if score > best_score:
+        #         best_score = score
+        #         best_n_neighbors = n_neighbors
+        # scores.append(best_score)
+        # print(f'Best number of neighbors: {best_n_neighbors} with a score of {best_score}')
+
+        # TODO: Need to get the sequence identity matrix somehow!
+        # # Compute sequence identities
+        # if seq_id_matrix is not None:
+        #     seq_id_test_train = seq_id_matrix[np.ix_(test_idx, train_idx)]
+        # else:
+        #     seq_id_test_train = np.array([
+        #         [compute_sequence_identity(test_seq, train_seq) for train_seq in X_train]
+        #         for test_seq in X_test
+        #     ])
+        #
+        # # Get the highest sequence identity for each test sample
+        # max_seq_id = seq_id_test_train.max(axis=1)
+        #
+        # # Define bins (0-10%, 10-20%, ..., 90-100%)
+        # bins = np.linspace(0, 1, 11)
+        # bin_indices = np.digitize(max_seq_id, bins) - 1
+        #
+        # # Calculate success and failure rate per bin
+        # bin_success = np.zeros(len(bins) - 1)
+        # bin_failure = np.zeros(len(bins) - 1)
+        # bin_counts = np.zeros(len(bins) - 1)
+        #
+        # for j, bin_idx in enumerate(bin_indices):
+        #     bin_counts[bin_idx] += 1
+        #     if y_pred[j] == y_test[j]:
+        #         bin_success[bin_idx] += 1
+        #     else:
+        #         bin_failure[bin_idx] += 1
+        #
+        # # Normalize to get success rates
+        # bin_success_rate = bin_success / np.maximum(bin_counts, 1)
+        # bin_failure_rate = bin_failure / np.maximum(bin_counts, 1)
+        #
+        # # Plot results
+        # plt.figure(figsize=(10, 6))
+        # plt.bar(bins[:-1] * 100, bin_success_rate, width=10, color='green', alpha=0.7, label="Success Rate")
+        # plt.bar(bins[:-1] * 100, bin_failure_rate, width=10, bottom=bin_success_rate, color='red', alpha=0.7,
+        #         label="Failure Rate")
+        # plt.xlabel("Max Sequence Identity with Training Set (%)")
+        # plt.ylabel("Prediction Rate")
+        # plt.title(f"Success vs Failure Rate per Sequence Identity (Fold {i + 1})")
+        # plt.legend()
+        #
+        # # Save plot
+        # plots_folder = f"plots/{study_name}"
+        # os.makedirs(plots_folder, exist_ok=True)
+        # plt.savefig(os.path.join(plots_folder, f"seq_id_success_cd{cd_type}_fold{i + 1}{name_opt}.png"))
+        # plt.show()
 
     return np.mean(scores), np.std(scores)
 
@@ -289,7 +362,8 @@ def bound_and_sample_blood(syn, blood, ratio=2):
     blood = np.array(sorted(list(blood)))
     mask = np.vectorize(lambda s: min_len <= len(s) <= max_len)(blood)
     blood = blood[mask]
-    blood = np.random.choice(blood, len(syn) * ratio, replace=False)
+    n = min(len(syn) * ratio, len(blood))
+    blood = np.random.choice(blood, n, replace=False)
     return blood
 
 
@@ -399,12 +473,13 @@ if __name__ == '__main__':
                               title_text="CD8 Filtered Sequences")
 
     # bounding the length of sequences to be min and max of synovial samples,
-    # then sampling *2 samples from blood to match *2 the number of synovial samples
+    # then sampling *ratio samples from blood to match *ratio the number of synovial samples
     np.random.seed(42)
-    sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld)
-    sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld)
-    valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h)
-    valid_seqs_cd4_h = bound_and_sample_blood(sr_cd4_syn_vld, valid_seqs_cd4_h)
+    ratio = 10
+    sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld, ratio)
+    sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld, ratio)
+    valid_seqs_cd4_h = bound_and_sample_blood(sr_cd4_syn_vld, valid_seqs_cd4_h, ratio)
+    valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h, ratio)
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
     cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld)
     cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld)

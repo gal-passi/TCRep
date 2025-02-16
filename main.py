@@ -68,7 +68,7 @@ def embed(seqs):
 
 
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
-                         ratio=3, to_plot=False, cd_type='4', name_opt=''):
+                         ratio=3, n_neighbors=9, to_plot=False, cd_type='4', name_opt=''):
     # Prepare data
     X_syn = torch.cat([x for x in syn])
     X_bld = torch.cat([x for x in bld])
@@ -82,14 +82,15 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         # Apply t-SNE
         tsne = TSNE(n_components=2, perplexity=5, random_state=42)
         X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
+        # X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
         X_tsne_syn = X_tsne[:len(syn)]
         X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
-        X_tsne_hlt = X_tsne[len(syn) + len(bld):]
+        # X_tsne_hlt = X_tsne[len(syn) + len(bld):]
 
         # plotting
         plt.figure(figsize=(12, 8))
-        plt.scatter(X_tsne_hlt[:, 0], X_tsne_hlt[:, 1],
-                    c='green', label='Blood (healthy)', alpha=0.4)
+        # plt.scatter(X_tsne_hlt[:, 0], X_tsne_hlt[:, 1],
+        #             c='green', label='Blood (healthy)', alpha=0.4)
         plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
                     c='red', label='Blood', alpha=0.4)
         plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
@@ -131,14 +132,15 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
 
         # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
         # X_bld_rnd = X_bld[blood_indices[i]]
-        m = min(len(y_test) * ratio, len(X_bld))
-        X_bld_rnd = X_bld[np.random.choice(len(X_bld), m, replace=False)]
+        X_bld_test = X_bld[blood_indices[i]]
+        m = min(len(y_test) * ratio, len(X_bld_test))
+        X_bld_rnd = X_bld_test[np.random.choice(len(X_bld_test), m, replace=False)]
         X_test = np.vstack([X_test, X_bld_rnd])
         y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
-        # print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
+        print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
 
         # Train and evaluate KNN
-        knn = KNeighborsClassifier(n_neighbors=9, metric="minkowski")
+        knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
         knn.fit(X_train, y_train)
         y_pred = knn.predict(X_test)
         score = accuracy_score(y_test, y_pred)
@@ -496,14 +498,20 @@ if __name__ == '__main__':
     cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study_healthy.name, name='cd8_h' + name_opt, embed_fn=embed)
 
     # Evaluating CD4 and CD8
+    n_neighbors = 9
+    neg_to_pos_ratio = 3
+    to_plot = False
+
     print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
     mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
-                                             cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
-                                             k_fold_type, study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
-    print(f"CD4 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+                                             cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
+                                             ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                             study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
+    print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
     print()
     print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
     mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
-                                             cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
-                                             k_fold_type, study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
-    print(f"CD8 - KNN 3 neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+                                             cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
+                                             ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                             study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+    print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

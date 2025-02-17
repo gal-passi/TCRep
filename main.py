@@ -67,6 +67,30 @@ def embed(seqs):
     return embeds
 
 
+# TODO: Add this function in each fold, so that we can display more clearly the results (instead of using it on the full data)
+def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
+    tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+    X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
+    X_tsne_syn = X_tsne[:len(X_syn)]
+    X_tsne_bld = X_tsne[len(X_syn):len(X_syn) + len(X_bld)]
+
+    # plotting
+    plt.figure(figsize=(12, 8))
+    plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
+                c='red', label='Blood', alpha=0.4)
+    plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
+                c='blue', label='Synovial Fluid', alpha=0.4)
+    plt.legend()
+    plt.title(f't-SNE Visualization of CD{cd_type} Data')
+    plt.xlabel('t-SNE 1')
+    plt.ylabel('t-SNE 2')
+    # save plot
+    plots_folder = f"plots/{study_name}"
+    os.makedirs(plots_folder, exist_ok=True)
+    plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
+    plt.show()
+
+
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
                          ratio=3, n_neighbors=9, to_plot=False, cd_type='4', name_opt=''):
     # Prepare data
@@ -81,7 +105,7 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
     if to_plot:
         # Apply t-SNE
         tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-        X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
+        X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
         # X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
         X_tsne_syn = X_tsne[:len(syn)]
         X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
@@ -145,6 +169,9 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         y_pred = knn.predict(X_test)
         score = accuracy_score(y_test, y_pred)
         scores.append(score)
+
+        # Displaying the t-SNE figure for each fold
+        # t_sne_display(X[test_idx], X_bld_rnd, study_name, cd_type, name_opt)
 
         # Initialize variables
         # best_score = 0
@@ -383,6 +410,268 @@ def get_patient_ids_masks(df, sequences):
     return masks
 
 
+# def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title):
+#     bar_width = 0.35
+#     x = np.arange(10)
+#
+#     plt.figure(figsize=(12, 7))
+#     plt.bar(x - bar_width / 2, correct_percentages, width=bar_width, label='Correct (%)', color='green')
+#     plt.bar(x + bar_width / 2, incorrect_percentages, width=bar_width, label='Incorrect (%)', color='red')
+#
+#     # Add text for the total number of samples in each bin
+#     for i in range(10):
+#         if total_counts[i] > 0:
+#             plt.text(i, max(correct_percentages[i], incorrect_percentages[i]) + 2, f"n={total_counts[i]}", ha='center')
+#
+#     plt.xlabel('Max Sequence Identity Range')
+#     plt.ylabel('Percentage (%)')
+#     plt.title(title)
+#     plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
+#     plt.ylim(0, 110)
+#     plt.legend()
+#     plt.tight_layout()
+#     plt.grid(axis='y', linestyle='--', alpha=0.7)
+#     plt.show()
+
+
+def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title,
+                                show_accuracy=True):
+    """
+    Plot the correct and incorrect prediction percentages per sequence identity bin.
+    Optionally, display accuracy instead of percentages when `show_accuracy` is True.
+
+    Parameters:
+    - correct_percentages: Array of correct prediction percentages for each bin.
+    - incorrect_percentages: Array of incorrect prediction percentages for each bin.
+    - total_counts: Array of total sample counts per bin.
+    - bins: The bin edges for sequence identity.
+    - title: The title of the plot.
+    - show_accuracy: Boolean flag to switch between showing percentages or accuracy in the plot.
+    """
+    # Calculate accuracy if show_accuracy is True
+    if show_accuracy:
+        # Calculate the accuracy for each bin: correct / total
+        accuracies = np.divide(correct_percentages, 100, where=total_counts > 0)
+    else:
+        accuracies = None
+
+    bar_width = 0.35
+    x = np.arange(10)
+
+    plt.figure(figsize=(12, 7))
+
+    if show_accuracy:
+        plt.bar(x, accuracies * 100, width=bar_width, label='Accuracy (%)', color='blue')
+        plt.ylabel('Accuracy (%)')
+    else:
+        # Plot percentages (correct/incorrect)
+        plt.bar(x - bar_width / 2, correct_percentages, width=bar_width, label='Correct (%)', color='green')
+        plt.bar(x + bar_width / 2, incorrect_percentages, width=bar_width, label='Incorrect (%)', color='red')
+        plt.ylabel('Percentage (%)')
+
+    # Add text for the total number of samples in each bin
+    for i in range(10):
+        if total_counts[i] > 0:
+            # Adjust text position: slightly above the bar
+            y_position = max(correct_percentages[i], incorrect_percentages[i],
+                             accuracies[i] if accuracies is not None else 0) + 2
+            if show_accuracy:
+                y_position = max(accuracies[i] * 100, 2) + 2  # Slightly above the accuracy bar
+            plt.text(i, y_position, f"n={total_counts[i]}", ha='center')
+
+    plt.xlabel('Max Sequence Identity Range')
+    plt.title(title)
+    plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
+    plt.ylim(0, 110)
+    plt.legend()
+    plt.tight_layout()
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plt.show()
+
+
+def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_seqs, k_fold_type, study_name,
+                                       ratio=3, n_neighbors=9, cd_type='4', name_opt='', display_inner_figs=False, show_accuracy=True):
+    X = torch.cat(syn)
+    X_bld = torch.cat(bld)
+    X_hlt = torch.cat(hlt)
+    y = np.array([0] * len(syn))
+
+    folds_indices = []
+    for i in range(len(syn_mask)):
+        train_dx = ((np.delete(syn_mask, i, axis=0) == 1).any(axis=0))
+        test_dx = ~train_dx  # OR: test_dx = syn_mask[i] == 1
+        folds_indices.append((train_dx, test_dx))
+    blood_indices = [mask == 1 for mask in bld_mask]
+
+    if show_accuracy:
+        title_start = "Accuracy"
+    else:
+        title_start = "Prediction Percentage"
+
+    # To accumulate the correct and incorrect counts for each bin across patients
+    correct_counts_all_patients = []
+    incorrect_counts_all_patients = []
+
+    scores_per_patient = []
+    for i, mask in enumerate(syn_mask):
+        patient_idx = mask == 1
+        X_patient = X[patient_idx]
+        indices = np.arange(len(X_patient))
+        np.random.shuffle(indices)
+        split_idx = int(0.8 * len(X_patient))
+        train_idx, test_idx = indices[:split_idx], indices[split_idx:]
+        X_train, X_test = X_patient[train_idx], X_patient[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+
+        # Adding the same healthy data to the training set (for each fold)
+        n = min(len(X_train) * ratio, len(X_hlt))
+        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), n, replace=False)]
+        X_train = np.vstack([X_train, X_hlt_rnd])
+        y_train = np.hstack([y_train, np.array([1] * len(X_hlt_rnd))])
+        # print(f"Ratio: Train {n / len(X[train_idx]):.2f}")
+
+        # # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
+        # X_bld_test = X_bld[blood_indices[i]]
+        # m = min(len(y_test) * ratio, len(X_bld_test))
+        # X_bld_rnd = X_bld_test[np.random.choice(len(X_bld_test), m, replace=False)]
+        # X_test = np.vstack([X_test, X_bld_rnd])
+        # y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
+        # # print(f"Ratio: Train {n / len(X[train_idx]):.2f}, Test {m / len(X[test_idx]):.2f}")
+
+        # Getting patient train and test sequences (Of Synovial Fluid)
+        syn_seqs_train = syn_seqs[patient_idx][train_idx]
+        syn_seqs_test = syn_seqs[patient_idx][test_idx]
+
+        # Compute pairwise identity matrix
+        pwc_mat = pairwise_scores(syn_seqs_train, syn_seqs_test)  # OR: , score=levenshtein_dist
+
+        # Step 1: Get max identity value for each test sample
+        max_similarities = np.max(pwc_mat, axis=0)  # max similarity score for each test sample
+
+        # Step 2: Create bins for the max similarity values (between lowest and highest value)
+        min_sim = np.min(max_similarities)
+        max_sim = np.max(max_similarities)
+        bins = np.linspace(min_sim, max_sim, 11)  # 10 bins
+
+        # Step 3: Assign each test sample to a bin based on its max similarity
+        bin_indices = np.digitize(max_similarities, bins) - 1  # Subtract 1 to match bin index
+        bin_indices[bin_indices == 10] = 9  # Fix edge case
+
+        # Step 4: Train the KNN classifier
+        knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
+        knn.fit(X_train, y_train)  # Assuming X_train and y_train are available
+        y_pred = knn.predict(X_test)
+        score = accuracy_score(y_test, y_pred)
+        scores_per_patient.append(score)
+
+        # Initialize counters for correct and incorrect samples in each bin
+        correct_counts = np.zeros(10, dtype=int)
+        incorrect_counts = np.zeros(10, dtype=int)
+
+        # Loop over test samples
+        for i in range(len(y_test)):
+            bin_idx = bin_indices[i]
+            if y_pred[i] == y_test[i]:
+                correct_counts[bin_idx] += 1
+            else:
+                incorrect_counts[bin_idx] += 1
+
+        # Calculate total samples and percentages
+        total_counts = correct_counts + incorrect_counts
+        correct_percentages = np.divide(correct_counts, total_counts, where=total_counts > 0) * 100
+        incorrect_percentages = np.divide(incorrect_counts, total_counts, where=total_counts > 0) * 100
+
+        # Store for aggregation later
+        correct_counts_all_patients.append(correct_counts)
+        incorrect_counts_all_patients.append(incorrect_counts)
+
+        if display_inner_figs:
+            plot_prediction_percentages(
+                correct_percentages=correct_percentages,
+                incorrect_percentages=incorrect_percentages,
+                total_counts=total_counts,
+                bins=bins,
+                title=f'CD{cd_type} {title_start} Prediction Percentages per Sequence Identity Bin (n = Sample Count)',
+                show_accuracy=show_accuracy
+            )
+
+        # title = f'CD{cd_type} Correct & Incorrect Prediction Percentages per Sequence Identity Bin (n = Sample Count)'
+        # # Plotting
+        # bar_width = 0.35
+        # x = np.arange(10)
+        #
+        # plt.figure(figsize=(12, 7))
+        # plt.bar(x - bar_width / 2, correct_percentages, width=bar_width, label='Correct (%)', color='green')
+        # plt.bar(x + bar_width / 2, incorrect_percentages, width=bar_width, label='Incorrect (%)', color='red')
+        #
+        # # Add text for the total number of samples in each bin
+        # for i in range(10):
+        #     if total_counts[i] > 0:
+        #         plt.text(i, max(correct_percentages[i], incorrect_percentages[i]) + 2, f"n={total_counts[i]}",
+        #                  ha='center')
+        #
+        # plt.xlabel('Max Sequence Identity Range')
+        # plt.ylabel('Percentage (%)')
+        # plt.title(title)
+        # plt.xticks(x, [f"{bins[i]*100:.1f}-{bins[i + 1]*100:.1f}" for i in range(10)], rotation=30)
+        # plt.ylim(0, 110)
+        # plt.legend()
+        # plt.tight_layout()
+        # plt.grid(axis='y', linestyle='--', alpha=0.7)
+        # plt.show()
+
+    # Aggregate over patients
+    correct_counts_all_patients = np.array(correct_counts_all_patients)
+    incorrect_counts_all_patients = np.array(incorrect_counts_all_patients)
+
+    # Sum counts across patients
+    correct_counts_sum = np.sum(correct_counts_all_patients, axis=0)
+    incorrect_counts_sum = np.sum(incorrect_counts_all_patients, axis=0)
+    total_counts_sum = correct_counts_sum + incorrect_counts_sum
+
+    # Mean percentage per bin
+    correct_percentages_mean = np.divide(correct_counts_sum, total_counts_sum, where=total_counts_sum > 0) * 100
+    incorrect_percentages_mean = np.divide(incorrect_counts_sum, total_counts_sum, where=total_counts_sum > 0) * 100
+
+    plot_prediction_percentages(
+        correct_percentages=correct_percentages_mean,
+        incorrect_percentages=incorrect_percentages_mean,
+        total_counts=total_counts_sum,
+        bins=bins,
+        title=f'CD{cd_type} Mean {title_start} Prediction Percentages per Sequence Identity Bin (n = Sample Count)',
+        show_accuracy=show_accuracy
+    )
+
+    # title = f'CD{cd_type} Mean Correct & Incorrect Prediction Percentages per Sequence Identity Bin (n = Sample Count)'
+    # # Plot final aggregated figure
+    # bar_width = 0.35
+    # x = np.arange(10)
+    #
+    # plt.figure(figsize=(12, 7))
+    # plt.bar(x - bar_width / 2, correct_percentages_mean, width=bar_width, label='Correct (%)', color='green')
+    # plt.bar(x + bar_width / 2, incorrect_percentages_mean, width=bar_width, label='Incorrect (%)', color='red')
+    #
+    # # Add text for total number of samples in each bin
+    # for i in range(10):
+    #     if total_counts_sum[i] > 0:
+    #         plt.text(i, max(correct_percentages_mean[i], incorrect_percentages_mean[i]) + 2, f"n={total_counts_sum[i]}",
+    #                  ha='center')
+    #
+    # plt.xlabel('Max Sequence Identity Range')
+    # plt.ylabel('Percentage (%)')
+    # plt.title(title)
+    # plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
+    # plt.ylim(0, 110)
+    # plt.legend()
+    # plt.tight_layout()
+    # plt.grid(axis='y', linestyle='--', alpha=0.7)
+    # plt.show()
+
+    # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
+    mean_acc, std_acc = np.mean(scores_per_patient), np.std(scores_per_patient)
+    print(f"CD{cd_type} - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}. (Random split per patient!)")
+
+
 if __name__ == '__main__':
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
@@ -501,6 +790,16 @@ if __name__ == '__main__':
     n_neighbors = 9
     neg_to_pos_ratio = 3
     to_plot = False
+
+    display_success_figure_per_patient(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
+                                       sr_cd4_syn_vld,
+                                       k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
+                                       cd_type='4', name_opt=name_opt)
+    display_success_figure_per_patient(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
+                                       sr_cd8_syn_vld,
+                                       k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
+                                       cd_type='8', name_opt=name_opt)
+    exit(0)
 
     print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
     mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,

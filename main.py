@@ -28,7 +28,10 @@ HEALTHY_STUDY_ID = STUDY_ID3
 HEALTHY_STUDY_ID2 = STUDY_ID4
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
 VALID_SEQ_CACHE = "cache/valid_sequences"
-TO_DISPLAY_LENGTHS_HIST = False
+TO_DISPLAY_LENGTHS_HIST = True
+TO_DISPLAY_COMMON_SEQUENCES = True
+TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT = True
+TO_DISPLAY_RESULTS = True
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -410,30 +413,6 @@ def get_patient_ids_masks(df, sequences):
     return masks
 
 
-# def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title):
-#     bar_width = 0.35
-#     x = np.arange(10)
-#
-#     plt.figure(figsize=(12, 7))
-#     plt.bar(x - bar_width / 2, correct_percentages, width=bar_width, label='Correct (%)', color='green')
-#     plt.bar(x + bar_width / 2, incorrect_percentages, width=bar_width, label='Incorrect (%)', color='red')
-#
-#     # Add text for the total number of samples in each bin
-#     for i in range(10):
-#         if total_counts[i] > 0:
-#             plt.text(i, max(correct_percentages[i], incorrect_percentages[i]) + 2, f"n={total_counts[i]}", ha='center')
-#
-#     plt.xlabel('Max Sequence Identity Range')
-#     plt.ylabel('Percentage (%)')
-#     plt.title(title)
-#     plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
-#     plt.ylim(0, 110)
-#     plt.legend()
-#     plt.tight_layout()
-#     plt.grid(axis='y', linestyle='--', alpha=0.7)
-#     plt.show()
-
-
 def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title,
                                 show_accuracy=True):
     """
@@ -514,6 +493,7 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
 
     scores_per_patient = []
     for i, mask in enumerate(syn_mask):
+    # for i, (train_idx, test_idx) in enumerate(syn_mask):
         patient_idx = mask == 1
         X_patient = X[patient_idx]
         indices = np.arange(len(X_patient))
@@ -522,6 +502,8 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
         train_idx, test_idx = indices[:split_idx], indices[split_idx:]
         X_train, X_test = X_patient[train_idx], X_patient[test_idx]
         y_train, y_test = y[train_idx], y[test_idx]
+        # X_train, X_test = X[train_idx], X[test_idx]
+        # y_train, y_test = y[train_idx], y[test_idx]
 
         # Adding the same healthy data to the training set (for each fold)
         n = min(len(X_train) * ratio, len(X_hlt))
@@ -539,6 +521,8 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
         # # print(f"Ratio: Train {n / len(X[train_idx]):.2f}, Test {m / len(X[test_idx]):.2f}")
 
         # Getting patient train and test sequences (Of Synovial Fluid)
+        # syn_seqs_train = syn_seqs[train_idx]
+        # syn_seqs_test = syn_seqs[test_idx]
         syn_seqs_train = syn_seqs[patient_idx][train_idx]
         syn_seqs_test = syn_seqs[patient_idx][test_idx]
 
@@ -595,31 +579,6 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
                 show_accuracy=show_accuracy
             )
 
-        # title = f'CD{cd_type} Correct & Incorrect Prediction Percentages per Sequence Identity Bin (n = Sample Count)'
-        # # Plotting
-        # bar_width = 0.35
-        # x = np.arange(10)
-        #
-        # plt.figure(figsize=(12, 7))
-        # plt.bar(x - bar_width / 2, correct_percentages, width=bar_width, label='Correct (%)', color='green')
-        # plt.bar(x + bar_width / 2, incorrect_percentages, width=bar_width, label='Incorrect (%)', color='red')
-        #
-        # # Add text for the total number of samples in each bin
-        # for i in range(10):
-        #     if total_counts[i] > 0:
-        #         plt.text(i, max(correct_percentages[i], incorrect_percentages[i]) + 2, f"n={total_counts[i]}",
-        #                  ha='center')
-        #
-        # plt.xlabel('Max Sequence Identity Range')
-        # plt.ylabel('Percentage (%)')
-        # plt.title(title)
-        # plt.xticks(x, [f"{bins[i]*100:.1f}-{bins[i + 1]*100:.1f}" for i in range(10)], rotation=30)
-        # plt.ylim(0, 110)
-        # plt.legend()
-        # plt.tight_layout()
-        # plt.grid(axis='y', linestyle='--', alpha=0.7)
-        # plt.show()
-
     # Aggregate over patients
     correct_counts_all_patients = np.array(correct_counts_all_patients)
     incorrect_counts_all_patients = np.array(incorrect_counts_all_patients)
@@ -642,34 +601,95 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
         show_accuracy=show_accuracy
     )
 
-    # title = f'CD{cd_type} Mean Correct & Incorrect Prediction Percentages per Sequence Identity Bin (n = Sample Count)'
-    # # Plot final aggregated figure
-    # bar_width = 0.35
-    # x = np.arange(10)
-    #
-    # plt.figure(figsize=(12, 7))
-    # plt.bar(x - bar_width / 2, correct_percentages_mean, width=bar_width, label='Correct (%)', color='green')
-    # plt.bar(x + bar_width / 2, incorrect_percentages_mean, width=bar_width, label='Incorrect (%)', color='red')
-    #
-    # # Add text for total number of samples in each bin
-    # for i in range(10):
-    #     if total_counts_sum[i] > 0:
-    #         plt.text(i, max(correct_percentages_mean[i], incorrect_percentages_mean[i]) + 2, f"n={total_counts_sum[i]}",
-    #                  ha='center')
-    #
-    # plt.xlabel('Max Sequence Identity Range')
-    # plt.ylabel('Percentage (%)')
-    # plt.title(title)
-    # plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
-    # plt.ylim(0, 110)
-    # plt.legend()
-    # plt.tight_layout()
-    # plt.grid(axis='y', linestyle='--', alpha=0.7)
-    # plt.show()
-
     # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
     mean_acc, std_acc = np.mean(scores_per_patient), np.std(scores_per_patient)
     print(f"CD{cd_type} - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}. (Random split per patient!)")
+
+
+def common_aaseq_analysis(df, num_of_patients, mode=1):
+    # Select the unique patients
+    unique_patients = df['patient_id'].unique()
+
+    if len(unique_patients) < num_of_patients:
+        raise ValueError("Number of patients in the dataframe is less than num_of_patients")
+
+    # Create a dictionary mapping each patient_id to their set of AASeq
+    patient_sequences = {pid: set(df[df['patient_id'] == pid]['AASeq']) for pid in unique_patients}
+
+    results = []
+
+    if mode == 1:
+        # Mode 1: All combinations
+        patient_combinations = combinations(unique_patients, num_of_patients)
+    elif mode == 2:
+        # Mode 2: Always include the first patient
+        patient_combinations = [tuple([unique_patients[0]] + list(comb)) for comb in combinations(unique_patients[1:], num_of_patients - 1)]
+    else:
+        raise ValueError("Mode must be 1 or 2")
+
+    for combination in patient_combinations:
+        selected_sequences = [patient_sequences[pid] for pid in combination]
+        common_sequences = set.intersection(*selected_sequences)
+        num_common = len(common_sequences)
+        total_sequences = sum(len(seqs) for seqs in selected_sequences)
+        min_sequences = min(len(seqs) for seqs in selected_sequences)
+        max_sequences = max(len(seqs) for seqs in selected_sequences)
+        percent_of_total = (num_common / total_sequences) * 100 if total_sequences > 0 else 0
+        percent_of_min = (num_common / min_sequences) * 100 if min_sequences > 0 else 0
+        percent_of_max = (num_common / max_sequences) * 100 if max_sequences > 0 else 0
+        results.append({
+            'num_common': num_common,
+            'percent_of_total': percent_of_total,
+            'percent_of_min': percent_of_min,
+            'percent_of_max': percent_of_max
+        })
+
+    # Calculate means
+    mean_results = {
+        'num_common': sum(r['num_common'] for r in results) / len(results),
+        'percent_of_total': sum(r['percent_of_total'] for r in results) / len(results),
+        'percent_of_min': sum(r['percent_of_min'] for r in results) / len(results),
+        'percent_of_max': sum(r['percent_of_max'] for r in results) / len(results)
+    }
+
+    return mean_results
+
+
+def display_common_sequences(df_cd8_bld):
+    # reading healthy study2:
+    study_healthy2 = Study(HEALTHY_STUDY_ID)
+    samples_h2 = study_healthy2._samples['usable']
+    df_h2 = study_healthy2.read_sample(samples_h2)
+    df_h2_cd8 = df_h2[df_h2['cell_type'] == 'CD8']
+
+    # find max len of uniques patient_id
+    l = min(1 + len(df_h2_cd8['patient_id'].unique()), len(df_cd8_bld['patient_id'].unique())) + 1
+
+    # calculate common sequences in disease and healthy samples
+    value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
+    x_disease = [common_aaseq_analysis(df_cd8_bld, num_of_patients=i, mode=1)[value_to_take] for i in range(2, l)]
+    df1 = df_cd8_bld[df_cd8_bld["patient_id"] == "Dv"]
+    df_h_comb = pd.concat([df1, df_h2_cd8], ignore_index=True)
+    x_healthy = [common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2)[value_to_take] for i in range(2, l)]
+
+    # normalize if needed
+    # x_disease = [x / x_disease[0] for x in x_disease]
+    # x_healthy = [x / x_healthy[0] for x in x_healthy]
+
+    # plot the results
+    plt.figure(figsize=(10, 6))
+    plt.plot(range(2, len(x_disease) + 2), x_disease, label="Disease")
+    plt.plot(range(2, len(x_healthy) + 2), x_healthy, label="Healthy")
+    # add the percentage of common sequences in the plot
+    for i, txt in enumerate(x_disease):
+        plt.annotate(f"{txt:.5f}", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+    for i, txt in enumerate(x_healthy):
+        plt.annotate(f"{txt:.5f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+    plt.xlabel("Number of Patients")
+    plt.ylabel("Percentage of Common Sequences (Only CD8)")
+    plt.title("Percentage of Common Sequences in Disease and Healthy Samples")
+    plt.legend()
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -746,23 +766,6 @@ if __name__ == '__main__':
 
     sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
-    # Display histogram of lengths:
-    if TO_DISPLAY_LENGTHS_HIST:
-        print("Displaying Histograms of Lengths")
-        plot_length_histogram(df_cd4_bld["AASeq"], df_cd4_syn["AASeq"],
-                              labels=["Blood", "Synovial"],
-                              title_text="CD4 Sequences")
-        plot_length_histogram(df_cd8_bld["AASeq"], df_cd8_syn["AASeq"],
-                              labels=["Blood", "Synovial"],
-                              title_text="CD8 Sequences")
-
-        plot_length_histogram(np.array(list(sr_cd4_bld_vld)), np.array(sr_cd4_syn_vld),
-                              labels=["Blood", "Synovial"],
-                              title_text="CD4 Filtered Sequences")
-        plot_length_histogram(np.array(list(sr_cd8_bld_vld)), np.array(sr_cd8_syn_vld),
-                              labels=["Blood", "Synovial"],
-                              title_text="CD8 Filtered Sequences")
-
     # bounding the length of sequences to be min and max of synovial samples,
     # then sampling *ratio samples from blood to match *ratio the number of synovial samples
     np.random.seed(42)
@@ -791,26 +794,50 @@ if __name__ == '__main__':
     neg_to_pos_ratio = 3
     to_plot = False
 
-    display_success_figure_per_patient(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
-                                       sr_cd4_syn_vld,
-                                       k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                       cd_type='4', name_opt=name_opt)
-    display_success_figure_per_patient(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
-                                       sr_cd8_syn_vld,
-                                       k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                       cd_type='8', name_opt=name_opt)
-    exit(0)
+    # Display histogram of lengths:
+    if TO_DISPLAY_LENGTHS_HIST:
+        print("Displaying Histograms of Lengths")
+        plot_length_histogram(df_cd4_bld["AASeq"], df_cd4_syn["AASeq"],
+                              labels=["Blood", "Synovial"],
+                              title_text="CD4 Sequences")
+        plot_length_histogram(df_cd8_bld["AASeq"], df_cd8_syn["AASeq"],
+                              labels=["Blood", "Synovial"],
+                              title_text="CD8 Sequences")
 
-    print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
-    mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
-                                             cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
-                                             ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
-                                             study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
-    print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-    print()
-    print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
-    mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
-                                             cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
-                                             ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
-                                             study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
-    print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+        plot_length_histogram(np.array(list(sr_cd4_bld_vld)), np.array(sr_cd4_syn_vld),
+                              labels=["Blood", "Synovial"],
+                              title_text="CD4 Filtered Sequences")
+        plot_length_histogram(np.array(list(sr_cd8_bld_vld)), np.array(sr_cd8_syn_vld),
+                              labels=["Blood", "Synovial"],
+                              title_text="CD8 Filtered Sequences")
+
+    # Display common sequences in disease and healthy samples
+    if TO_DISPLAY_COMMON_SEQUENCES:
+        display_common_sequences(df_bld[df_bld['cell_type'] == 'CD8'])
+
+    # Display success figure per patient
+    if TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT:
+        display_success_figure_per_patient(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
+                                           sr_cd4_syn_vld,
+                                           k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
+                                           cd_type='4', name_opt=name_opt)
+        display_success_figure_per_patient(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
+                                           sr_cd8_syn_vld,
+                                           k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
+                                           cd_type='8', name_opt=name_opt)
+
+    # Displaying the results
+    if TO_DISPLAY_RESULTS:
+        print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
+        mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
+                                                 cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
+                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                                 study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
+        print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+        print()
+        print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
+        mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
+                                                 cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
+                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                                 study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+        print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

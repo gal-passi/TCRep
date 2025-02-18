@@ -5,17 +5,14 @@ import pandas as pd
 import numpy as np
 import torch
 import os
-from sklearn.cluster import AgglomerativeClustering
 from tqdm import tqdm
-from itertools import product
-from Levenshtein import ratio  # pip install python-Levenshtein
-from utils import seq_identity, calculate_distance_matrix, pairwise_scores, levenshtein_dist
+from utils import pairwise_scores, levenshtein_dist
 import pickle
 import argparse
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import KFold, GroupKFold
+from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score
 from itertools import combinations
 
@@ -28,10 +25,11 @@ HEALTHY_STUDY_ID = STUDY_ID3
 HEALTHY_STUDY_ID2 = STUDY_ID4
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
 VALID_SEQ_CACHE = "cache/valid_sequences"
-TO_DISPLAY_LENGTHS_HIST = True
-TO_DISPLAY_COMMON_SEQUENCES = True
-TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT = True
+TO_DISPLAY_LENGTHS_HIST = False
+TO_DISPLAY_COMMON_SEQUENCES = False
+TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT = False
 TO_DISPLAY_RESULTS = True
+TO_DISPLAY_RESULTS_PLOT_TSNE = True
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -70,7 +68,6 @@ def embed(seqs):
     return embeds
 
 
-# TODO: Add this function in each fold, so that we can display more clearly the results (instead of using it on the full data)
 def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
     X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
@@ -95,7 +92,7 @@ def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
 
 
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
-                         ratio=3, n_neighbors=9, to_plot=False, cd_type='4', name_opt=''):
+                         ratio=3, n_neighbors=9, cd_type='4', name_opt=''):
     # Prepare data
     X_syn = torch.cat([x for x in syn])
     X_bld = torch.cat([x for x in bld])
@@ -105,7 +102,7 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
     y = np.array([0] * len(syn))
 
     # Plotting if needed
-    if to_plot:
+    if TO_DISPLAY_RESULTS_PLOT_TSNE:
         # Apply t-SNE
         tsne = TSNE(n_components=2, perplexity=5, random_state=42)
         X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
@@ -164,7 +161,7 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         X_bld_rnd = X_bld_test[np.random.choice(len(X_bld_test), m, replace=False)]
         X_test = np.vstack([X_test, X_bld_rnd])
         y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
-        print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
+        # print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
 
         # Train and evaluate KNN
         knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
@@ -174,73 +171,8 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         scores.append(score)
 
         # Displaying the t-SNE figure for each fold
-        # t_sne_display(X[test_idx], X_bld_rnd, study_name, cd_type, name_opt)
-
-        # Initialize variables
-        # best_score = 0
-        # best_n_neighbors = 0
-        # n_neighbors_range = range(1, 11)  # Range of values to check for n_neighbors
-        # for n_neighbors in n_neighbors_range:
-        #     knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
-        #     knn.fit(X_train, y_train)
-        #     y_pred = knn.predict(X_test)
-        #     score = accuracy_score(y_test, y_pred)
-        #     scores.append(score)
-        #
-        #     if score > best_score:
-        #         best_score = score
-        #         best_n_neighbors = n_neighbors
-        # scores.append(best_score)
-        # print(f'Best number of neighbors: {best_n_neighbors} with a score of {best_score}')
-
-        # TODO: Need to get the sequence identity matrix somehow!
-        # # Compute sequence identities
-        # if seq_id_matrix is not None:
-        #     seq_id_test_train = seq_id_matrix[np.ix_(test_idx, train_idx)]
-        # else:
-        #     seq_id_test_train = np.array([
-        #         [compute_sequence_identity(test_seq, train_seq) for train_seq in X_train]
-        #         for test_seq in X_test
-        #     ])
-        #
-        # # Get the highest sequence identity for each test sample
-        # max_seq_id = seq_id_test_train.max(axis=1)
-        #
-        # # Define bins (0-10%, 10-20%, ..., 90-100%)
-        # bins = np.linspace(0, 1, 11)
-        # bin_indices = np.digitize(max_seq_id, bins) - 1
-        #
-        # # Calculate success and failure rate per bin
-        # bin_success = np.zeros(len(bins) - 1)
-        # bin_failure = np.zeros(len(bins) - 1)
-        # bin_counts = np.zeros(len(bins) - 1)
-        #
-        # for j, bin_idx in enumerate(bin_indices):
-        #     bin_counts[bin_idx] += 1
-        #     if y_pred[j] == y_test[j]:
-        #         bin_success[bin_idx] += 1
-        #     else:
-        #         bin_failure[bin_idx] += 1
-        #
-        # # Normalize to get success rates
-        # bin_success_rate = bin_success / np.maximum(bin_counts, 1)
-        # bin_failure_rate = bin_failure / np.maximum(bin_counts, 1)
-        #
-        # # Plot results
-        # plt.figure(figsize=(10, 6))
-        # plt.bar(bins[:-1] * 100, bin_success_rate, width=10, color='green', alpha=0.7, label="Success Rate")
-        # plt.bar(bins[:-1] * 100, bin_failure_rate, width=10, bottom=bin_success_rate, color='red', alpha=0.7,
-        #         label="Failure Rate")
-        # plt.xlabel("Max Sequence Identity with Training Set (%)")
-        # plt.ylabel("Prediction Rate")
-        # plt.title(f"Success vs Failure Rate per Sequence Identity (Fold {i + 1})")
-        # plt.legend()
-        #
-        # # Save plot
-        # plots_folder = f"plots/{study_name}"
-        # os.makedirs(plots_folder, exist_ok=True)
-        # plt.savefig(os.path.join(plots_folder, f"seq_id_success_cd{cd_type}_fold{i + 1}{name_opt}.png"))
-        # plt.show()
+        if TO_DISPLAY_RESULTS_PLOT_TSNE:
+            t_sne_display(X[test_idx], X_bld_rnd, study_name, cd_type, name_opt)
 
     return np.mean(scores), np.std(scores)
 
@@ -716,7 +648,6 @@ if __name__ == '__main__':
     # Load study
     study = Study(STUDIES[study_ind])
     study_healthy = Study(HEALTHY_STUDY_ID2)
-    # study_healthy = Study(HEALTHY_STUDY_ID)
 
     # reading synovial samples
     samples_syn = study._samples['usable']
@@ -792,7 +723,6 @@ if __name__ == '__main__':
     # Evaluating CD4 and CD8
     n_neighbors = 9
     neg_to_pos_ratio = 3
-    to_plot = False
 
     # Display histogram of lengths:
     if TO_DISPLAY_LENGTHS_HIST:
@@ -831,13 +761,13 @@ if __name__ == '__main__':
         print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
         mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
                                                  cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
-                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
                                                  study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
         print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
         print()
         print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
         mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
                                                  cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
-                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors, to_plot=to_plot,
+                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
                                                  study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
         print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

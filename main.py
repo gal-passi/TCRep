@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import os
 from tqdm import tqdm
-from utils import pairwise_scores, levenshtein_dist
+from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
 import pickle
 import argparse
 import matplotlib.pyplot as plt
@@ -14,7 +14,7 @@ from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import KFold
 from sklearn.metrics import accuracy_score
-from itertools import combinations
+from itertools import combinations, chain
 
 
 STUDY_ID = 'PRJNA393498'
@@ -27,9 +27,9 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
 TO_DISPLAY_COMMON_SEQUENCES = False
-TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT = False
-TO_DISPLAY_RESULTS = True
-TO_DISPLAY_RESULTS_PLOT_TSNE = True
+TO_DISPLAY_ACCURACY_BIN_BY_DIST = True
+TO_DISPLAY_RESULTS = False
+TO_DISPLAY_RESULTS_PLOT_TSNE = False
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -42,7 +42,7 @@ def get_valid_seqs_original(df, df_ind, name_opt, study_name):
 
     base_path = os.path.join(VALID_SEQ_CACHE, study_name)
     os.makedirs(base_path, exist_ok=True)
-    cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
+    cache_pkl = os.path.join(base_path, f"valid_sequences_id_{df_ind}{name_opt}.pkl")
     with open(cache_pkl, 'wb') as f:
         pickle.dump(valid_seqs, f)
     return valid_seqs
@@ -91,6 +91,17 @@ def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
     plt.show()
 
 
+# TODO: Think about the correct way to set split the train and test...
+def get_fold_indices_by_patient(syn_mask):
+    folds_indices = []
+    for i in range(len(syn_mask)):
+        train_dx = (syn_mask[i] == 0)
+        # train_dx = ((np.delete(syn_mask, i, axis=0) == 1).any(axis=0))
+        test_dx = ~train_dx  # OR: test_dx = syn_mask[i] == 1
+        folds_indices.append((train_dx, test_dx))
+    return folds_indices
+
+
 def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
                          ratio=3, n_neighbors=9, cd_type='4', name_opt=''):
     # Prepare data
@@ -135,11 +146,7 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         folds_indices = kf.split(X)
         blood_indices = [x[0] for x in kf.split(X_bld)]
     else:  # patient k-fold
-        folds_indices = []
-        for i in range(len(syn_mask)):
-            train_dx = ((np.delete(syn_mask, i, axis=0) == 1).any(axis=0))
-            test_dx = ~train_dx  # OR: test_dx = syn_mask[i] == 1
-            folds_indices.append((train_dx, test_dx))
+        folds_indices = get_fold_indices_by_patient(syn_mask)
         blood_indices = [mask == 1 for mask in bld_mask]
 
     scores = []
@@ -217,16 +224,25 @@ def get_valid_seqs(df, df_ind, name_opt, study_name):
 
     base_path = os.path.join(VALID_SEQ_CACHE, study_name)
     os.makedirs(base_path, exist_ok=True)
-    cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
+    cache_pkl = os.path.join(base_path, f"valid_sequences_id_{df_ind}{name_opt}.pkl")
     if os.path.exists(cache_pkl):
         with open(cache_pkl, 'rb') as f:
             valid_sequences = pickle.load(f)
-        return df[df['AASeq'].isin(valid_sequences)]['AASeq'].unique()
+            return valid_sequences
+        # return df[df['AASeq'].isin(valid_sequences)]['AASeq'].unique()
     else:
         return None
 
 
-def calculate_valid_seqs(df, df_ind, name_opt, study_name):
+def calculate_valid_seqs_with_patient_id(df, df_ind, name_opt, study_name):
+    # Getting from cache if it was already calculated
+    base_path = os.path.join(VALID_SEQ_CACHE, study_name)
+    os.makedirs(base_path, exist_ok=True)
+    cache_pkl = os.path.join(base_path, f"valid_sequences_id_{df_ind}{name_opt}.pkl")
+    if os.path.exists(cache_pkl):
+        with open(cache_pkl, 'rb') as f:
+            return pickle.load(f)
+
     # Step 1: Create patient-wise groups
     seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
 
@@ -262,16 +278,14 @@ def calculate_valid_seqs(df, df_ind, name_opt, study_name):
                 # pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
                 sim_inxs = np.where(pwc_mat >= 0.9)
 
-                # Add matching sequences to valid set
+                # Add matching sequences with patient_id to valid set
                 for x, y in zip(sim_inxs[0], sim_inxs[1]):
-                    valid_sequences.add(group1[x])
-                    valid_sequences.add(group2[y])
+                    valid_sequences.add((group1[x], pid1, pid2))  # Tuple (seq, originating pid x2)
+                    valid_sequences.add((group2[y], pid1, pid2))  # Tuple (seq, originating pid x2)
 
-    base_path = os.path.join(VALID_SEQ_CACHE, study_name)
-    os.makedirs(base_path, exist_ok=True)
-    cache_pkl = os.path.join(base_path, f"valid_sequences_{df_ind}{name_opt}.pkl")
     with open(cache_pkl, 'wb') as f:
         pickle.dump(valid_sequences, f)
+
     return valid_sequences
 
 
@@ -331,22 +345,40 @@ def bound_and_sample_blood(syn, blood, ratio=2):
     return blood
 
 
-def get_patient_ids_masks(df, sequences):
+def get_patient_ids_masks(df, sequences, meta_data, seq_type='syn'):
     unique_patient_ids = sorted(df["patient_id"].unique())
     masks = []
-    for patient in unique_patient_ids:
-        # Get sequences that belong to the current patient
-        patient_seqs = set(df.loc[df["patient_id"] == patient, "AASeq"])
-        # Create a mask for sequences
-        mask = np.array([1 if seq in patient_seqs else 0 for seq in sequences])
-        masks.append(mask)
-    # Convert to ndarray
-    masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
+    if seq_type == 'syn':
+        get_seq_data = lambda x: [n for n in meta_data if n[0] == x]
+        for seq in sequences:
+            # Getting sequence data
+            seq_data = get_seq_data(seq)
+            # Getting all patients that have this
+            seq_patients = set(chain.from_iterable([data[1:] for data in seq_data]))
+
+            current = np.zeros(len(unique_patient_ids))
+            for i, patient_id in enumerate(unique_patient_ids):
+                if patient_id in seq_patients:
+                    current[i] = 1
+
+            masks.append(current)
+        masks = np.stack(masks, axis=1)
+    else:
+        for patient in unique_patient_ids:
+            # Get sequences that belong to the current patient
+            patient_seqs = set(df.loc[df["patient_id"] == patient, "AASeq"])
+
+            # Create a mask for sequences
+            mask = np.array([1 if seq in patient_seqs else 0 for seq in sequences])
+            masks.append(mask)
+
+        # Convert to ndarray
+        masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
     return masks
 
 
-def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title,
-                                show_accuracy=True):
+def plot_prediction_percentages(correct_percentages, incorrect_percentages, total_counts, bins, title, plot_file,
+                                num_of_bins, show_accuracy=True):
     """
     Plot the correct and incorrect prediction percentages per sequence identity bin.
     Optionally, display accuracy instead of percentages when `show_accuracy` is True.
@@ -363,11 +395,12 @@ def plot_prediction_percentages(correct_percentages, incorrect_percentages, tota
     if show_accuracy:
         # Calculate the accuracy for each bin: correct / total
         accuracies = np.divide(correct_percentages, 100, where=total_counts > 0)
+        accuracies[accuracies > 100] = 0  # Fix edge case
     else:
         accuracies = None
 
     bar_width = 0.35
-    x = np.arange(10)
+    x = np.arange(num_of_bins)
 
     plt.figure(figsize=(12, 7))
 
@@ -381,7 +414,7 @@ def plot_prediction_percentages(correct_percentages, incorrect_percentages, tota
         plt.ylabel('Percentage (%)')
 
     # Add text for the total number of samples in each bin
-    for i in range(10):
+    for i in range(num_of_bins):
         if total_counts[i] > 0:
             # Adjust text position: slightly above the bar
             y_position = max(correct_percentages[i], incorrect_percentages[i],
@@ -392,26 +425,27 @@ def plot_prediction_percentages(correct_percentages, incorrect_percentages, tota
 
     plt.xlabel('Max Sequence Identity Range')
     plt.title(title)
-    plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(10)], rotation=30)
+    plt.xticks(x, [f"{bins[i]}" for i in range(num_of_bins)])
+    # plt.xticks(x, [f"{bins[i] * 100:.1f}-{bins[i + 1] * 100:.1f}" for i in range(num_of_bins)], rotation=30)
     plt.ylim(0, 110)
     plt.legend()
     plt.tight_layout()
     plt.grid(axis='y', linestyle='--', alpha=0.7)
+    plots_folder = f"plots/"
+    os.makedirs(plots_folder, exist_ok=True)
+    plt.savefig(os.path.join(plots_folder, f"bin_accuracy_by_dist_{plot_file}.png"))
     plt.show()
 
 
-def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_seqs, k_fold_type, study_name,
-                                       ratio=3, n_neighbors=9, cd_type='4', name_opt='', display_inner_figs=False, show_accuracy=True):
+def display_accuracy_bin_by_dist_figure(syn, hlt, bld, syn_mask, bld_mask, syn_seqs, bld_seqs, hlt_seqs, k_fold_type, study_name,
+                                       ratio=3, n_neighbors=9, cd_type='4', name_opt='', display_inner_figs=True, show_accuracy=True,
+                                       num_of_bins=20):
     X = torch.cat(syn)
     X_bld = torch.cat(bld)
     X_hlt = torch.cat(hlt)
     y = np.array([0] * len(syn))
 
-    folds_indices = []
-    for i in range(len(syn_mask)):
-        train_dx = ((np.delete(syn_mask, i, axis=0) == 1).any(axis=0))
-        test_dx = ~train_dx  # OR: test_dx = syn_mask[i] == 1
-        folds_indices.append((train_dx, test_dx))
+    folds_indices = get_fold_indices_by_patient(syn_mask)
     blood_indices = [mask == 1 for mask in bld_mask]
 
     if show_accuracy:
@@ -423,74 +457,93 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
     correct_counts_all_patients = []
     incorrect_counts_all_patients = []
 
+    bins = np.linspace(0, num_of_bins, 21)
     scores_per_patient = []
-    for i, mask in enumerate(syn_mask):
-    # for i, (train_idx, test_idx) in enumerate(syn_mask):
-        patient_idx = mask == 1
-        X_patient = X[patient_idx]
-        indices = np.arange(len(X_patient))
-        np.random.shuffle(indices)
-        split_idx = int(0.8 * len(X_patient))
-        train_idx, test_idx = indices[:split_idx], indices[split_idx:]
-        X_train, X_test = X_patient[train_idx], X_patient[test_idx]
-        y_train, y_test = y[train_idx], y[test_idx]
-        # X_train, X_test = X[train_idx], X[test_idx]
+    # for i, mask in enumerate(syn_mask):
+    for i, (train_idx, test_idx) in enumerate(folds_indices):
+        # patient_idx = mask == 1
+        # X_patient = X[patient_idx]
+        # indices = np.arange(len(X_patient))
+        # np.random.shuffle(indices)
+        # split_idx = int(0.8 * len(X_patient))
+        # train_idx, test_idx = indices[:split_idx], indices[split_idx:]
+        # X_train, X_test = X_patient[train_idx], X_patient[test_idx]
         # y_train, y_test = y[train_idx], y[test_idx]
+        X_train, X_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
 
         # Adding the same healthy data to the training set (for each fold)
         n = min(len(X_train) * ratio, len(X_hlt))
-        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), n, replace=False)]
+        hlt_idx = np.random.choice(len(X_hlt), n, replace=False)
+        X_hlt_rnd = X_hlt[hlt_idx]
         X_train = np.vstack([X_train, X_hlt_rnd])
         y_train = np.hstack([y_train, np.array([1] * len(X_hlt_rnd))])
         # print(f"Ratio: Train {n / len(X[train_idx]):.2f}")
 
-        # # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
-        # X_bld_test = X_bld[blood_indices[i]]
-        # m = min(len(y_test) * ratio, len(X_bld_test))
-        # X_bld_rnd = X_bld_test[np.random.choice(len(X_bld_test), m, replace=False)]
-        # X_test = np.vstack([X_test, X_bld_rnd])
-        # y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
-        # # print(f"Ratio: Train {n / len(X[train_idx]):.2f}, Test {m / len(X[test_idx]):.2f}")
+        # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
+        X_bld_test = X_bld[blood_indices[i]]
+        m = min(len(y_test) * ratio, len(X_bld_test))
+        bld_idx = np.random.choice(len(X_bld_test), m, replace=False)
+        X_bld_rnd = X_bld_test[bld_idx]
+        X_test = np.vstack([X_test, X_bld_rnd])
+        y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
+        # print(f"Ratio: Train {n / len(X[train_idx]):.2f}, Test {m / len(X[test_idx]):.2f}")
 
         # Getting patient train and test sequences (Of Synovial Fluid)
-        # syn_seqs_train = syn_seqs[train_idx]
-        # syn_seqs_test = syn_seqs[test_idx]
-        syn_seqs_train = syn_seqs[patient_idx][train_idx]
-        syn_seqs_test = syn_seqs[patient_idx][test_idx]
+        syn_seqs_train = syn_seqs[train_idx]
+        syn_seqs_test = syn_seqs[test_idx]
+        bld_seqs_train = hlt_seqs[hlt_idx]
+        bld_seqs_test = bld_seqs[bld_idx]
+        # syn_seqs_train = syn_seqs[patient_idx][train_idx]
+        # syn_seqs_test = syn_seqs[patient_idx][test_idx]
 
-        # Compute pairwise identity matrix
-        pwc_mat = pairwise_scores(syn_seqs_train, syn_seqs_test)  # OR: , score=levenshtein_dist
+        def calculate_correct_incorrect_bin(seqs_train, seqs_test, r):
+            # Compute pairwise identity matrix
+            pwc_mat = pairwise_scores(seqs_train, seqs_test, score=levenshtein_dist_non_bin)
 
-        # Step 1: Get max identity value for each test sample
-        max_similarities = np.max(pwc_mat, axis=0)  # max similarity score for each test sample
+            # Step 1: Get max\min identity value for each test sample
+            max_similarities = np.min(pwc_mat, axis=0)  # max similarity score for each test sample
+            # max_similarities = np.max(pwc_mat, axis=0)  # max similarity score for each test sample
 
-        # Step 2: Create bins for the max similarity values (between lowest and highest value)
-        min_sim = np.min(max_similarities)
-        max_sim = np.max(max_similarities)
-        bins = np.linspace(min_sim, max_sim, 11)  # 10 bins
+            # Step 2: Create bins for the max similarity values (between lowest and highest value)
+            min_sim = np.min(max_similarities)
+            max_sim = np.max(max_similarities)
+            print(f"L-dist Min and Max: {min_sim}, {max_sim}")
 
-        # Step 3: Assign each test sample to a bin based on its max similarity
-        bin_indices = np.digitize(max_similarities, bins) - 1  # Subtract 1 to match bin index
-        bin_indices[bin_indices == 10] = 9  # Fix edge case
+            # Step 3: Assign each test sample to a bin based on its max similarity
+            bin_indices = np.digitize(max_similarities, bins) - 1  # Subtract 1 to match bin index
+            bin_indices[bin_indices == num_of_bins] = num_of_bins - 1  # Fix edge case
 
-        # Step 4: Train the KNN classifier
-        knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
-        knn.fit(X_train, y_train)  # Assuming X_train and y_train are available
-        y_pred = knn.predict(X_test)
-        score = accuracy_score(y_test, y_pred)
-        scores_per_patient.append(score)
+            # Step 4: Train the KNN classifier
+            knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
+            knn.fit(X_train, y_train)  # Assuming X_train and y_train are available
+            y_pred = knn.predict(X_test)
+            score = accuracy_score(y_test, y_pred)
+            scores_per_patient.append(score)
 
-        # Initialize counters for correct and incorrect samples in each bin
-        correct_counts = np.zeros(10, dtype=int)
-        incorrect_counts = np.zeros(10, dtype=int)
+            # Initialize counters for correct and incorrect samples in each bin
+            correct_counts = np.zeros(num_of_bins, dtype=int)
+            incorrect_counts = np.zeros(num_of_bins, dtype=int)
 
-        # Loop over test samples
-        for i in range(len(y_test)):
-            bin_idx = bin_indices[i]
-            if y_pred[i] == y_test[i]:
-                correct_counts[bin_idx] += 1
-            else:
-                incorrect_counts[bin_idx] += 1
+            start_idx = next(iter(r))
+            # Loop over test samples
+            for i in r:
+                bin_idx = bin_indices[i - start_idx]
+                if y_pred[i] == y_test[i]:
+                    correct_counts[bin_idx] += 1
+                else:
+                    incorrect_counts[bin_idx] += 1
+            return correct_counts, incorrect_counts
+
+        test_len = len(y[test_idx])
+        print("Calculating correct/incorrect of SYN...")
+        cc1, ci1 = calculate_correct_incorrect_bin(syn_seqs_train, syn_seqs_test, range(test_len))
+        print("Calculating correct/incorrect of BLD...")
+        cc2, ci2 = calculate_correct_incorrect_bin(bld_seqs_train, bld_seqs_test, range(test_len, test_len + m))
+        print("Done.")
+
+        # correct_counts, incorrect_counts = cc1, ci1
+        correct_counts, incorrect_counts = cc1 + cc2, ci1 + ci2
 
         # Calculate total samples and percentages
         total_counts = correct_counts + incorrect_counts
@@ -508,7 +561,9 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
                 total_counts=total_counts,
                 bins=bins,
                 title=f'CD{cd_type} {title_start} Prediction Percentages per Sequence Identity Bin (n = Sample Count)',
-                show_accuracy=show_accuracy
+                plot_file=f'CD{cd_type}_{title_start}_{i}',
+                show_accuracy=show_accuracy,
+                num_of_bins=num_of_bins
             )
 
     # Aggregate over patients
@@ -530,7 +585,9 @@ def display_success_figure_per_patient(syn, hlt, bld, syn_mask, bld_mask, syn_se
         total_counts=total_counts_sum,
         bins=bins,
         title=f'CD{cd_type} Mean {title_start} Prediction Percentages per Sequence Identity Bin (n = Sample Count)',
-        show_accuracy=show_accuracy
+        plot_file=f'CD{cd_type}_{title_start}',
+        show_accuracy=show_accuracy,
+        num_of_bins=num_of_bins
     )
 
     # print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
@@ -587,7 +644,7 @@ def common_aaseq_analysis(df, num_of_patients, mode=1):
     return mean_results
 
 
-def display_common_sequences(df_cd8_bld):
+def display_common_sequences_figure(df_cd8_bld):
     # reading healthy study2:
     study_healthy2 = Study(HEALTHY_STUDY_ID)
     samples_h2 = study_healthy2._samples['usable']
@@ -670,7 +727,8 @@ if __name__ == '__main__':
     df_h_cd4 = df_h[df_h['cell_type'] == 'CD4']
     valid_seqs_cd4_h = df_h_cd4["AASeq"].unique()
 
-    # keep only sequences that appear at least twice between different patients (AASeq that appear in different patient_ids)
+    # keep only sequences that appear at least twice between different patients
+    # (AASeq that appear in different patient_ids)
     all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
     all_valid_seqs = [get_valid_seqs(df, i, name_opt, study.name) for i, df in enumerate(all_dfs)]
 
@@ -681,7 +739,7 @@ if __name__ == '__main__':
             if dist_option == 0:
                 valid_sequences = get_valid_seqs_original(df, df_ind, name_opt, study.name)
             else:
-                valid_sequences = calculate_valid_seqs(df, df_ind, name_opt, study.name)
+                valid_sequences = calculate_valid_seqs_with_patient_id(df, df_ind, name_opt, study.name)
             print(f"Done calculating valid sequences of df: {df_ind}!")
             all_valid_seqs[df_ind] = valid_sequences
         else:
@@ -691,11 +749,17 @@ if __name__ == '__main__':
                     if dist_option == 0:
                         valid_sequences = get_valid_seqs_original(df, i, name_opt, study.name)
                     else:
-                        valid_sequences = calculate_valid_seqs(df, i, name_opt, study.name)
+                        valid_sequences = calculate_valid_seqs_with_patient_id(df, i, name_opt, study.name)
                     print(f"Done calculating valid sequences of df: {i}!")
                     all_valid_seqs[i] = valid_sequences
 
-    sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
+    all_valid_only_seqs = [set(data[0] for data in valid_set)
+                           if len(list(valid_set)[0]) == 3 else valid_set
+                           for valid_set in all_valid_seqs]
+    all_valid_only_seqs = [np.array(sorted(list(valid_set))) for valid_set in all_valid_only_seqs]
+
+    sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_only_seqs
+    # sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
 
     # bounding the length of sequences to be min and max of synovial samples,
     # then sampling *ratio samples from blood to match *ratio the number of synovial samples
@@ -706,10 +770,10 @@ if __name__ == '__main__':
     valid_seqs_cd4_h = bound_and_sample_blood(sr_cd4_syn_vld, valid_seqs_cd4_h, ratio)
     valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h, ratio)
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
-    cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld)
-    cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld)
-    cd8_syn_patient_id_masks = get_patient_ids_masks(df_cd8_syn, sr_cd8_syn_vld)
-    cd8_bld_patient_id_masks = get_patient_ids_masks(df_cd8_bld, sr_cd8_bld_vld)
+    cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld, all_valid_seqs[0])
+    cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld, all_valid_seqs[2], seq_type='bld')
+    cd8_syn_patient_id_masks = get_patient_ids_masks(df_cd8_syn, sr_cd8_syn_vld, all_valid_seqs[1])
+    cd8_bld_patient_id_masks = get_patient_ids_masks(df_cd8_bld, sr_cd8_bld_vld, all_valid_seqs[3], seq_type='bld')
 
     # Calculating embeddings (or loading if it is available)
     cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld), study.name, name='cd4_syn' + name_opt, embed_fn=embed)
@@ -743,16 +807,16 @@ if __name__ == '__main__':
 
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
-        display_common_sequences(df_bld[df_bld['cell_type'] == 'CD8'])
+        display_common_sequences_figure(df_bld[df_bld['cell_type'] == 'CD8'])
 
     # Display success figure per patient
-    if TO_DISPLAY_SUCCESS_FIGURE_PER_PATIENT:
-        display_success_figure_per_patient(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
-                                           sr_cd4_syn_vld,
+    if TO_DISPLAY_ACCURACY_BIN_BY_DIST:
+        display_accuracy_bin_by_dist_figure(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
+                                           sr_cd4_syn_vld, sr_cd4_bld_vld, valid_seqs_cd4_h,
                                            k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
                                            cd_type='4', name_opt=name_opt)
-        display_success_figure_per_patient(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
-                                           sr_cd8_syn_vld,
+        display_accuracy_bin_by_dist_figure(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
+                                           sr_cd8_syn_vld, sr_cd8_bld_vld, valid_seqs_cd8_h,
                                            k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
                                            cd_type='8', name_opt=name_opt)
 
@@ -762,12 +826,12 @@ if __name__ == '__main__':
         mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
                                                  cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
                                                  ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                                 study_name=study.name, cd_type="4", name_opt=name_opt)  # 20 is the max size for all seqs
+                                                 study_name=study.name, cd_type="4", name_opt=name_opt)
         print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
         print()
         print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
         mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
                                                  cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
                                                  ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                                 study_name=study.name, cd_type="8", name_opt=name_opt)  # 20 is the max size for all seqs
+                                                 study_name=study.name, cd_type="8", name_opt=name_opt)
         print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

@@ -17,6 +17,10 @@ def levenshtein_dist(seq_a, seq_b, similarities=1):
     return 1 if distance(seq_a, seq_b) <= similarities else 0
 
 
+def levenshtein_dist_non_bin(seq_a, seq_b, similarities=1):
+    return distance(seq_a, seq_b)
+
+
 def seq_identity(seq_a, seq_b):
     aligner = PairwiseAligner()
     aligner.mode = 'global'

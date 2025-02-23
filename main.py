@@ -26,8 +26,8 @@ HEALTHY_STUDY_ID2 = STUDY_ID4
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = False
-TO_DISPLAY_ACCURACY_BIN_BY_DIST = True
+TO_DISPLAY_COMMON_SEQUENCES = True
+TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 
@@ -395,7 +395,8 @@ def plot_prediction_percentages(correct_percentages, incorrect_percentages, tota
     if show_accuracy:
         # Calculate the accuracy for each bin: correct / total
         accuracies = np.divide(correct_percentages, 100, where=total_counts > 0)
-        accuracies[accuracies > 100] = 0  # Fix edge case
+        accuracies[accuracies > 1] = 0  # Fix edge case
+        accuracies[accuracies < 0] = 0  # Fix edge case
     else:
         accuracies = None
 
@@ -439,7 +440,7 @@ def plot_prediction_percentages(correct_percentages, incorrect_percentages, tota
 
 def display_accuracy_bin_by_dist_figure(syn, hlt, bld, syn_mask, bld_mask, syn_seqs, bld_seqs, hlt_seqs, k_fold_type, study_name,
                                        ratio=3, n_neighbors=9, cd_type='4', name_opt='', display_inner_figs=True, show_accuracy=True,
-                                       num_of_bins=20):
+                                       num_of_bins=15):
     X = torch.cat(syn)
     X_bld = torch.cat(bld)
     X_hlt = torch.cat(hlt)
@@ -457,7 +458,7 @@ def display_accuracy_bin_by_dist_figure(syn, hlt, bld, syn_mask, bld_mask, syn_s
     correct_counts_all_patients = []
     incorrect_counts_all_patients = []
 
-    bins = np.linspace(0, num_of_bins, 21)
+    bins = np.linspace(0, num_of_bins, num_of_bins+1)
     scores_per_patient = []
     # for i, mask in enumerate(syn_mask):
     for i, (train_idx, test_idx) in enumerate(folds_indices):

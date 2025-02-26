@@ -68,6 +68,8 @@ if __name__ == '__main__':
     create_directories()
     download_studies()
 
+    # TODO: There might be a bug here when re-running this script after the studies have already been saved once.
+
     study_id = "PRJNA393498"
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition",
                "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
@@ -107,7 +109,6 @@ if __name__ == '__main__':
     build_study(study_id, study_df, "Multifactorial Heterogeneity of Virus-specific T Cells and Association with the Progression of Human Chronic Hepatitis B Infection",
                 [], [], [])
 
-
     study_id = "immunoSEQ77"
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
     study_df = get_study_df(study_id, columns)
@@ -119,4 +120,18 @@ if __name__ == '__main__':
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "T-cell receptor repertoires in HIV-infected patients and healthy controls",
+                [], [], [])
+
+
+    study_id = "PRJNA390125"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "We've developed a wet lab protocol and computational pipeline for the quantification of TCRs. In this study, we've sequenced the TCR repertoire of different T cell subsets sorted from blood of healthy individuals.",
+                [], [], [])
+
+
+    study_id = "PRJNA495603"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "We've developed a wet lab protocol and computational pipeline for the quantification of TCRs. In this study, we've sequenced the TCR repertoire of different T cell subsets sorted from blood of healthy individuals.",
                 [], [], [])

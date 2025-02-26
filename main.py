@@ -21,15 +21,30 @@ STUDY_ID = 'PRJNA393498'
 STUDY_ID2 = 'immunoSEQ47'
 STUDY_ID3 = 'immunoSEQ77'
 STUDY_ID4 = 'PRJNA258001'
-HEALTHY_STUDY_ID = STUDY_ID3
-HEALTHY_STUDY_ID2 = STUDY_ID4
-STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4]
+STUDY_ID5 = 'PRJNA390125'
+STUDY_ID6 = 'PRJNA495603'
+HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
+HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
+HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But less patients!)
+HEALTHY_STUDY_ID4 = STUDY_ID6
+STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = True
+TO_DISPLAY_COMMON_SEQUENCES = False
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
-TO_DISPLAY_RESULTS = False
+TO_DISPLAY_RESULTS = True
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
+
+
+def get_all_usable_healthy_data():
+    healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4]
+    healthy_studies = []
+    for study_id in healthy_study_ids:
+        study = Study(study_id)
+        usable_samples = study._samples['usable']
+        df = study.read_sample(usable_samples)
+        healthy_studies.append(df)
+    return pd.concat(healthy_studies, ignore_index=True)
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -645,11 +660,34 @@ def common_aaseq_analysis(df, num_of_patients, mode=1):
     return mean_results
 
 
+def generate_patient_samples(df1, all_seqs_h: np.ndarray, patient_seqs_len: int) -> pd.DataFrame:
+    """
+    Generate a DataFrame where 'patient_id' ranges from H1 to H10, and 'AASeq' contains
+    randomly sampled sequences from all_seqs_h for each patient.
+
+    Parameters:
+    - all_seqs_h (np.ndarray): Unique sequences.
+    - patient_seqs_len (int): Number of sequences to sample per patient.
+
+    Returns:
+    - pd.DataFrame: DataFrame with 'patient_id' and 'AASeq' columns.
+    """
+    data = []
+    for i in range(1, 15):  # Generate 10 samples
+        sampled_seqs = np.random.choice(all_seqs_h, patient_seqs_len, replace=False)
+        for seq in sampled_seqs:
+            data.append((f"H{i}", seq))
+
+    dfh = pd.DataFrame(data, columns=["patient_id", "AASeq"])
+    return pd.concat([df1, dfh], ignore_index=True)
+
+
 def display_common_sequences_figure(df_cd8_bld):
     # reading healthy study2:
-    study_healthy2 = Study(HEALTHY_STUDY_ID)
-    samples_h2 = study_healthy2._samples['usable']
-    df_h2 = study_healthy2.read_sample(samples_h2)
+    # study_healthy2 = Study(HEALTHY_STUDY_ID)
+    # samples_h2 = study_healthy2._samples['usable']
+    # df_h2 = study_healthy2.read_sample(samples_h2)
+    df_h2 = get_all_usable_healthy_data()
     df_h2_cd8 = df_h2[df_h2['cell_type'] == 'CD8']
 
     # find max len of uniques patient_id
@@ -658,9 +696,23 @@ def display_common_sequences_figure(df_cd8_bld):
     # calculate common sequences in disease and healthy samples
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
     x_disease = [common_aaseq_analysis(df_cd8_bld, num_of_patients=i, mode=1)[value_to_take] for i in range(2, l)]
-    df1 = df_cd8_bld[df_cd8_bld["patient_id"] == "Dv"]
-    df_h_comb = pd.concat([df1, df_h2_cd8], ignore_index=True)
-    x_healthy = [common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2)[value_to_take] for i in range(2, l)]
+
+    def calculate_common_healthy(patient_id_bld, option=2):
+        df1 = df_cd8_bld[df_cd8_bld["patient_id"] == patient_id_bld]
+        if option == 1:
+            # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
+            df_h_comb = pd.concat([df1, df_h2_cd8], ignore_index=True)
+        else:
+            # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
+            patient_seqs_len = len(df1)
+            all_seqs_h = df_h2_cd8["AASeq"].unique()
+            df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
+        x_healthy = [common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2)[value_to_take] for i in range(2, l)]
+        return x_healthy
+
+    # Average the results of all patients with disease
+    x_healthy_list = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df_cd8_bld['patient_id'].unique()]
+    x_healthy = np.array(x_healthy_list).mean(axis=0)
 
     # normalize if needed
     # x_disease = [x / x_disease[0] for x in x_disease]
@@ -678,6 +730,8 @@ def display_common_sequences_figure(df_cd8_bld):
     plt.xlabel("Number of Patients")
     plt.ylabel("Percentage of Common Sequences (Only CD8)")
     plt.title("Percentage of Common Sequences in Disease and Healthy Samples")
+    # increase y lim a little bit
+    plt.ylim(0, max(max(x_disease), max(x_healthy)) * 1.1)
     plt.legend()
     plt.show()
 
@@ -686,9 +740,9 @@ if __name__ == '__main__':
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--df_ind', type=int, default=-1)
-    parser.add_argument('--dist_option', type=int, default=0)
+    parser.add_argument('--dist_option', type=int, default=1)
     parser.add_argument('--study_ind', type=int, default=0)
-    parser.add_argument('--k_fold_type', type=int, default=0)
+    parser.add_argument('--k_fold_type', type=int, default=1)
     args = parser.parse_args()
     df_ind = args.df_ind
     dist_option = args.dist_option
@@ -705,7 +759,8 @@ if __name__ == '__main__':
 
     # Load study
     study = Study(STUDIES[study_ind])
-    study_healthy = Study(HEALTHY_STUDY_ID2)
+    # study_healthy = Study(HEALTHY_STUDY_ID2)
+    df_h = get_all_usable_healthy_data()
 
     # reading synovial samples
     samples_syn = study._samples['usable']
@@ -721,8 +776,8 @@ if __name__ == '__main__':
     df_cd8_bld = df_cd8_bld[df_cd8_bld['patient_id'].isin(df_cd8_syn['patient_id'].unique())]
 
     # reading healthy study:
-    samples_h = study_healthy._samples['usable']
-    df_h = study_healthy.read_sample(samples_h)
+    # samples_h = study_healthy._samples['usable']
+    # df_h = study_healthy.read_sample(samples_h)
     df_h_cd8 = df_h[df_h['cell_type'] == 'CD8']
     valid_seqs_cd8_h = df_h_cd8["AASeq"].unique()
     df_h_cd4 = df_h[df_h['cell_type'] == 'CD4']
@@ -782,8 +837,8 @@ if __name__ == '__main__':
     cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), study.name, name='cd4_bld' + name_opt, embed_fn=embed)
     cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), study.name, name='cd8_bld' + name_opt, embed_fn=embed)
 
-    cd4_h = get_cached_embeddings(list(valid_seqs_cd4_h), study_healthy.name, name='cd4_h' + name_opt, embed_fn=embed)
-    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), study_healthy.name, name='cd8_h' + name_opt, embed_fn=embed)
+    cd4_h = get_cached_embeddings(list(valid_seqs_cd4_h), "healthy", name='cd4_h' + name_opt, embed_fn=embed)
+    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), "healthy", name='cd8_h' + name_opt, embed_fn=embed)
 
     # Evaluating CD4 and CD8
     n_neighbors = 9

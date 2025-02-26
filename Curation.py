@@ -250,6 +250,10 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_immunoSEQ77(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'PRJNA258001':
         return build_study_PRJNA258001(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA390125':
+        return build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA495603':
+        return build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -388,6 +392,74 @@ def build_study_PRJNA258001(study_id, study_df, study_desc, usable, uncertain, b
             found_usable.append(sample_id)
         else:
             patient_id = comment.split(' ')[-1]
+            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+            study ^= sample
+            found_uncertain.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type'][:3]
+        condition = row['Condition']
+
+        if condition == "Healthy" and cell_type in ['CD4', 'CD8']:
+            patient_id = comment.split('_')[0]
+            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+            study += sample
+            found_usable.append(sample_id)
+        else:
+            patient_id = comment.split(' ')[-1]
+            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+            study ^= sample
+            found_uncertain.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        if '+' in cell_type:
+            cell_type = cell_type[:-1]
+
+        import re
+        def extract_pattern(s):
+            match = re.search(r'_(S\d+)_', s)
+            return match.group(1) if match else None
+        patient_id = extract_pattern(comment)
+
+        if condition == "Healthy" and cell_type in ['CD4', 'CD8']:
+            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+            study += sample
+            found_usable.append(sample_id)
+        else:
             sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
             study ^= sample
             found_uncertain.append(sample_id)

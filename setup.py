@@ -135,3 +135,10 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "We've developed a wet lab protocol and computational pipeline for the quantification of TCRs. In this study, we've sequenced the TCR repertoire of different T cell subsets sorted from blood of healthy individuals.",
                 [], [], [])
+
+
+    study_id = "PRJNA579190"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "In this study, the contribution of T cells to the pathophysiology of the neuroinflammatory condition Susac syndrome (SuS) was investigated. Distinctive features of TCR repertoire of SuS patient CD8 T cells were found when compared with the repertoires of healthy controls (HD) and multiple sclerosis (MS) patients. Oligoclonal expansion of terminally differentiated activated cytotoxicCD8+ T cells (CTLs) were further identified as potential contributors to this disease.",
+                [], [], [])

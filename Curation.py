@@ -25,21 +25,23 @@ class TCRdb():
 
 
 class Study:
-    def __init__(self, study_id):
+    def __init__(self, study_id, to_rebuild=False):
         # set name from variable name. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
-        # TODO: name is basically _id which is actually study_id, so why not just call it study_id?
         self.name = study_id
 
+        if to_rebuild:
+            save_dir = os.path.join(STUDY_SAVE_DIR, self.name)
+            if os.path.exists(save_dir):
+                shutil.rmtree(save_dir)
+            os.makedirs(save_dir)
+
         try:
-            self.load()
+            if to_rebuild:
+                raise Exception
+            else:
+                self.load()
         except:
             self._id = study_id
-            save_dir = os.path.join(STUDY_SAVE_DIR, self.name)
-            if not os.path.exists(save_dir):
-                os.makedirs(save_dir)
-            else:
-                shutil.rmtree(save_dir)
-                os.makedirs(save_dir)
             self._desc = ''
             self._samples = {'usable': [], 'uncertain': [], 'background': []}
             # self._columns = {'seq': 'AASeq', 'study': 'RunId', 'study_id': 'study_id', 'patient_id': 'patient_id', 'tissue': 'tissue', 'cell_type': 'cell_type'}
@@ -208,7 +210,7 @@ class Study:
 class Sample:
     """holds data about individual samples in a study"""
     # def __init__(self, id, study_id, origin=''):
-    def __init__(self, study_id, sample_id, patient_id='', tissue='', cell_type=''):
+    def __init__(self, study_id, sample_id, patient_id='', tissue='', cell_type='', condition=''):
         # set sample_id from variable sample_id. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
         self.study_id = study_id
         self.sample_id = sample_id
@@ -218,6 +220,7 @@ class Sample:
             self.patient_id = patient_id
             self.tissue = tissue
             self.cell_type = cell_type
+            self.condition = condition
             self.save()
 
     def save(self):
@@ -254,6 +257,8 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'PRJNA495603':
         return build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA579190':
+        return build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -263,37 +268,38 @@ def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, b
     found_usable = []
     found_uncertain = []
     found_background = []
-
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
         comment = row['Comment']
         tissue = row['Cell Source']
+        condition = row['Condition']
+
         if tissue == 'Synovial fluid':
             patient_id = comment.split(' ')[-1].split('_')[0]
             if comment[-1] == '4' or comment[-1] == '8':
                 cell_type = "CD" + comment[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
                 study += sample
                 found_usable.append(sample_id)
             elif comment.endswith('TRBV9'):
                 cell_type = "Other (TRBV9)"
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
                 study ^= sample
                 found_usable.append(sample_id)
             else:
                 # adding to uncertain if there is no cell type (we want only CD4 or CD8)
                 cell_type = "Other"
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-                study ^= sample
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                study += sample
                 found_uncertain.append(sample_id)
         else:
             if comment[-2:] == '_4' or comment[-2:] == '_8':
                 patient_id = comment.split(' ')[-1].split('_')[0]
                 cell_type = "CD" + comment[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-                study -= sample
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                study += sample
                 found_background.append(sample_id)
             else:
                 cell_type = 'Other'
@@ -304,8 +310,8 @@ def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, b
                     cell_type = f"Other ({comment.split('_')[-1]})"
                 else:
                     patient_id = comment.split(' ')[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-                study -= sample
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                study += sample
                 found_background.append(sample_id)
 
     study.save()
@@ -319,7 +325,7 @@ def build_study_immunoSEQ47(study_id, study_df, study_desc, usable, uncertain, b
     found_uncertain = []
     found_background = []
 
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
@@ -327,8 +333,9 @@ def build_study_immunoSEQ47(study_id, study_df, study_desc, usable, uncertain, b
         tissue = row['Cell Source']
         cell_type = row['Cell Type'][:-1]
         patient_id = comment.split('_')[0]
+        condition = row['Condition']
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
         study += sample
         found_usable.append(sample_id)
 
@@ -343,25 +350,24 @@ def build_study_immunoSEQ77(study_id, study_df, study_desc, usable, uncertain, b
     found_uncertain = []
     found_background = []
 
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
         comment = row['Comment']
         tissue = row['Cell Source']
         cell_type = row['Cell Type']
-        if '+' in cell_type:
+        # TODO: Find out if it is correct to cluster '-' and '+' cell types together!
+        if '+' in cell_type or '-' in cell_type:
             cell_type = cell_type[:-1]
         patient_id = comment
+        if '-' in comment:
+            patient_id = comment.split('-')[0]
         condition = row['Condition']
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-        if condition == 'Healthy':
-            study += sample
-            found_usable.append(sample_id)
-        else:
-            study ^= sample
-            found_uncertain.append(sample_id)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
 
     study.save()
     return study
@@ -374,7 +380,7 @@ def build_study_PRJNA258001(study_id, study_df, study_desc, usable, uncertain, b
     found_uncertain = []
     found_background = []
 
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
@@ -385,16 +391,15 @@ def build_study_PRJNA258001(study_id, study_df, study_desc, usable, uncertain, b
         if '+' in cell_type:
             cell_type = cell_type[:-1]
 
-        if condition == "Healthy" and cell_type in ['CD4', 'CD8']:
-            patient_id = comment.split(' ')[-1].split('_')[0]
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study += sample
-            found_usable.append(sample_id)
-        else:
-            patient_id = comment.split(' ')[-1]
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study ^= sample
-            found_uncertain.append(sample_id)
+        patient_id = comment.split(' ')[-1]
+        if '_' in patient_id:
+            patient_id = patient_id.split('_')[0]
+        if 'v' in patient_id:
+            patient_id = patient_id.split('v')[0]
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
 
     study.save()
     return study
@@ -407,7 +412,7 @@ def build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, b
     found_uncertain = []
     found_background = []
 
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
@@ -416,16 +421,10 @@ def build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, b
         cell_type = row['Cell Type'][:3]
         condition = row['Condition']
 
-        if condition == "Healthy" and cell_type in ['CD4', 'CD8']:
-            patient_id = comment.split('_')[0]
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study += sample
-            found_usable.append(sample_id)
-        else:
-            patient_id = comment.split(' ')[-1]
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study ^= sample
-            found_uncertain.append(sample_id)
+        patient_id = comment.split('_')[0]
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
 
     study.save()
     return study
@@ -438,7 +437,7 @@ def build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, b
     found_uncertain = []
     found_background = []
 
-    study = Study(study_id)
+    study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
         sample_id = row['Sample ID']
@@ -455,14 +454,41 @@ def build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, b
             return match.group(1) if match else None
         patient_id = extract_pattern(comment)
 
-        if condition == "Healthy" and cell_type in ['CD4', 'CD8']:
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study += sample
-            found_usable.append(sample_id)
-        else:
-            sample = Sample(study_id, sample_id, patient_id, tissue, cell_type)
-            study ^= sample
-            found_uncertain.append(sample_id)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        if '+' in cell_type:
+            cell_type = cell_type[:-1]
+
+        import re
+        def extract_pattern(s):
+            match = re.search(r'_(\d+)_', s)
+            return match.group(1) if match else None
+        patient_id = extract_pattern(comment)
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
 
     study.save()
     return study

@@ -17,17 +17,18 @@ from sklearn.metrics import accuracy_score
 from itertools import combinations, chain
 
 
-STUDY_ID = 'PRJNA393498'
-STUDY_ID2 = 'immunoSEQ47'
-STUDY_ID3 = 'immunoSEQ77'
-STUDY_ID4 = 'PRJNA258001'
-STUDY_ID5 = 'PRJNA390125'
-STUDY_ID6 = 'PRJNA495603'
+STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
+STUDY_ID2 = 'immunoSEQ47'  # Hepatitis B virus study
+STUDY_ID3 = 'immunoSEQ77'  # Rheumatoid arthritis study (plus healthy)
+STUDY_ID4 = 'PRJNA258001'  # HIV study (plus healthy)
+STUDY_ID5 = 'PRJNA390125'  # Only healthy study
+STUDY_ID6 = 'PRJNA495603'  # Multiple sclerosis study (plus healthy)
+STUDY_ID7 = 'PRJNA579190'  #  Multiple sclerosis study (plus healthy)
 HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
 HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
-HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But less patients!)
-HEALTHY_STUDY_ID4 = STUDY_ID6
-STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6]
+HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
+HEALTHY_STUDY_ID4 = STUDY_ID6  # Other healthy study
+STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
 TO_DISPLAY_COMMON_SEQUENCES = False
@@ -43,6 +44,7 @@ def get_all_usable_healthy_data():
         study = Study(study_id)
         usable_samples = study._samples['usable']
         df = study.read_sample(usable_samples)
+        df = df[df['condition'] == 'Healthy']
         healthy_studies.append(df)
     return pd.concat(healthy_studies, ignore_index=True)
 
@@ -736,7 +738,126 @@ def display_common_sequences_figure(df_cd8_bld):
     plt.show()
 
 
+# TODO: Figure out how to use this function.
+#  This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
+def get_full_synapse_mal_id_dataframe():
+    # Defining constants
+    synapse_db_folder = "db/synapse_Mal_ID"
+    synapse_metadata_file = os.path.join(synapse_db_folder, "metadata.tsv")
+
+    # Reading metadata
+    synapse_metadata = pd.read_csv(synapse_metadata_file, sep='\t')
+
+    # Reading and interpreting data files
+    synapse_datafiles = [x for x in os.listdir(synapse_db_folder) if x.endswith(".bz2")]
+    synapse_datafiles_ids = [x.split("_")[-1][:-4] for x in synapse_datafiles]
+
+    healthy_samples = []
+    for datafile in synapse_datafiles:
+        datafile_id = datafile.split("_")[-1][:-4]
+        datafile_path = os.path.join(synapse_db_folder, datafile)
+
+        # Reading metadata and data
+        metadata = synapse_metadata[synapse_metadata['participant_label'] == datafile_id]
+        condition = metadata['disease'].values[0]
+        if 'Healthy' in condition:
+            data = pd.read_csv(datafile_path, sep='\t', compression='bz2')
+            data = data.loc[:, ['cdr3_seq_aa_q', 'participant_label', 'specimen_tissue']]
+            data['cdr3_seq_aa_q'] = data['cdr3_seq_aa_q'].str.replace(' ', '')
+            healthy_samples.append(data)
+
+    # need to make a df with: AASeq, patient_id, tissue, cell_type
+    df = pd.concat(healthy_samples, ignore_index=True)
+    return df
+
+
+def train_vae_eve_model():
+    import sys
+    import json
+    from other_models.eve.utils import data_utils
+    from other_models.eve.EVE.VAE_model import VAE_model
+
+    # Define the base path
+    base_path = r'/cs/labs/dina/amir_2000/TCRep/other_models/eve'
+
+    # Default values
+    MSA_data_folder = base_path + '/data/MSA'
+    MSA_list = base_path + '/data/mappings/example_mapping.csv'
+    protein_index = 0
+    MSA_weights_location = base_path + '/data/weights'
+    theta_reweighting = None  # Default: None
+    VAE_checkpoint_location = base_path + '/results/VAE_parameters'
+    model_name_suffix = 'Jan1_PTEN_example'
+    model_parameters_location = base_path + '/EVE/default_model_params.json'
+    training_logs_location = base_path + '/logs'
+    seed = 42
+
+    # Load mapping file and extract protein data
+    mapping_file = pd.read_csv(MSA_list)
+    protein_name = mapping_file['protein_name'][protein_index]
+    msa_location = MSA_data_folder + os.sep + mapping_file['msa_location'][protein_index]
+    print("Protein name: " + str(protein_name))
+    print("MSA file: " + str(msa_location))
+
+    # Determine theta value (if not provided, default to 0.2)
+    if theta_reweighting is not None:
+        theta = theta_reweighting
+    else:
+        try:
+            theta = float(mapping_file['theta'][protein_index])
+        except:
+            theta = 0.2
+    print("Theta MSA re-weighting: " + str(theta))
+
+    # Process MSA data
+    data = data_utils.MSA_processing(
+        MSA_location=msa_location,
+        theta=theta,
+        use_weights=True,
+        weights_location=MSA_weights_location + os.sep + protein_name + '_theta_' + str(theta) + '.npy'
+    )
+
+    # Construct model name
+    model_name = protein_name + "_" + model_name_suffix
+    print("Model name: " + str(model_name))
+
+    # Load model parameters
+    model_params = json.load(open(model_parameters_location))
+
+    # Initialize model
+    model = VAE_model(
+        model_name=model_name,
+        data=data,
+        encoder_parameters=model_params["encoder_parameters"],
+        decoder_parameters=model_params["decoder_parameters"],
+        random_seed=seed
+    )
+    model = model.to(model.device)
+
+    # Update training parameters with checkpoint and log locations
+    model_params["training_parameters"]['training_logs_location'] = training_logs_location
+    model_params["training_parameters"]['model_checkpoint_location'] = VAE_checkpoint_location
+
+    # Train the model
+    print("Starting to train model: " + model_name)
+    model.train_model(data=data, training_parameters=model_params["training_parameters"])
+
+    # Save the model
+    print("Saving model: " + model_name)
+    model.save(
+        model_checkpoint=model_params["training_parameters"][
+                             'model_checkpoint_location'] + os.sep + model_name + "_final",
+        encoder_parameters=model_params["encoder_parameters"],
+        decoder_parameters=model_params["decoder_parameters"],
+        training_parameters=model_params["training_parameters"]
+    )
+
+
 if __name__ == '__main__':
+    # TODO: testing out EVE code... Continue from here!
+    # train_vae_eve_model()
+    # exit(0)
+
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--df_ind', type=int, default=-1)
@@ -762,14 +883,17 @@ if __name__ == '__main__':
     # study_healthy = Study(HEALTHY_STUDY_ID2)
     df_h = get_all_usable_healthy_data()
 
+    # reading samples from the study
+    df_study = study._samples['usable']
+    df_study = study.read_sample(df_study)
+    df_study = df_study[df_study['condition'] == 'Ankylosing Spondylitis']  # TODO: This is hardcoded for now! It depends on the study!
+
     # reading synovial samples
-    samples_syn = study._samples['usable']
-    df_syn = study.read_sample(samples_syn)
+    df_syn = df_study[df_study['tissue'] == 'Synovial fluid']
     df_cd4_syn = df_syn[df_syn['cell_type'] == 'CD4']
     df_cd8_syn = df_syn[df_syn['cell_type'] == 'CD8']
     # reading blood samples
-    samples_bld = study._samples['uncertain']
-    df_bld = study.read_sample(samples_bld)
+    df_bld = df_study[df_study['tissue'] == 'Blood']
     df_cd4_bld = df_bld[df_bld['cell_type'] == 'CD4']
     df_cd4_bld = df_cd4_bld[df_cd4_bld['patient_id'].isin(df_cd4_syn['patient_id'].unique())]
     df_cd8_bld = df_bld[df_bld['cell_type'] == 'CD8']

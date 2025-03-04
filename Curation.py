@@ -259,6 +259,8 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'PRJNA579190':
         return build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA280417':
+        return build_study_PRJNA280417(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -485,6 +487,31 @@ def build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, b
             match = re.search(r'_(\d+)_', s)
             return match.group(1) if match else None
         patient_id = extract_pattern(comment)
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA280417(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        patient_id = comment
 
         sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
         study += sample

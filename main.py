@@ -24,21 +24,23 @@ STUDY_ID4 = 'PRJNA258001'  # HIV study (plus healthy)
 STUDY_ID5 = 'PRJNA390125'  # Only healthy study
 STUDY_ID6 = 'PRJNA495603'  # Multiple sclerosis study (plus healthy)
 STUDY_ID7 = 'PRJNA579190'  #  Multiple sclerosis study (plus healthy)
+STUDY_ID8 = 'PRJNA280417'  #  Multiple sclerosis study
 HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
 HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
 HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
 HEALTHY_STUDY_ID4 = STUDY_ID6  # Other healthy study
+HEALTHY_STUDY_ID5 = STUDY_ID7  # Other healthy study
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = False
+TO_DISPLAY_COMMON_SEQUENCES = True
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
-TO_DISPLAY_RESULTS = True
+TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 
 
 def get_all_usable_healthy_data():
-    healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4]
+    healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4, HEALTHY_STUDY_ID5]
     healthy_studies = []
     for study_id in healthy_study_ids:
         study = Study(study_id)
@@ -47,6 +49,31 @@ def get_all_usable_healthy_data():
         df = df[df['condition'] == 'Healthy']
         healthy_studies.append(df)
     return pd.concat(healthy_studies, ignore_index=True)
+
+
+def get_all_usable_disease_data(disease='Multiple sclerosis'):
+    studies = []
+    if disease == 'Ankylosing spondylitis':
+        study_ids = [STUDY_ID]
+    elif disease == 'Hepatitis B virus':
+        study_ids = [STUDY_ID2]
+    elif disease == 'Rheumatoid arthritis':
+        study_ids = [STUDY_ID3]
+    elif disease == 'HIV':
+        study_ids = [STUDY_ID4]
+    elif disease == 'Multiple sclerosis':
+        study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]
+    else:
+        raise ValueError(f"Invalid disease: {disease}")
+
+    for study_id in study_ids:
+        study = Study(study_id)
+        usable_samples = study._samples['usable']
+        df = study.read_sample(usable_samples)
+        df = df[df['condition'] == disease]
+        studies.append(df)
+
+    return pd.concat(studies, ignore_index=True)
 
 
 def get_valid_seqs_original(df, df_ind, name_opt, study_name):
@@ -284,15 +311,14 @@ def calculate_valid_seqs_with_patient_id(df, df_ind, name_opt, study_name):
 
         # Iterate over length groups in seqs1
         for length, group1 in seqs1_by_len.items():
-            # Select seqs2 that are in the range [length-2, length+2]
+            # Select seqs2 that are in the range [length-1, length+1]
             min_len, max_len = length - 1, length + 1
             mask = (seqs2_lens >= min_len) & (seqs2_lens <= max_len)
             group2 = seqs2_by_len[mask]
 
             if len(group2) > 0:
                 # Compute pairwise identity matrix
-                pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist)
-                # pwc_mat = pairwise_scores(group1, group2, score=seq_identity)
+                pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist)  # OR score=seq_identity
                 sim_inxs = np.where(pwc_mat >= 0.9)
 
                 # Add matching sequences with patient_id to valid set
@@ -613,7 +639,62 @@ def display_accuracy_bin_by_dist_figure(syn, hlt, bld, syn_mask, bld_mask, syn_s
     print(f"CD{cd_type} - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}. (Random split per patient!)")
 
 
-def common_aaseq_analysis(df, num_of_patients, mode=1):
+def temp_helper_function_common_aaseq_analysis(df, lev_dist_accept):
+    # Step 1: Create patient-wise groups
+    seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
+
+    # Step 2: Compare sequences across different patients
+    valid_sequences = set()
+    for (pid1, seqs1), (pid2, seqs2) in tqdm(combinations(seqs_by_patient.items(), 2),
+                                             total=len(seqs_by_patient) * (len(seqs_by_patient) - 1) // 2):
+        # Sort seqs1 by length
+        seqs1_by_len = {}
+        for seq in seqs1:
+            seq_len = len(seq)
+            if seq_len not in seqs1_by_len:
+                seqs1_by_len[seq_len] = []
+            seqs1_by_len[seq_len].append(seq)
+
+        # Convert lists to numpy arrays for efficiency
+        seqs1_by_len = {k: np.array(v, dtype=object) for k, v in seqs1_by_len.items()}
+
+        # Sort seqs2 by length for efficient filtering
+        seqs2_by_len = np.array(sorted(seqs2, key=len), dtype=object)
+        seqs2_lens = np.array([len(seq) for seq in seqs2_by_len])
+
+        # Iterate over length groups in seqs1
+        for length, group1 in seqs1_by_len.items():
+            # Select seqs2 that are in the range [length-1, length+1] (or +- lev_dist_accept)
+            min_len, max_len = length - lev_dist_accept, length + lev_dist_accept
+            mask = (seqs2_lens >= min_len) & (seqs2_lens <= max_len)
+            group2 = seqs2_by_len[mask]
+
+            if len(group2) > 0:
+                # Compute pairwise identity matrix
+                pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist_non_bin)
+                sim_inxs = np.where(pwc_mat <= lev_dist_accept)
+
+                # Add matching sequences with patient_id to valid set
+                for x, y in zip(sim_inxs[0], sim_inxs[1]):
+                    valid_sequences.add((group1[x], pid1, pid2))  # Tuple (seq, originating pid x2)
+                    valid_sequences.add((group2[y], pid1, pid2))  # Tuple (seq, originating pid x2)
+
+    # Step 3: Calculate the mean number of common sequences and percentages
+    unique_patient_ids = df["patient_id"].unique()
+    masks = []
+    for patient in unique_patient_ids:
+        # Get sequences that belong to the current patient
+        patient_seqs = set(df.loc[df["patient_id"] == patient, "AASeq"])
+
+        # Create a mask for sequences
+        mask = np.array([1 if seq[0] in patient_seqs else 0 for seq in valid_sequences])
+        masks.append(mask)
+
+    # Convert to ndarray
+    masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
+    return masks
+
+def common_aaseq_analysis(df, num_of_patients, lev_dist_accept=0, mode=1):
     # Select the unique patients
     unique_patients = df['patient_id'].unique()
 
@@ -632,12 +713,19 @@ def common_aaseq_analysis(df, num_of_patients, mode=1):
         # Mode 2: Always include the first patient
         patient_combinations = [tuple([unique_patients[0]] + list(comb)) for comb in combinations(unique_patients[1:], num_of_patients - 1)]
     else:
-        raise ValueError("Mode must be 1 or 2")
+        raise ValueError("Mode must be 1 (All combinations) or 2 (Always include the first patient).")
 
+    counter = 0
     for combination in patient_combinations:
         selected_sequences = [patient_sequences[pid] for pid in combination]
-        common_sequences = set.intersection(*selected_sequences)
-        num_common = len(common_sequences)
+
+        if lev_dist_accept >= 1:
+            temp_df = df[df['patient_id'].isin(combination)]
+            masks = temp_helper_function_common_aaseq_analysis(temp_df, lev_dist_accept)
+            num_common = np.sum(np.any(masks == 1, axis=0))  # TODO: This will always increase when we look at more patients... this isnt the calculation that we want here
+        else:
+            common_sequences = set.intersection(*selected_sequences)
+            num_common = len(common_sequences)
         total_sequences = sum(len(seqs) for seqs in selected_sequences)
         min_sequences = min(len(seqs) for seqs in selected_sequences)
         max_sequences = max(len(seqs) for seqs in selected_sequences)
@@ -650,6 +738,11 @@ def common_aaseq_analysis(df, num_of_patients, mode=1):
             'percent_of_min': percent_of_min,
             'percent_of_max': percent_of_max
         })
+
+        # TODO: Remove this counter later! But notice that it might take infinite time when groups num rise...
+        # counter += 1
+        # if counter >= 1:
+        #     break
 
     # Calculate means
     mean_results = {
@@ -684,41 +777,40 @@ def generate_patient_samples(df1, all_seqs_h: np.ndarray, patient_seqs_len: int)
     return pd.concat([df1, dfh], ignore_index=True)
 
 
-def display_common_sequences_figure(df_cd8_bld):
-    # reading healthy study2:
-    # study_healthy2 = Study(HEALTHY_STUDY_ID)
-    # samples_h2 = study_healthy2._samples['usable']
-    # df_h2 = study_healthy2.read_sample(samples_h2)
-    df_h2 = get_all_usable_healthy_data()
-    df_h2_cd8 = df_h2[df_h2['cell_type'] == 'CD8']
-
+def display_common_sequences_figure(df, df_h, log_space=True):
     # find max len of uniques patient_id
-    l = min(1 + len(df_h2_cd8['patient_id'].unique()), len(df_cd8_bld['patient_id'].unique())) + 1
+    l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
+
+    # TODO: This is a specific edit for the dataset that we are using currently.
+    l = 6
+    rand_patients = ['MS8', 'MS9', 'MS6', 'MS7', '1', '8', '10', '16', 'S2', 'S5', 'S9', 'S29']
+    df = df[df['patient_id'].isin(rand_patients)]
+    # df = df.sample(frac=0.1, random_state=42)  # TODO: This part was added in order to reduce the runtime! remove later!
 
     # calculate common sequences in disease and healthy samples
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-    x_disease = [common_aaseq_analysis(df_cd8_bld, num_of_patients=i, mode=1)[value_to_take] for i in range(2, l)]
+    x_disease = [common_aaseq_analysis(df, num_of_patients=i, mode=2)[value_to_take] for i in range(2, l)]
 
     def calculate_common_healthy(patient_id_bld, option=2):
-        df1 = df_cd8_bld[df_cd8_bld["patient_id"] == patient_id_bld]
+        df1 = df[df["patient_id"] == patient_id_bld]
         if option == 1:
             # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
-            df_h_comb = pd.concat([df1, df_h2_cd8], ignore_index=True)
+            df_h_comb = pd.concat([df1, df_h], ignore_index=True)
         else:
             # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
             patient_seqs_len = len(df1)
-            all_seqs_h = df_h2_cd8["AASeq"].unique()
+            all_seqs_h = df_h["AASeq"].unique()
             df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
         x_healthy = [common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2)[value_to_take] for i in range(2, l)]
         return x_healthy
 
     # Average the results of all patients with disease
-    x_healthy_list = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df_cd8_bld['patient_id'].unique()]
+    x_healthy_list = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df['patient_id'].unique()]
     x_healthy = np.array(x_healthy_list).mean(axis=0)
 
-    # normalize if needed
-    # x_disease = [x / x_disease[0] for x in x_disease]
-    # x_healthy = [x / x_healthy[0] for x in x_healthy]
+    if log_space:
+        x_disease = np.log(np.array(x_disease))
+        x_healthy = np.log(x_healthy)
 
     # plot the results
     plt.figure(figsize=(10, 6))
@@ -731,9 +823,8 @@ def display_common_sequences_figure(df_cd8_bld):
         plt.annotate(f"{txt:.5f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
     plt.xlabel("Number of Patients")
     plt.ylabel("Percentage of Common Sequences (Only CD8)")
-    plt.title("Percentage of Common Sequences in Disease and Healthy Samples")
-    # increase y lim a little bit
-    plt.ylim(0, max(max(x_disease), max(x_healthy)) * 1.1)
+    plt.title("Percentage of Common Sequences in Disease and Healthy Samples" + (" (Log Scale)" if log_space else ""))
+    # plt.ylim(0, max(max(x_disease), max(x_healthy)) * 1.1)
     plt.legend()
     plt.show()
 
@@ -879,14 +970,21 @@ if __name__ == '__main__':
     name_opt = '_opt1' if dist_option == 1 else ''
 
     # Load study
-    study = Study(STUDIES[study_ind])
-    # study_healthy = Study(HEALTHY_STUDY_ID2)
+    study = Study(STUDY_ID)  # TODO: This is hardcoded for now! It depends on the study!
+    df = get_all_usable_disease_data(disease='Multiple sclerosis')
     df_h = get_all_usable_healthy_data()
 
     # reading samples from the study
     df_study = study._samples['usable']
     df_study = study.read_sample(df_study)
     df_study = df_study[df_study['condition'] == 'Ankylosing Spondylitis']  # TODO: This is hardcoded for now! It depends on the study!
+
+
+    # Display common sequences in disease and healthy samples
+    if TO_DISPLAY_COMMON_SEQUENCES:
+        display_common_sequences_figure(df, df_h)
+
+    exit(0)
 
     # reading synovial samples
     df_syn = df_study[df_study['tissue'] == 'Synovial fluid']
@@ -984,10 +1082,6 @@ if __name__ == '__main__':
         plot_length_histogram(np.array(list(sr_cd8_bld_vld)), np.array(sr_cd8_syn_vld),
                               labels=["Blood", "Synovial"],
                               title_text="CD8 Filtered Sequences")
-
-    # Display common sequences in disease and healthy samples
-    if TO_DISPLAY_COMMON_SEQUENCES:
-        display_common_sequences_figure(df_bld[df_bld['cell_type'] == 'CD8'])
 
     # Display success figure per patient
     if TO_DISPLAY_ACCURACY_BIN_BY_DIST:

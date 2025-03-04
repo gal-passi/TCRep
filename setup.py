@@ -142,3 +142,10 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "In this study, the contribution of T cells to the pathophysiology of the neuroinflammatory condition Susac syndrome (SuS) was investigated. Distinctive features of TCR repertoire of SuS patient CD8 T cells were found when compared with the repertoires of healthy controls (HD) and multiple sclerosis (MS) patients. Oligoclonal expansion of terminally differentiated activated cytotoxicCD8+ T cells (CTLs) were further identified as potential contributors to this disease.",
                 [], [], [])
+
+
+    study_id = "PRJNA280417"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "The dataset contains T-cell Receptor Beta Chain sequences from multiple sclerosis patients. Individual cDNA molecules were labeled with an unique molecular identifier (UMI) tag prior to library preparation. Custom adapters with sample barcodes were used. Libraries were prepared according to our standardized protocol (http://www.frontiersin.org/Journal/10.3389/fimmu.2013.00456/abstract). Sequencing was performed using Illumina HiSeq2500.",
+                [], [], [])

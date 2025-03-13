@@ -38,10 +38,9 @@ VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
 TO_DISPLAY_COMMON_SEQUENCES = False
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
-TO_DISPLAY_RESULTS = False
+TO_DISPLAY_RESULTS = True
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
-TO_LOAD_VALID_SEQUENCES = True
 TO_LOAD_FULL_SYNAPSE_DATA = False
 
 
@@ -102,31 +101,55 @@ def get_valid_seqs_original(df, df_ind, name_opt, study_name):
     return valid_seqs
 
 
-def embed(seqs):
-    from esm.models.esmc import ESMC
-    from esm.sdk.api import ESMProtein, LogitsConfig
-
+def embed_esmc(seqs, batch_size=512, to_mean=True, **kwargs):
+    # set model_type from kwargs
+    model_type = kwargs.get('model_type', 'esmc')
+    # load model according to model type
+    if model_type == 'esmc':
+        from esm.models.esmc import ESMC
+        model = ESMC.from_pretrained("esmc_300m")
+    else:
+        model = load_fine_tuned_esmc("cache/esm_c_checkpoints")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = model.to(device)
+    model.eval()
+    # Convert seqs to numpy array
+    seqs_np = np.array(seqs)
+    # List to accumulate final embeddings
+    all_embeds = []
+    # Process in batches
+    # for start_idx in range(0, len(seqs), batch_size):  # add tqdm and specify the total
+    for start_idx in tqdm(range(0, len(seqs), batch_size), total=math.ceil(len(seqs) / batch_size)):
+        end_idx = min(start_idx + batch_size, len(seqs))
+        batch_seqs = seqs_np[start_idx:end_idx]
+        with torch.no_grad():
+            if model_type == 'esmc':
+                # Tokenize the batch sequences
+                tokenized = model._tokenize(batch_seqs)
+                # Get embeddings for the batch
+                embeds = model(tokenized).embeddings.to(torch.float32).cpu()
+            else:
+                # Tokenize the batch sequences
+                tokenized = model.esmc_model._tokenize(batch_seqs)
+                # Get embeddings for the batch
+                embeds = model(sequences=tokenized).to(torch.float32).cpu()
+        # Clean the start and end of each sequence in the embedding
+        batch_embeds = [embed[1:len(seq) - 1] for embed, seq in zip(embeds, batch_seqs)]
+        # Apply mean if needed
+        if to_mean:
+            batch_embeds = [embeds.mean(dim=0) for embeds in batch_embeds]
+        else:
+            batch_embeds = [embeds for embeds in batch_embeds]
+        # Accumulate the batch embeddings
+        all_embeds.extend(batch_embeds)
+    return all_embeds
 
-    embeds = list()
-    # The size of the embedding is 960 for this model
-    client = ESMC.from_pretrained("esmc_300m").to(device)
-    for seq in tqdm(seqs):
-        protein = ESMProtein(sequence=seq)
-        protein_tensor = client.encode(protein)
-        logits_output = client.logits(
-            protein_tensor, LogitsConfig(sequence=True, return_embeddings=True)
-        )
-        # SAVING MEAN OF EMBEDDINGS! To save the full embedding (1, seq_len, 960) remove the mean function
-        embeds.append(logits_output.embeddings.mean(dim=1).cpu())  # can also output: logits_output.logits
-    return embeds
 
-
-def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
+def t_sne_display(X_bld, X_hlt, study_name, cell_type, name_opt=''):
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-    X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
-    X_tsne_syn = X_tsne[:len(X_syn)]
-    X_tsne_bld = X_tsne[len(X_syn):len(X_syn) + len(X_bld)]
+    X_tsne = tsne.fit_transform(np.concatenate([X_bld, X_hlt]))
+    X_tsne_syn = X_tsne[:len(X_bld)]
+    X_tsne_bld = X_tsne[len(X_bld):len(X_bld) + len(X_hlt)]
 
     # plotting
     plt.figure(figsize=(12, 8))
@@ -135,13 +158,13 @@ def t_sne_display(X_syn, X_bld, study_name, cd_type, name_opt=''):
     plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
                 c='blue', label='Synovial Fluid', alpha=0.4)
     plt.legend()
-    plt.title(f't-SNE Visualization of CD{cd_type} Data')
+    plt.title(f't-SNE Visualization of cell type {cell_type} Data')
     plt.xlabel('t-SNE 1')
     plt.ylabel('t-SNE 2')
     # save plot
     plots_folder = f"plots/{study_name}"
     os.makedirs(plots_folder, exist_ok=True)
-    plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
+    plt.savefig(os.path.join(plots_folder, f"tsne_{cell_type}{name_opt}.png"))
     plt.show()
 
 
@@ -156,30 +179,25 @@ def get_fold_indices_by_patient(syn_mask):
     return folds_indices
 
 
-def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, study_name,
-                         ratio=3, n_neighbors=9, cd_type='4', name_opt=''):
+def process_and_evaluate(bld, healthy, bld_mask, k_fold_type, study_name,
+                         cell_type, ratio=3, n_neighbors=9, name_opt=''):
     # Prepare data
-    X_syn = torch.cat([x for x in syn])
-    X_bld = torch.cat([x for x in bld])
-    X_hlt = torch.cat([x for x in healthy])
+    X_bld = torch.stack(bld)
+    X_hlt = torch.stack(healthy)
 
-    X = X_syn
-    y = np.array([0] * len(syn))
+    X = X_bld
+    y = np.array([0] * len(bld))
 
     # Plotting if needed
     if TO_DISPLAY_RESULTS_PLOT_TSNE:
         # Apply t-SNE
         tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-        X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld]))
-        # X_tsne = tsne.fit_transform(np.concatenate([X_syn, X_bld, X_hlt]))
+        X_tsne = tsne.fit_transform(np.concatenate([X_bld]))
         X_tsne_syn = X_tsne[:len(syn)]
         X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
-        # X_tsne_hlt = X_tsne[len(syn) + len(bld):]
 
         # plotting
         plt.figure(figsize=(12, 8))
-        # plt.scatter(X_tsne_hlt[:, 0], X_tsne_hlt[:, 1],
-        #             c='green', label='Blood (healthy)', alpha=0.4)
         plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
                     c='red', label='Blood', alpha=0.4)
         plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
@@ -198,10 +216,8 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
     if k_fold_type == 0:  # random k-fold
         kf = KFold(n_splits=5, shuffle=True, random_state=42)
         folds_indices = kf.split(X)
-        blood_indices = [x[0] for x in kf.split(X_bld)]
     else:  # patient k-fold
-        folds_indices = get_fold_indices_by_patient(syn_mask)
-        blood_indices = [mask == 1 for mask in bld_mask]
+        folds_indices = get_fold_indices_by_patient(bld_mask)
 
     scores = []
     for i, (train_idx, test_idx) in enumerate(folds_indices):
@@ -211,18 +227,18 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
         # Adding the same healthy data to the training set (for each fold)
         # X_hlt_rnd = X_hlt
         n = min(len(X_train) * ratio, len(X_hlt))
-        X_hlt_rnd = X_hlt[np.random.choice(len(X_hlt), n, replace=False)]
+        hlt_indices = np.random.choice(len(X_hlt), n, replace=False)
+        X_hlt_rnd = X_hlt[hlt_indices]
         X_train = np.vstack([X_train, X_hlt_rnd])
         y_train = np.hstack([y_train, np.array([1] * len(X_hlt_rnd))])
+        # print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
 
         # Adding random samples from blood to the test set (of the same size as positive samples in the test set)
-        # X_bld_rnd = X_bld[blood_indices[i]]
-        X_bld_test = X_bld[blood_indices[i]]
-        m = min(len(y_test) * ratio, len(X_bld_test))
-        X_bld_rnd = X_bld_test[np.random.choice(len(X_bld_test), m, replace=False)]
-        X_test = np.vstack([X_test, X_bld_rnd])
-        y_test = np.hstack([y_test, np.array([1] * len(X_bld_rnd))])
-        # print(f"Ratio: Train {n/len(X[train_idx]):.2f}, Test {m/len(X[test_idx]):.2f}")
+        X_hlt_rnd_test = X_hlt[~hlt_indices]
+        m = min(len(y_test) * ratio, len(X_hlt_rnd_test))
+        X_hlt_rnd_test = X_hlt_rnd_test[np.random.choice(len(X_hlt_rnd_test), m, replace=False)]
+        X_test = np.vstack([X_test, X_hlt_rnd_test])
+        y_test = np.hstack([y_test, np.array([1] * len(X_hlt_rnd_test))])
 
         # Train and evaluate KNN
         knn = KNeighborsClassifier(n_neighbors=n_neighbors, metric="minkowski")
@@ -233,12 +249,12 @@ def process_and_evaluate(syn, healthy, bld, syn_mask, bld_mask, k_fold_type, stu
 
         # Displaying the t-SNE figure for each fold
         if TO_DISPLAY_RESULTS_PLOT_TSNE:
-            t_sne_display(X[test_idx], X_bld_rnd, study_name, cd_type, name_opt)
+            t_sne_display(X[test_idx], X_hlt_rnd_test, study_name, cell_type, name_opt)
 
     return np.mean(scores), np.std(scores)
 
 
-def get_cached_embeddings(sequences, study_name, name='', cache_dir="cache/esm_c/", embed_fn=None):
+def get_cached_embeddings(sequences, study_name, name='', cache_dir="cache/esm_c/", embed_fn=None, **kwargs):
     """
     Load cached embeddings if available, otherwise compute and cache them.
 
@@ -263,7 +279,7 @@ def get_cached_embeddings(sequences, study_name, name='', cache_dir="cache/esm_c
         raise ValueError("embed_fn must be provided if embeddings are not cached")
 
     # Compute embeddings
-    embeddings = embed_fn(sequences)
+    embeddings = embed_fn(sequences, **kwargs)
 
     # saving with pickle
     with open(cache_file, 'wb') as f:
@@ -1122,11 +1138,12 @@ def find_all_common_sequences(df, num_of_patients=3):
     return valid_aa_seqs
 
 
-def calculate_valid_near_sequences(df, save_name, lev_dist_accept=1, num_of_patients=3):
+def calculate_valid_near_sequences(df, save_name, lev_dist_accept=1, num_of_patients=3, all_common_seqs=None):
     save_folder = "cache/valid_sequences/multiple_sclerosis"
     save_file = os.path.join(save_folder, f"{save_name}_valid_seqs_dist_{lev_dist_accept}.pkl")
     if not os.path.exists(save_file):
-        all_common_seqs = find_all_common_sequences(df, num_of_patients=num_of_patients)
+        if all_common_seqs is None:
+            all_common_seqs = find_all_common_sequences(df, num_of_patients=num_of_patients)
         df_new = df.copy()
         df_new['patient_id'] = df_new['AASeq'].apply(lambda x: 'valid' if x in all_common_seqs else 'all')
         valid_df = df_new[df_new['patient_id'] == 'valid'].drop_duplicates(subset='AASeq')
@@ -1243,7 +1260,7 @@ def fine_tune_esmc_tanya():
     # out = clientc(["AAAAA", "GG"])  # , "." * 10])
     peft_model = peft_model.to(device)
     # out = peft_model(["AAAAA", "GG"])
-    out = peft_model(input=["AAAAA", "GG"])
+    out = peft_model(sequences=["AAAAA", "GG"])
 
     # save the embeddings
     # torch.save(out, "ESMC_retrained.pt")
@@ -1424,7 +1441,8 @@ def fine_tune_esmc(sequences, batch_size=8, num_epochs=5, learning_rate=5e-5, ch
         # Get embeddings and return
         peft_model.eval()
         with torch.no_grad():
-            embeddings = peft_model(input=sequences[:10])
+            tokenized_seqs = peft_model.esmc_model._tokenize(sequences[:10])
+            embeddings = peft_model(sequences=tokenized_seqs)
 
         return {
             "model": peft_model,
@@ -1539,12 +1557,13 @@ def fine_tune_esmc(sequences, batch_size=8, num_epochs=5, learning_rate=5e-5, ch
     print(f"Final model saved to {final_model_path}")
 
     # Save the model in PEFT format for easier reloading
-    peft_model.save_pretrained(os.path.join(checkpoint_dir, "peft_model"))
+    # peft_model.save_pretrained(os.path.join(checkpoint_dir, "peft_model"))
 
     # Get embeddings from the fine-tuned model
     peft_model.eval()
     with torch.no_grad():
-        embeddings = peft_model(input=sequences[:10])  # Get embeddings for first 10 sequences as an example
+        tokenized_seqs = peft_model.esmc_model._tokenize(sequences[:10])
+        embeddings = peft_model(input=tokenized_seqs)  # Get embeddings for first 10 sequences as an example
 
     print(f"Output embeddings shape: {embeddings.shape}")
 
@@ -1560,28 +1579,130 @@ def fine_tune_esmc(sequences, batch_size=8, num_epochs=5, learning_rate=5e-5, ch
     }
 
 
+def load_fine_tuned_esmc(checkpoint_dir, resume_from=None):
+    from esm.models.esmc import ESMC
+    from peft import LoraConfig, get_peft_model, TaskType
+    import glob
+    import re
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Automatically find the most recent checkpoint if resume_from is None
+    if resume_from is None:
+        # Look for checkpoint files in the checkpoint directory
+        checkpoint_files = glob.glob(os.path.join(checkpoint_dir, "checkpoint_epoch_*.pt"))
+
+        if checkpoint_files:
+            # Extract epoch numbers from checkpoint filenames
+            epoch_numbers = []
+            for file_path in checkpoint_files:
+                match = re.search(r'checkpoint_epoch_(\d+)\.pt', file_path)
+                if match:
+                    epoch_numbers.append((int(match.group(1)), file_path))
+
+            # Find the most recent checkpoint
+            if epoch_numbers:
+                _, resume_from = max(epoch_numbers, key=lambda x: x[0])
+                print(f"Auto-resuming from most recent checkpoint: {resume_from}")
+
+        # Also check for final_model.pt
+        final_model_path = os.path.join(checkpoint_dir, "final_model.pt")
+        if os.path.exists(final_model_path) and (not checkpoint_files or
+                                                 os.path.getmtime(final_model_path) > os.path.getmtime(resume_from)):
+            resume_from = final_model_path
+            print(f"Auto-resuming from final model checkpoint: {resume_from}")
+
+    # Define PEFT configuration
+    peft_config_esmc = LoraConfig(
+        r=8,
+        lora_alpha=32,
+        lora_dropout=0.1,
+        bias='none',
+        layers_to_transform=[29, 28, 27, 26, 25, 24, 23, 22, 21],
+        task_type=TaskType.CAUSAL_LM,
+        target_modules=['attn.out_proj']
+    )
+
+    # Load pre-trained model
+    clientc = ESMC.from_pretrained("esmc_300m")
+    clientc = CustomModelWrapperesm(clientc)
+    clientc.config = MockConfig(model_type="esmc")
+
+    # Apply PEFT
+    peft_model = get_peft_model(clientc, peft_config_esmc)
+    peft_model = peft_model.to(device)
+
+    # Load from checkpoint if specified or auto-detected
+    if resume_from is not None and os.path.exists(resume_from):
+        print(f"Loading checkpoint from {resume_from}")
+        checkpoint = torch.load(resume_from, map_location=device)
+        peft_model.load_state_dict(checkpoint['model_state_dict'])
+        start_epoch = checkpoint['epoch'] + 1
+        best_loss = checkpoint['best_loss']
+
+        print(f"Resuming from epoch {start_epoch} with best loss: {best_loss:.4f}")
+    else:
+        if resume_from is not None:
+            print(f"Checkpoint file {resume_from} not found. Starting from scratch.")
+        else:
+            print("No checkpoints found. Starting from scratch.")
+
+    # Set model to eval
+    peft_model.eval()
+
+    # Return the model
+    return peft_model
+
+
 # TODO: ESM-C FINE-TUNING ENDS HERE!.......................................................
+
+def generate_neighbors(sequences, valid_letters):
+    valid_letters = set(valid_letters)  # Ensure valid letters are a set for quick lookup
+    neighbor_set = set(sequences)  # Start with the original sequences
+
+    for seq in sequences:
+        seq_len = len(seq)
+
+        # Generate substitutions
+        for i in range(seq_len):
+            for letter in valid_letters:
+                if seq[i] != letter:  # Avoid replacing with the same letter
+                    neighbor_set.add(seq[:i] + letter + seq[i + 1:])
+
+        # Generate insertions
+        for i in range(seq_len + 1):
+            for letter in valid_letters:
+                neighbor_set.add(seq[:i] + letter + seq[i:])
+
+        # Generate deletions
+        if seq_len > 1:  # Ensure we don't delete the only character
+            for i in range(seq_len):
+                neighbor_set.add(seq[:i] + seq[i + 1:])
+
+    return neighbor_set
 
 if __name__ == '__main__':
     # fine-tune esm-c
     # Load Sequences
-    df = get_all_usable_disease_data(disease='Multiple sclerosis')
-    df_h = get_all_usable_healthy_data()
-    seqs_d = df["AASeq"].unique()
-    seqs_h = df_h["AASeq"].unique()
-    sequences = np.unique(np.concatenate([seqs_d, seqs_h]))
-    sequences = np.sort(sequences)
-    np.random.seed(42)
-    sequences = np.random.permutation(sequences)
+    # df = get_all_usable_disease_data(disease='Multiple sclerosis')
+    # df_h = get_all_usable_healthy_data()
+    # seqs_d = df["AASeq"].unique()
+    # seqs_h = df_h["AASeq"].unique()
+    # sequences = np.unique(np.concatenate([seqs_d, seqs_h]))
+    # sequences = np.sort(sequences)
+    # np.random.seed(42)
+    # sequences = np.random.permutation(sequences)
 
     # Fine-tune Process
-    fine_tune_esmc(sequences, batch_size=512, num_epochs=9, learning_rate=5e-5,
-                   checkpoint_dir="cache/esm_c_checkpoints", save_every=1, resume_from=None)
-    # fine_tune_esmc()
-    exit(0)
+    # fine_tune_esmc(sequences, batch_size=512, num_epochs=20, learning_rate=5e-5,
+    #                checkpoint_dir="cache/esm_c_checkpoints", save_every=1, resume_from=None)
+    # model = load_fine_tuned_esmc("cache/esm_c_checkpoints")
+    # out1 = model(sequences=model.esmc_model._tokenize(np.array(["AAAAAA", "AAA"])))
+    # out2 = embed(np.array(["AAAAAA", "AAA"]), to_mean=False)
+    # exit(0)
 
-    train_vae_eve_model()
-    exit(0)
+    # train_vae_eve_model()
+    # exit(0)
 
     # get df_ind from program arguments
     parser = argparse.ArgumentParser()
@@ -1600,12 +1721,14 @@ if __name__ == '__main__':
     print(f"\tstudy_ind: {study_ind}")
     print(f"\tk_fold_type: {k_fold_type}")  # 0 - random, 1 - patient
     print("\n")
+    np.random.seed(42)
 
     name_opt = '_opt1' if dist_option == 1 else ''
 
     # Load study
-    study = Study(STUDY_ID)
-    df = get_all_usable_disease_data(disease='Multiple sclerosis')
+    # study = Study(STUDY_ID)
+    disease = 'Multiple sclerosis'
+    df = get_all_usable_disease_data(disease=disease)
     df_h = get_all_usable_healthy_data()
 
     # reading samples from the study
@@ -1631,28 +1754,6 @@ if __name__ == '__main__':
         display_common_sequences_figure(df, df_h, l=l)
         display_common_sequences_figure_healthy(df_h, l=l)
 
-    # TODO: This part should be able to load training data for our case! Find out how to do it
-    if TO_LOAD_VALID_SEQUENCES:
-        valid_seqs_disease = calculate_valid_near_sequences(df, save_name='disease', lev_dist_accept=1, num_of_patients=3)
-        # valid_seqs_healthy = calculate_valid_near_sequences(df_h, save_name='healthy', lev_dist_accept=1, num_of_patients=3)
-        valid_seqs_healthy = find_all_common_sequences(df_h, num_of_patients=2)  # TODO: Added for now to speed up the process!
-
-        positive_seqs = set([x[0] for x in valid_seqs_disease])
-        negative_seqs = set([x[0] for x in valid_seqs_healthy])
-
-        positive_seqs = positive_seqs - negative_seqs
-
-        # print statistics:
-        # print(f"Number of Positive Sequences: {len(positive_seqs)}")
-        # print(f"Number of Negative Sequences: {len(negative_seqs)}")
-        # print(f"Number of Total Sequences: {len(positive_seqs) + len(negative_seqs)}")
-        # print(f"Number of Sequences Removed From Positive: {len(set([x[0] for x in valid_seqs_disease])) - len(positive_seqs)}\n")
-
-        # ---------------------------
-        # 6. Main Execution
-        # ---------------------------
-        # Define dataset
-
 
     # TODO: This part loads the other healthy synapse data and compares it with our healthy data
     if TO_LOAD_FULL_SYNAPSE_DATA:
@@ -1666,85 +1767,62 @@ if __name__ == '__main__':
         common_seqs_synapse = set(data).intersection(set(df_h['AASeq']))
         print(f"Number of Common Sequences in Synapse and Healthy Data: {len(common_seqs_synapse)}")
 
-    exit(0)
+    cell_type = ['DC8', 'CD4', 'ALL'][2]
 
-    # reading synovial samples
-    df_syn = df_study[df_study['tissue'] == 'Synovial fluid']
-    df_cd4_syn = df_syn[df_syn['cell_type'] == 'CD4']
-    df_cd8_syn = df_syn[df_syn['cell_type'] == 'CD8']
-    # reading blood samples
-    df_bld = df_study[df_study['tissue'] == 'Blood']
-    df_cd4_bld = df_bld[df_bld['cell_type'] == 'CD4']
-    df_cd4_bld = df_cd4_bld[df_cd4_bld['patient_id'].isin(df_cd4_syn['patient_id'].unique())]
-    df_cd8_bld = df_bld[df_bld['cell_type'] == 'CD8']
-    df_cd8_bld = df_cd8_bld[df_cd8_bld['patient_id'].isin(df_cd8_syn['patient_id'].unique())]
+    if cell_type != 'ALL':
+        # reading blood samples
+        df_bld = df[df['cell_type'] == cell_type]
+        # reading healthy study:
+        df_hlt = df_h[df_h['cell_type'] == cell_type]
+    else:
+        df_bld, df_hlt = df, df_h
 
-    # reading healthy study:
-    # samples_h = study_healthy._samples['usable']
-    # df_h = study_healthy.read_sample(samples_h)
-    df_h_cd8 = df_h[df_h['cell_type'] == 'CD8']
-    valid_seqs_cd8_h = df_h_cd8["AASeq"].unique()
-    df_h_cd4 = df_h[df_h['cell_type'] == 'CD4']
-    valid_seqs_cd4_h = df_h_cd4["AASeq"].unique()
+    all_common_seqs = find_all_common_sequences(df, num_of_patients=3)
+    valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=3)
+    all_common_seqs = all_common_seqs - valid_seqs_healthy
+    # choosing valid samples according to their re-occurrence in different patients and a given distance
+    valid_seqs_disease = calculate_valid_near_sequences(df_bld, save_name=f'disease_{cell_type}', lev_dist_accept=1, num_of_patients=3, all_common_seqs=all_common_seqs)
+    # valid_seqs_healthy = calculate_valid_near_sequences(df_hlt, save_name='healthy', lev_dist_accept=1, num_of_patients=3)
 
-    # keep only sequences that appear at least twice between different patients
-    # (AASeq that appear in different patient_ids)
-    all_dfs = [df_cd4_syn, df_cd8_syn, df_cd4_bld, df_cd8_bld]
-    all_valid_seqs = [get_valid_seqs(df, i, name_opt, study.name) for i, df in enumerate(all_dfs)]
+    # get all neighbours of healthy sequences:
+    valid_letters = set(''.join(valid_seqs_healthy))
+    neighbors = generate_neighbors(valid_seqs_healthy, valid_letters)  # len is ~12 million!
 
-    if any(item is None for item in all_valid_seqs):
-        if df_ind != -1 and all_valid_seqs[df_ind] is None:
-            df = all_dfs[df_ind]
-            print(f"Calculating Valid Sequences of DF: {df_ind}!")
-            if dist_option == 0:
-                valid_sequences = get_valid_seqs_original(df, df_ind, name_opt, study.name)
-            else:
-                valid_sequences = calculate_valid_seqs_with_patient_id(df, df_ind, name_opt, study.name)
-            print(f"Done calculating valid sequences of df: {df_ind}!")
-            all_valid_seqs[df_ind] = valid_sequences
-        else:
-            for i, df in enumerate(all_dfs):
-                if all_valid_seqs[i] is None:
-                    print(f"Calculating Valid Sequences of DF: {i}!")
-                    if dist_option == 0:
-                        valid_sequences = get_valid_seqs_original(df, i, name_opt, study.name)
-                    else:
-                        valid_sequences = calculate_valid_seqs_with_patient_id(df, i, name_opt, study.name)
-                    print(f"Done calculating valid sequences of df: {i}!")
-                    all_valid_seqs[i] = valid_sequences
+    # filtering the sequences to positive and negative (disease and healthy respectively)
+    positive_seqs = set([x[0] for x in valid_seqs_disease])
+    negative_seqs = set(valid_seqs_healthy)
+    positive_seqs = positive_seqs - neighbors
 
-    all_valid_only_seqs = [set(data[0] for data in valid_set)
-                           if len(list(valid_set)[0]) == 3 else valid_set
-                           for valid_set in all_valid_seqs]
-    all_valid_only_seqs = [np.array(sorted(list(valid_set))) for valid_set in all_valid_only_seqs]
-
-    sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_only_seqs
-    # sr_cd4_syn_vld, sr_cd8_syn_vld, sr_cd4_bld_vld, sr_cd8_bld_vld = all_valid_seqs
-
-    # bounding the length of sequences to be min and max of synovial samples,
-    # then sampling *ratio samples from blood to match *ratio the number of synovial samples
+    # make list and sort
+    positive_seqs = list(positive_seqs)
+    positive_seqs.sort()
+    negative_seqs = list(negative_seqs)
+    negative_seqs.sort()
+    # shuffle according to a certain seed
     np.random.seed(42)
-    ratio = 10
-    sr_cd4_bld_vld = bound_and_sample_blood(sr_cd4_syn_vld, sr_cd4_bld_vld, ratio)
-    sr_cd8_bld_vld = bound_and_sample_blood(sr_cd8_syn_vld, sr_cd8_bld_vld, ratio)
-    valid_seqs_cd4_h = bound_and_sample_blood(sr_cd4_syn_vld, valid_seqs_cd4_h, ratio)
-    valid_seqs_cd8_h = bound_and_sample_blood(sr_cd8_syn_vld, valid_seqs_cd8_h, ratio)
+    np.random.shuffle(positive_seqs)
+    np.random.shuffle(negative_seqs)
+
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
-    cd4_syn_patient_id_masks = get_patient_ids_masks(df_cd4_syn, sr_cd4_syn_vld, all_valid_seqs[0])
-    cd4_bld_patient_id_masks = get_patient_ids_masks(df_cd4_bld, sr_cd4_bld_vld, all_valid_seqs[2], seq_type='bld')
-    cd8_syn_patient_id_masks = get_patient_ids_masks(df_cd8_syn, sr_cd8_syn_vld, all_valid_seqs[1])
-    cd8_bld_patient_id_masks = get_patient_ids_masks(df_cd8_bld, sr_cd8_bld_vld, all_valid_seqs[3], seq_type='bld')
+    unique_patient_ids = df_bld["patient_id"].unique()
+    masks = []
+    for patient in unique_patient_ids:
+        # Get sequences that belong to the current patient
+        patient_seqs = set(df_bld.loc[df_bld["patient_id"] == patient, "AASeq"])
+        # Create a mask for sequences
+        mask = np.array([1 if seq in patient_seqs else 0 for seq in positive_seqs])
+        if 1 in mask:
+            masks.append(mask)
+    # Convert to ndarray
+    patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
 
     # Calculating embeddings (or loading if it is available)
-    cd4_syn = get_cached_embeddings(list(sr_cd4_syn_vld), study.name, name='cd4_syn' + name_opt, embed_fn=embed)
-    cd8_syn = get_cached_embeddings(list(sr_cd8_syn_vld), study.name, name='cd8_syn' + name_opt, embed_fn=embed)
-    cd4_bld = get_cached_embeddings(list(sr_cd4_bld_vld), study.name, name='cd4_bld' + name_opt, embed_fn=embed)
-    cd8_bld = get_cached_embeddings(list(sr_cd8_bld_vld), study.name, name='cd8_bld' + name_opt, embed_fn=embed)
+    embed_bld = get_cached_embeddings(positive_seqs, disease, name=f'{disease}_{cell_type}_bld' + name_opt, embed_fn=embed_esmc, model_type="esmc")
+    embed_hlt = get_cached_embeddings(negative_seqs, "healthy", name=f'{cell_type}_h' + name_opt, embed_fn=embed_esmc, model_type="esmc")
+    # embed_bld = embed_esmc(positive_seqs, model_type="esmc")
+    # embed_hlt = embed_esmc(negative_seqs, model_type="esmc")
 
-    cd4_h = get_cached_embeddings(list(valid_seqs_cd4_h), "healthy", name='cd4_h' + name_opt, embed_fn=embed)
-    cd8_h = get_cached_embeddings(list(valid_seqs_cd8_h), "healthy", name='cd8_h' + name_opt, embed_fn=embed)
-
-    # Evaluating CD4 and CD8
+    # Displaying the results hyperparameters
     n_neighbors = 9
     neg_to_pos_ratio = 3
 
@@ -1778,16 +1856,10 @@ if __name__ == '__main__':
 
     # Displaying the results
     if TO_DISPLAY_RESULTS:
-        print(f"Samples CD4 Synovial: {len(cd4_syn)}, CD4 Blood: {len(cd4_bld)}, CD4 Healthy: {len(cd4_h)}")
-        mean_acc, std_acc = process_and_evaluate(cd4_syn, cd4_h, cd4_bld,
-                                                 cd4_syn_patient_id_masks, cd4_bld_patient_id_masks, k_fold_type,
+        print(f"Samples {cell_type} Disease: {len(embed_bld)}, Healthy: {len(embed_hlt)}")
+        mean_acc, std_acc = process_and_evaluate(embed_bld, embed_hlt,
+                                                 patient_id_masks, k_fold_type,
+                                                 cell_type=cell_type, name_opt=name_opt,
                                                  ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                                 study_name=study.name, cd_type="4", name_opt=name_opt)
-        print(f"CD4 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-        print()
-        print(f"Samples CD8 Synovial: {len(cd8_syn)}, CD8 Blood: {len(cd8_bld)}, CD8 Healthy: {len(cd8_h)}")
-        mean_acc, std_acc = process_and_evaluate(cd8_syn, cd8_h, cd8_bld,
-                                                 cd8_syn_patient_id_masks, cd8_bld_patient_id_masks, k_fold_type,
-                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                                 study_name=study.name, cd_type="8", name_opt=name_opt)
-        print(f"CD8 - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+                                                 study_name=disease)
+        print(f"{cell_type} - KNN {n_neighbors} neighbours ({len(patient_id_masks)}-Fold): Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")

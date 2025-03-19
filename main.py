@@ -838,6 +838,24 @@ def generate_neighbors(sequences, valid_letters):
 
 
 if __name__ == '__main__':
+    # from models.cvc_model import CVCModel
+    # device = "cuda" if torch.cuda.is_available() else "cpu"
+    # seqs = ['CSAQLMNTEAFF', 'CASSSAGTQYF']
+    # seqs2 = ['CSAQLNMTEAFF', 'CASSSGATQYF']
+    #
+    # # Embedding with wrapper
+    # from cvc.embbeding_wrapper import EmbeddingWrapper
+    # from lab_notebooks.utils import TRANSFORMER
+    # sequences_df = pd.DataFrame({"Sequences": seqs})
+    # embed_wrapper = EmbeddingWrapper(TRANSFORMER, device, sequences_df, batch_size=1024, method="mean", layers=[-1])
+    # embed_wrap = embed_wrapper.embeddings
+    #
+    # # Embedding myself
+    # cvc_model = CVCModel(batch_size=1024, device=device)
+    # embed_cvc = cvc_model(seqs)
+    # print(np.all(embed_wrap == embed_cvc.detach().numpy()))
+    # exit(0)
+
     # fine-tune esm-c
     # Load Sequences
     # df = get_all_usable_disease_data(disease='Multiple sclerosis')
@@ -857,8 +875,6 @@ if __name__ == '__main__':
     # out2 = embed(np.array(["AAAAAA", "AAA"]), to_mean=False)
     # exit(0)
 
-    # train_vae_eve_model()
-    # exit(0)
 
     # get program arguments
     parser = argparse.ArgumentParser()
@@ -948,7 +964,8 @@ if __name__ == '__main__':
         return positive_seqs, negative_seqs
 
     # positive_seqs2, negative_seqs2 = get_positive_negative(num_of_patients=2)
-    positive_seqs, negative_seqs = get_positive_negative(num_of_patients=3)
+    # positive_seqs, negative_seqs = get_positive_negative(num_of_patients=3)
+    positive_seqs = get_positive_negative(only_positive=True, num_of_patients=3)
     all_common_seqs = find_all_common_sequences(df_bld, num_of_patients=3)
     valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=3)
     all_common_seqs = all_common_seqs - valid_seqs_healthy
@@ -957,12 +974,12 @@ if __name__ == '__main__':
     # make list and sort
     positive_seqs = list(positive_seqs)
     positive_seqs.sort()
-    negative_seqs = list(negative_seqs)
-    negative_seqs.sort()
+    # negative_seqs = list(negative_seqs)
+    # negative_seqs.sort()
     # shuffle according to a certain seed
     np.random.seed(42)
     np.random.shuffle(positive_seqs)
-    np.random.shuffle(negative_seqs)
+    # np.random.shuffle(negative_seqs)
 
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
     unique_patient_ids = df_bld["patient_id"].unique()
@@ -977,8 +994,14 @@ if __name__ == '__main__':
     # Convert to ndarray
     patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
 
+
+    # TODO: ADD TRAINING ON CVC FROM HERE (AND DOWNLOAD CVC MODEL SOMEHOW!)
+    #  Maybe we do not need the negatives at all from here...
+
+    exit(0)
+
     # Calculating embeddings (or loading if it is available)
-    embed_type = ['esmc', 'esmc_finetuning'][0]
+    embed_type = ['esmc', 'esmc_finetuning', 'cvc'][2]
     embed_bld = get_cached_embeddings(positive_seqs, disease, name=f'{disease}_{cell_type}_{embed_type}_bld' + name_opt, embed_type=embed_type)
     embed_hlt = get_cached_embeddings(negative_seqs, "healthy", name=f'{cell_type}_{embed_type}_h' + name_opt, embed_type=embed_type)
 

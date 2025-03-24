@@ -2,6 +2,7 @@ import sys
 sys.path.append('other_models/CVC')
 import numpy as np
 import torch
+import torch.nn as nn
 from tqdm import tqdm
 from itertools import zip_longest
 from typing import *
@@ -14,8 +15,9 @@ from lab_notebooks.utils import TRANSFORMER
 warnings.simplefilter("ignore", category=FutureWarning)
 
 
-class CVCModel:
+class CVCModel(nn.Module):
     def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 1024):
+        super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
@@ -136,19 +138,28 @@ class CVCModel:
         return self.get_transformer_embeddings(seqs, batch_size=self.batch_size)
 
 
-class CVCClassifierModel:
+class CVCClassifierModel(nn.Module):
     def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 1024):
+        super().__init__()
         self.device = device
         self.model = CVCModel(model_dir, method, device, batch_size)
         self.batch_size = batch_size
         self.method = method
 
         # Add linear layers
-        self.linear = torch.nn.Linear(768, 2).to(device)
+        # self.linear = nn.Linear(768, 2).to(device)
+        hidden_dim, num_classes = (768 // 2), 2
+        self.linear = nn.Sequential(
+            nn.Linear(768, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
+        ).to(device)
 
     def __call__(self, seqs: List[str]):
         embeddings = self.model(seqs)  # Get transformer embeddings
-        logits = self.linear(embeddings)  # Pass through linear layer
+        logits = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
         return logits
 
     def predict(self, seqs: List[str]):

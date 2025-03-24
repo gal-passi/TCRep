@@ -24,13 +24,27 @@ def embed_cvc(seqs, to_mean=True):
     exit(0)
 
 
-def embed_esmc(seqs, batch_size=512, to_mean=True, model_type='esmc'):
-    # load model according to model type
-    if model_type == 'esmc':
-        from esm.models.esmc import ESMC
-        model = ESMC.from_pretrained("esmc_300m")
+class ESMCSingleTon:
+    model = None
+
+    @classmethod
+    def get_model(cls):
+        if cls.model is None:
+            from esm.models.esmc import ESMC
+            cls.model = ESMC.from_pretrained("esmc_300m")
+        return cls.model
+
+
+def embed_esmc(seqs, batch_size=512, to_mean=True, model_type='esmc', to_tqdm=True, use_pre_loaded=False):
+    if use_pre_loaded:
+        model = ESMCSingleTon.get_model()
     else:
-        model = load_fine_tuned_esmc("cache/esm_c_checkpoints")
+        # load model according to model type
+        if model_type == 'esmc':
+            from esm.models.esmc import ESMC
+            model = ESMC.from_pretrained("esmc_300m")
+        else:
+            model = load_fine_tuned_esmc("cache/esm_c_checkpoints")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = model.to(device)
     model.eval()
@@ -39,8 +53,10 @@ def embed_esmc(seqs, batch_size=512, to_mean=True, model_type='esmc'):
     # List to accumulate final embeddings
     all_embeds = []
     # Process in batches
-    # for start_idx in range(0, len(seqs), batch_size):  # add tqdm and specify the total
-    for start_idx in tqdm(range(0, len(seqs), batch_size), total=math.ceil(len(seqs) / batch_size)):
+    iterator = range(0, len(seqs), batch_size)
+    if to_tqdm:
+        iterator = tqdm(iterator, total=math.ceil(len(seqs) / batch_size))
+    for start_idx in iterator:
         end_idx = min(start_idx + batch_size, len(seqs))
         batch_seqs = seqs_np[start_idx:end_idx]
         with torch.no_grad():

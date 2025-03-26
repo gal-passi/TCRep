@@ -1,4 +1,6 @@
 import warnings
+from gc import freeze
+
 from triton.language.semantic import device_print
 warnings.simplefilter("ignore", category=FutureWarning)
 from Curation import Study
@@ -30,6 +32,8 @@ from torch.utils.data import Dataset, DataLoader
 import time
 import random
 import seaborn as sns
+from model_trainer import train_model, display_training_results
+import wandb
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -579,6 +583,7 @@ def common_aaseq_analysis(df, num_of_patients, lev_dist_accept=0, mode=1):
         percent_of_max = (num_common / max_sequences) * 100 if max_sequences > 0 else 0
         percent_of_total_values.append(percent_of_total)
         results.append({
+            'num_total_seqs': total_sequences,
             'num_common': num_common,
             'percent_of_total': percent_of_total,
             'percent_of_min': percent_of_min,
@@ -587,6 +592,7 @@ def common_aaseq_analysis(df, num_of_patients, lev_dist_accept=0, mode=1):
 
     # Calculate means
     mean_results = {
+        'num_total_seqs': sum(r['num_total_seqs'] for r in results) / len(results),
         'num_common': sum(r['num_common'] for r in results) / len(results),
         'percent_of_total': sum(r['percent_of_total'] for r in results) / len(results),
         'percent_of_min': sum(r['percent_of_min'] for r in results) / len(results),
@@ -619,6 +625,35 @@ def generate_patient_samples(df1, all_seqs_h: np.ndarray, patient_seqs_len: int)
 
     dfh = pd.DataFrame(data, columns=["patient_id", "AASeq"])
     return pd.concat([df1, dfh], ignore_index=True)
+
+
+# This function can be applied on x_healthy_list_all in the function below to get average values across all differently picked patients
+from collections import defaultdict
+def average_dicts(outer_list):
+    # The number of inner lists
+    num_inner_lists = len(outer_list)
+
+    # Initialize a list to store the averaged dictionaries
+    averaged_list = []
+
+    # Iterate through each inner list
+    for i in range(len(outer_list[0])):  # assuming all inner lists have the same length
+        # Initialize a defaultdict to accumulate values for each key
+        accumulator = defaultdict(int)
+
+        # Iterate through the outer list and accumulate the sum for each key in each dict
+        for inner_list in outer_list:
+            accumulator_dict = inner_list[i][0]  # Get the dict at index i
+            for key, value in accumulator_dict.items():
+                accumulator[key] += value
+
+        # Now average the values by dividing by the number of inner lists
+        averaged_dict = {key: value / num_inner_lists for key, value in accumulator.items()}
+
+        # Add the averaged dict to the result list
+        averaged_list.append(averaged_dict)
+
+    return averaged_list
 
 
 def display_common_sequences_figure(df, df_h, l=8, log_space=True):
@@ -848,120 +883,6 @@ def generate_neighbors(sequences, valid_letters):
     return neighbor_set
 
 
-def count_parameters(model):
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    percentage_trainable = (trainable_params / total_params) * 100 if total_params > 0 else 0
-
-    print(f"Total parameters: {total_params}")
-    print(f"Trainable parameters: {trainable_params}")
-    print(f"Percentage of trainable parameters: {percentage_trainable:.2f}%")
-
-
-# def train_model(model, train_pos_seqs, neg_seqs, epochs=10, lr=0.001, pos_batch_size=256, neg_pos_ratio=10):
-#     """
-#     Train a binary classification model with positive and negative sequences.
-#
-#     Args:
-#         model: The model that takes a list of strings and returns a tensor of shape (n, 2)
-#         train_pos_seqs: numpy array of positive sequences (strings)
-#         neg_seqs: numpy array of negative sequences (strings)
-#         epochs: Number of training epochs
-#         lr: Learning rate
-#         pos_batch_size: Number of positive samples per batch
-#         neg_pos_ratio: Ratio of negative to positive samples in each batch
-#
-#     Returns:
-#         Trained model and training statistics
-#     """
-#     # Set device
-#     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-#
-#     # Define loss function and optimizer
-#     criterion = nn.CrossEntropyLoss()
-#     optimizer = optim.Adam(model.parameters(), lr=lr)
-#
-#     # TODO: print num of parameters in CVCClassifier and in the model inside of it and in the model inside inside of it it.
-#     # count_parameters(model)
-#     # count_parameters(model.model)
-#     # count_parameters(model.model.model)
-#
-#     # Calculate number of batches
-#     num_pos_samples = len(train_pos_seqs)
-#     num_batches = num_pos_samples // pos_batch_size
-#     if num_pos_samples % pos_batch_size != 0:
-#         num_batches += 1
-#
-#     # Training statistics
-#     training_stats = {
-#         'epoch_losses': [],
-#         'epoch_accuracies': []
-#     }
-#
-#     # Training loop
-#     for epoch in range(epochs):
-#         model.train()
-#         epoch_loss = 0
-#         correct = 0
-#         total = 0
-#
-#         # Shuffle positive samples for this epoch
-#         pos_indices = np.arange(num_pos_samples)
-#         np.random.shuffle(pos_indices)
-#
-#         for batch_idx in range(num_batches):
-#             # Get positive samples for this batch
-#             start_idx = batch_idx * pos_batch_size
-#             end_idx = min((batch_idx + 1) * pos_batch_size, num_pos_samples)
-#             batch_pos_indices = pos_indices[start_idx:end_idx]
-#             batch_pos_samples = train_pos_seqs[batch_pos_indices]
-#
-#             # Get negative samples for this batch (without repetition)
-#             neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
-#             batch_neg_samples = np.random.choice(neg_seqs, size=neg_batch_size, replace=False)
-#
-#             # Combine positive and negative samples
-#             batch_samples = np.concatenate([batch_pos_samples, batch_neg_samples])
-#
-#             # Create labels: 1 for positive, 0 for negative
-#             batch_labels = torch.zeros(len(batch_samples), dtype=torch.long)
-#             batch_labels[:len(batch_pos_samples)] = 1
-#
-#             # Shuffle samples and labels together
-#             indices = torch.randperm(len(batch_samples))
-#             batch_samples = batch_samples[indices.numpy()]
-#             batch_labels = batch_labels[indices].to(device)
-#
-#             # Forward pass
-#             outputs = model(batch_samples)
-#
-#             # Calculate loss
-#             loss = criterion(outputs, batch_labels)
-#
-#             # Backward pass and optimize
-#             optimizer.zero_grad()
-#             loss.backward()
-#             optimizer.step()
-#
-#             # Update statistics
-#             epoch_loss += loss.item()
-#             _, predicted = torch.max(outputs.data, 1)
-#             total += batch_labels.size(0)
-#             correct += (predicted == batch_labels).sum().item()
-#
-#         # Calculate epoch statistics
-#         avg_loss = epoch_loss / num_batches
-#         accuracy = 100 * correct / total
-#
-#         training_stats['epoch_losses'].append(avg_loss)
-#         training_stats['epoch_accuracies'].append(accuracy)
-#
-#         print(f'Epoch {epoch + 1}/{epochs}, Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%')
-#
-#     return model, training_stats
-
-
 def plot_output_distribution(model, set_name, model_type, pos_seqs, neg_seqs=None, device='cuda'):
     model.to(device)
     model.eval()
@@ -978,11 +899,11 @@ def plot_output_distribution(model, set_name, model_type, pos_seqs, neg_seqs=Non
             neg_logits = model(neg_inputs)  # Shape: (N_neg, 2)
 
     # Convert logits to probabilities (Softmax\Sigmoid)
-    pos_probs = torch.sigmoid(pos_logits[:, 1]).cpu().numpy()  # Positive class probability
-    # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
+    # pos_probs = torch.sigmoid(pos_logits[:, 1]).cpu().numpy()  # Positive class probability
+    pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
     if neg_seqs is not None:
-        neg_probs = torch.sigmoid(neg_logits[:, 1]).cpu().numpy()  # Positive class probability
-        # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
+        # neg_probs = torch.sigmoid(neg_logits[:, 1]).cpu().numpy()  # Positive class probability
+        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
 
     # Plot histogram and KDE
     plt.figure(figsize=(8, 6))
@@ -1001,307 +922,170 @@ def plot_output_distribution(model, set_name, model_type, pos_seqs, neg_seqs=Non
     plt.show()
 
 
-def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                epochs=10, lr=0.001, pos_batch_size=256, neg_pos_ratio=10):
+def wand_init(model_type, epochs, batch_size, neg_pos_ratio, pos_weights, learning_rate, freeze_embed_model, device):
+    wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
+
+    # Start a new wandb run to track this script.
+    run = wandb.init(
+        entity="amir-weinfeld",  # Set the wandb entity where your project will be logged
+        project="TCRep",  # Set the wandb project where this run will be logged
+        config={
+            "model_type": model_type,
+            "epochs": epochs,
+            "batch_size": batch_size,
+            "neg_pos_ratio": neg_pos_ratio,
+            "pos_weights": pos_weights,
+            "learning_rate": learning_rate,
+            "freeze_embed_model": freeze_embed_model,
+            "device": device,
+        },
+    )
+    return run
+
+
+def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
+                                     valid_masks, positive_seqs, df_bld, patient_id_masks,
+                                     train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device='cuda'):
     """
-    Train a binary classification model with positive and negative sequences,
-    while validating on a separate validation set during training.
-
-    Args:
-        model: The model that takes a list of strings and returns logits of shape (n, 2)
-        train_pos_seqs: numpy array of positive sequences (strings)
-        neg_seqs: numpy array of negative sequences (strings)
-        valid_pos_seqs: numpy array of positive sequences for validation (strings)
-        valid_neg_seqs: numpy array of negative sequences for validation (strings)
-        epochs: Number of training epochs
-        lr: Learning rate
-        pos_batch_size: Number of positive samples per batch
-        neg_pos_ratio: Ratio of negative to positive samples in each batch
-
-    Returns:
-        Trained model and training history
+    Create a comprehensive visualization of model output distributions across validation,
+    training, and healthy patient sets.
+    Parameters:
+    - trained_model: The trained neural network model
+    - Various data-related parameters to extract sequences and patient sets
     """
-    # Set device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-
-    # Define loss function and optimizer
-    # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
-    pos_weight = neg_pos_ratio  # Adjust this weight as needed
-    class_weights = torch.tensor([1.0, pos_weight], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
-
-    optimizer = optim.Adam(model.parameters(), lr=lr)
-
-    # Calculate number of batches
-    num_pos_samples = len(train_pos_seqs)
-    num_batches = num_pos_samples // pos_batch_size
-    if num_pos_samples % pos_batch_size != 0:
-        num_batches += 1
-
-    # Training history
-    history = {
-        'train_loss': [],
-        'train_acc': [],
-        'val_loss': [],
-        'val_acc': [],
-        'val_auc': [],
-        'val_prauc': []
-    }
-
-    # Training loop
-    for epoch in range(epochs):
-        start_time = time.time()
-
-        # Train phase
-        model.train()
-        epoch_loss = 0
-        correct = 0
-        total = 0
-
-        # Shuffle positive samples for this epoch
-        pos_indices = np.arange(num_pos_samples)
-        np.random.shuffle(pos_indices)
-
-        for batch_idx in range(num_batches):
-            # Get positive samples for this batch
-            start_idx = batch_idx * pos_batch_size
-            end_idx = min((batch_idx + 1) * pos_batch_size, num_pos_samples)
-            batch_pos_indices = pos_indices[start_idx:end_idx]
-            batch_pos_samples = train_pos_seqs[batch_pos_indices]
-
-            # Get negative samples for this batch (without repetition)
-            neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
-            batch_neg_samples = np.random.choice(neg_seqs, size=neg_batch_size, replace=False)
-
-            # Combine positive and negative samples
-            batch_samples = np.concatenate([batch_pos_samples, batch_neg_samples])
-
-            # Create labels: 1 for positive, 0 for negative
-            batch_labels = torch.zeros(len(batch_samples), dtype=torch.long)
-            batch_labels[:len(batch_pos_samples)] = 1
-
-            # Shuffle samples and labels together
-            indices = torch.randperm(len(batch_samples))
-            batch_samples = batch_samples[indices.numpy()]
-            batch_labels = batch_labels[indices].to(device)
-
-            # Forward pass - get logits
-            logits = model(batch_samples)
-
-            # Calculate loss using raw logits (CrossEntropyLoss applies softmax internally)
-            loss = criterion(logits, batch_labels)
-
-            # Backward pass and optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            # For accuracy calculation, we need to get predictions from logits
-            probabilities = torch.softmax(logits, dim=1)
-            _, predicted = torch.max(probabilities, 1)
-
-            # Update statistics
-            epoch_loss += loss.item()
-            total += batch_labels.size(0)
-            correct += (predicted == batch_labels).sum().item()
-
-        # Calculate training statistics
-        train_loss = epoch_loss / num_batches
-        train_acc = 100 * correct / total
-
-        # Validation phase
-        val_loss, val_acc, val_auc, val_prauc = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
-
-        # Update history
-        history['train_loss'].append(train_loss)
-        history['train_acc'].append(train_acc)
-        history['val_loss'].append(val_loss)
-        history['val_acc'].append(val_acc)
-        history['val_auc'].append(val_auc)
-        history['val_prauc'].append(val_prauc)
-
-        # Calculate epoch time
-        epoch_time = time.time() - start_time
-
-        # Print epoch results
-        print(f'Epoch {epoch + 1}/{epochs} - {epoch_time:.2f}s - Loss: {train_loss:.4f} - Acc: {train_acc:.2f}% - '
-              f'Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2f}% - Val AUC: {val_auc:.4f} - Val PRAUC: {val_prauc:.4f}')
-
-    return model, history
-
-
-def evaluate_model(model, pos_seqs, neg_seqs, criterion=None, device=None):
-    """
-    Evaluate the model on positive and negative sequences.
-
-    Args:
-        model: The model to evaluate (returns logits)
-        pos_seqs: numpy array of positive sequences (strings)
-        neg_seqs: numpy array of negative sequences (strings)
-        criterion: Loss function (optional)
-        device: Torch device (optional)
-
-    Returns:
-        loss, accuracy, AUC, PR-AUC
-    """
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    if criterion is None:
-        criterion = nn.CrossEntropyLoss()
-
-    model.eval()
-
-    # Prepare data
-    all_samples = np.concatenate([pos_seqs, neg_seqs])
-    all_labels = torch.zeros(len(all_samples), dtype=torch.long)
-    all_labels[:len(pos_seqs)] = 1
-
-    # Shuffle
-    indices = torch.randperm(len(all_samples))
-    all_samples = all_samples[indices.numpy()]
-    all_labels = all_labels[indices].to(device)
-
-    with torch.no_grad():
-        # Forward pass to get logits
-        logits = model(all_samples)
-
-        # Calculate loss using raw logits
-        loss = criterion(logits, all_labels).item()
-
-        # Apply softmax to get probabilities
-        probabilities = torch.softmax(logits, dim=1)
-
-        # Calculate accuracy
-        _, predicted = torch.max(probabilities, 1)
-        total = all_labels.size(0)
-        correct = (predicted == all_labels).sum().item()
-        accuracy = 100 * correct / total
-
-        # Calculate AUC and PR-AUC
-        pos_probs = probabilities[:, 1].cpu().numpy()
-        true_labels = all_labels.cpu().numpy()
-
-        try:
-            roc_auc = roc_auc_score(true_labels, pos_probs)
-            precision, recall, _ = precision_recall_curve(true_labels, pos_probs)
-            pr_auc = auc(recall, precision)
-        except:
-            roc_auc = 0.5
-            pr_auc = 0.5
-
-    return loss, accuracy, roc_auc, pr_auc
-
-
-def display_training_results(history, model_type, figsize=(15, 10)):
-    """
-    Display training results with matplotlib.
-
-    Args:
-        history: Training history dictionary
-        figsize: Figure size (width, height)
-    """
-    plt.figure(figsize=figsize)
-
-    # Plot loss
-    plt.subplot(2, 2, 1)
-    plt.plot(history['train_loss'], label='Training Loss')
-    plt.plot(history['val_loss'], label='Validation Loss')
-    plt.title('Loss')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-
-    # Plot accuracy
-    plt.subplot(2, 2, 2)
-    plt.plot(history['train_acc'], label='Training Accuracy')
-    plt.plot(history['val_acc'], label='Validation Accuracy')
-    plt.title('Accuracy')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy (%)')
-    plt.legend()
-    plt.grid(True)
-
-    # Plot AUC
-    plt.subplot(2, 2, 3)
-    plt.plot(history['val_auc'], label='Validation AUC')
-    plt.title('ROC AUC')
-    plt.xlabel('Epoch')
-    plt.ylabel('AUC')
-    plt.legend()
-    plt.grid(True)
-
-    # Plot PR-AUC
-    plt.subplot(2, 2, 4)
-    plt.plot(history['val_prauc'], label='Validation PR-AUC')
-    plt.title('Precision-Recall AUC')
-    plt.xlabel('Epoch')
-    plt.ylabel('PR-AUC')
-    plt.legend()
-    plt.grid(True)
-
-    # Save and show figure
+    # Set up the figure with three subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
+    fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
+    # Color palettes for different sets
+    validation_colors = plt.cm.Blues(np.linspace(0.35, 0.95, len(valid_patient_inds)))
+    train_colors = plt.cm.Greens(np.linspace(0.35, 0.95, 3))
+    healthy_colors = plt.cm.Oranges(np.linspace(0.35, 0.95, 3))
+    # Subplot 1: Validation Set Distributions
+    ax1.set_title("Validation Set")
+    for i, patient_ind in enumerate(valid_patient_inds):
+        mask = (valid_masks[i] == 1)
+        pos_seqs = np.array(positive_seqs)[mask]
+        # Negative sequences for this patient
+        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            pos_logits = trained_model(pos_seqs)
+            neg_logits = trained_model(neg_seqs)
+        # Convert to probabilities
+        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for positive and negative samples
+        sns.kdeplot(pos_probs, ax=ax1, color=validation_colors[i], label=f'Pos Set {i}', fill=False)
+        sns.kdeplot(neg_probs, ax=ax1, color=validation_colors[i], linestyle='--', label=f'Neg Set {i}')
+    ax1.set_xlabel("Predicted Probability for Positive Class")
+    ax1.set_ylabel("Density")
+    ax1.legend()
+    # Subplot 2: Training Set Distributions
+    ax2.set_title("Training Set")
+    for i, patient_ind in enumerate(train_patient_inds[:3]):  # Limit to first 3 for visibility
+        mask_i = patient_id_masks[patient_ind]
+        mask = ((mask_i == 1) & train_inds)
+        pos_seqs = np.array(positive_seqs)[mask]
+        # Negative sequences for this patient
+        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            pos_logits = trained_model(pos_seqs)
+            neg_logits = trained_model(neg_seqs)
+        # Convert to probabilities
+        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for positive and negative samples
+        sns.kdeplot(pos_probs, ax=ax2, color=train_colors[i], label=f'Pos Set {i}', fill=False)
+        sns.kdeplot(neg_probs, ax=ax2, color=train_colors[i], linestyle='--', label=f'Neg Set {i}')
+    ax2.set_xlabel("Predicted Probability for Positive Class")
+    ax2.set_ylabel("Density")
+    ax2.legend()
+    # Subplot 3: Healthy Patients Distributions
+    ax3.set_title("Healthy Patients")
+    healthy_patients = df_hlt["patient_id"].unique()
+    for i in range(3):
+        patient = healthy_patients[i]
+        seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        seqs = np.random.choice(seqs, size=2000, replace=False)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            logits = trained_model(seqs)
+        # Convert to probabilities
+        probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for healthy patient samples
+        sns.kdeplot(probs, ax=ax3, color=healthy_colors[i], label=f'Healthy Set {i}', fill=False)
+    ax3.set_xlabel("Predicted Probability for Positive Class")
+    ax3.set_ylabel("Density")
+    ax3.legend()
+    # Save the plot
+    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
     plt.tight_layout()
-    os.makedirs(f"plots/{model_type}_model", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/training_results.png")
-    plt.show()
+    # plt.show()
+
+    # save the figure in wandb:
+    if log_wandb:
+        wandb.log({"output_distributions": wandb.Image(plt)})
 
 
 if __name__ == '__main__':
-    # from models.cvc_model import CVCModel
-    # device = "cuda" if torch.cuda.is_available() else "cpu"
-    # seqs = ['CSAQLMNTEAFF', 'CASSSAGTQYF']
-    # seqs2 = ['CSAQLNMTEAFF', 'CASSSGATQYF']
-    #
-    # # Embedding with wrapper
-    # from cvc.embbeding_wrapper import EmbeddingWrapper
-    # from lab_notebooks.utils import TRANSFORMER
-    # sequences_df = pd.DataFrame({"Sequences": seqs})
-    # embed_wrapper = EmbeddingWrapper(TRANSFORMER, device, sequences_df, batch_size=1024, method="mean", layers=[-1])
-    # embed_wrap = embed_wrapper.embeddings
-    #
-    # # Embedding myself
-    # cvc_model = CVCModel(batch_size=1024, device=device)
-    # embed_cvc = cvc_model(seqs)
-    # print(np.all(embed_wrap == embed_cvc.detach().numpy()))
-    # exit(0)
-
-    # fine-tune esm-c
-    # Load Sequences
-    # df = get_all_usable_disease_data(disease='Multiple sclerosis')
-    # df_h = get_all_usable_healthy_data()
-    # seqs_d = df["AASeq"].unique()
-    # seqs_h = df_h["AASeq"].unique()
-    # sequences = np.unique(np.concatenate([seqs_d, seqs_h]))
-    # sequences = np.sort(sequences)
-    # np.random.seed(42)
-    # sequences = np.random.permutation(sequences)
-    #
-    # # Fine-tune Process
-    # fine_tune_esmc(sequences, batch_size=512, num_epochs=20, learning_rate=5e-5,
-    #                checkpoint_dir="cache/esm_c_checkpoints", save_every=1, resume_from=None)
-    # model = load_fine_tuned_esmc("cache/esm_c_checkpoints")
-    # out1 = model(sequences=model.esmc_model._tokenize(np.array(["AAAAAA", "AAA"])))
-    # out2 = embed(np.array(["AAAAAA", "AAA"]), to_mean=False)
-    # exit(0)
-
-
     # get program arguments
+    model_types = ['ff', 'cvc', 'esmc']
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dist_option', type=int, default=1)
-    parser.add_argument('--k_fold_type', type=int, default=1)
+    parser.add_argument('--model_type', type=str, choices=model_types, default='ff', help='Type of model to train')
+    parser.add_argument('--epochs', type=int, default=6, help='Number of training epochs')
+    parser.add_argument('--batch_size', type=int, default=330, help='Batch size for training')
+    parser.add_argument('--neg_pos_ratio', type=int, default=10, help='Negative to positive sample ratio')
+    parser.add_argument('--pos_weights', type=float, default=3, help='Positive class weight for loss function')
+    parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for optimizer')
+    parser.add_argument('--freeze_embed_model', '-freeze', action='store_true', help='Freeze the embedding model (the classification layers are unfrozen)')
+    parser.add_argument('--no_wandb_log', '-nolog', action='store_true', help='Disable Weights & Biases logging')
     args = parser.parse_args()
-    dist_option = args.dist_option
-    k_fold_type = args.k_fold_type
-    print("RUN CONFIGURATION:")
-    print(f"\tdist_option: {dist_option}")
-    print(f"\tk_fold_type: {k_fold_type}")  # 0 - random, 1 - patient
-    print("\n")
-    np.random.seed(42)
 
-    name_opt = '_opt1' if dist_option == 1 else ''
+    model_type = args.model_type
+    epochs = args.epochs
+    batch_size = args.batch_size
+    neg_pos_ratio = args.neg_pos_ratio
+    pos_weights = args.pos_weights
+    learning_rate = args.learning_rate
+    freeze_embed_model = args.freeze_embed_model if model_type == 'cvc' else False  # Only CVC model can freeze the embedding model
+    log_wandb = not args.no_wandb_log
+
+    assert model_type in model_types, f"Model type must be one of {model_types}"
+
+    print("RUN CONFIGURATION:")
+    print(f"\tModel Type: {args.model_type}")
+    print(f"\tEpochs: {args.epochs}")
+    print(f"\tBatch Size: {args.batch_size}")
+    print(f"\tNegative to Positive Ratio: {args.neg_pos_ratio}")
+    print(f"\tPositive Class Weight: {args.pos_weights}")
+    print(f"\tLearning Rate: {args.learning_rate}")
+    print("\n")
+
+    np.random.seed(42)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # wandb init
+    if log_wandb:
+        run = wand_init(
+            model_type=model_type,
+            epochs=epochs,
+            batch_size=batch_size,
+            neg_pos_ratio=neg_pos_ratio,
+            pos_weights=pos_weights,
+            learning_rate=learning_rate,
+            freeze_embed_model=freeze_embed_model,
+            device=device,
+        )
 
     # Load studies
     disease = 'Multiple sclerosis'
@@ -1442,16 +1226,12 @@ if __name__ == '__main__':
     test_neg_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]['AASeq'].unique()
     valid_neg_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]['AASeq'].unique()
 
-    # TODO: Choose model type
-    model_types = ['ff', 'cvc', 'esmc']
-    model_type = model_types[2]
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
     if model_type == 'ff':
         max_seq_len = max(len(seq) for seq in positive_seqs)
         model = FeedForwardClassifier(max_seq_len)
     elif model_type == 'cvc':
-        model = CVCClassifierModel(batch_size=1024, device=device)
+        model = CVCClassifierModel(batch_size=batch_size, freeze_embed_model=freeze_embed_model, device=device)
+        # model = CVCClassifierModel(batch_size=1024 // 2, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
     else:
@@ -1465,40 +1245,50 @@ if __name__ == '__main__':
         trained_model.load_state_dict(torch.load(model_cache, map_location=device))
     else:
         # Training the model and saving it
-        trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, epochs=20)
+        trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                                             epochs=epochs,
+                                             lr=learning_rate,
+                                             pos_batch_size=batch_size // neg_pos_ratio,
+                                             neg_pos_ratio=neg_pos_ratio,
+                                             log_wandb=log_wandb)
         display_training_results(history, model_type)
         torch.save(trained_model.state_dict(), model_cache)
 
-    # Use the model to display the histogram of the output distribution on validation set
-    for i, patient_ind in enumerate(valid_patient_inds):
-        mask = (valid_masks[i] == 1)
-        pos_seqs = np.array(positive_seqs)[mask]
-        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+    # # Use the model to display the histogram of the output distribution on validation set
+    # for i, patient_ind in enumerate(valid_patient_inds):
+    #     mask = (valid_masks[i] == 1)
+    #     pos_seqs = np.array(positive_seqs)[mask]
+    #     neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+    #     neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+    #
+    #     plot_output_distribution(trained_model, f'Validation (set {i})', model_type, pos_seqs, neg_seqs, device=device)
+    #
+    # # Display of train set
+    # for i in range(3):
+    #     mask_i = patient_id_masks[train_patient_inds[i]]
+    #     mask = ((mask_i == 1) & train_inds)
+    #     pos_seqs = np.array(positive_seqs)[mask]
+    #     neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[train_patient_inds[i]], "AASeq"].values
+    #     neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+    #
+    #     plot_output_distribution(trained_model, f'Train (set {i})', model_type, pos_seqs, neg_seqs, device=device)
+    #
+    # # Display of healthy patients
+    # healthy_patients = df_hlt["patient_id"].unique()
+    # for i in range(3):
+    #     patient = healthy_patients[i]
+    #     seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+    #     seqs = np.random.choice(seqs, size=2000, replace=False)
+    #
+    #     plot_output_distribution(trained_model, f'Healthy (set {i})', model_type, seqs, neg_seqs=None, device=device)
 
-        plot_output_distribution(trained_model, f'Validation (set {i})', model_type, pos_seqs, neg_seqs, device=device)
+    plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
+                              valid_masks, positive_seqs, df_bld, patient_id_masks,
+                              train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device)
 
-    # Display of train set
-    for i in range(3):
-        mask_i = patient_id_masks[train_patient_inds[i]]
-        mask = ((mask_i == 1) & train_inds)
-        pos_seqs = np.array(positive_seqs)[mask]
-        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[train_patient_inds[i]], "AASeq"].values
-        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
+    exit(0)
 
-        plot_output_distribution(trained_model, f'Train (set {i})', model_type, pos_seqs, neg_seqs, device=device)
-
-    # Display of healthy patients
-    healthy_patients = df_hlt["patient_id"].unique()
-    for i in range(3):
-        patient = healthy_patients[i]
-        seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-        seqs = np.random.choice(seqs, size=2000, replace=False)
-
-        plot_output_distribution(trained_model, f'Healthy (set {i})', model_type, seqs, neg_seqs=None, device=device)
-
-    exit(0)  # TODO: THIS EXIT IS HERE BECAUSE WE ARE FOCUSING ON TRAINING A CLASSIFICATION MODEL!!! REMOVE IT LATER TO CONTINUE!!!
-
+    """
     # Calculating embeddings (or loading if it is available)
     embed_type = ['esmc', 'esmc_finetuning', 'cvc'][2]
     embed_bld = get_cached_embeddings(positive_seqs, disease, name=f'{disease}_{cell_type}_{embed_type}_bld' + name_opt, embed_type=embed_type)
@@ -1545,3 +1335,4 @@ if __name__ == '__main__':
                                                  ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
                                                  study_name=disease)
         print(f"{cell_type} - KNN {n_neighbors} neighbours ({len(patient_id_masks)}-Fold): Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
+    """

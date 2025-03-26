@@ -16,12 +16,12 @@ warnings.simplefilter("ignore", category=FutureWarning)
 
 
 class CVCModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 1024):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
         super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
-        self.freeze_bert_layers()
+        self.freeze_bert_layers(freeze_embed_model)
         self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool"
         self.batch_size = batch_size
 
@@ -120,7 +120,13 @@ class CVCModel(nn.Module):
         embeddings = torch.cat(embeddings)
         return embeddings
 
-    def freeze_bert_layers(self):
+    def freeze_bert_layers(self, freeze_embed_model: bool):
+        if freeze_embed_model:
+            # Freeze the embeddings (word, position, token type)
+            for param in self.model.parameters():
+                param.requires_grad = False
+            return
+
         # Freeze the embeddings (word, position, token type)
         for param in self.model.embeddings.parameters():
             param.requires_grad = False
@@ -134,15 +140,15 @@ class CVCModel(nn.Module):
             for param in self.model.encoder.layer[i].parameters():
                 param.requires_grad = True
 
-    def __call__(self, seqs: List[str]):
+    def forward(self, seqs: List[str]):
         return self.get_transformer_embeddings(seqs, batch_size=self.batch_size)
 
 
 class CVCClassifierModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 1024):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
         super().__init__()
         self.device = device
-        self.model = CVCModel(model_dir, method, device, batch_size)
+        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model)
         self.batch_size = batch_size
         self.method = method
 
@@ -157,9 +163,35 @@ class CVCClassifierModel(nn.Module):
             nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
         ).to(device)
 
-    def __call__(self, seqs: List[str]):
+    def forward(self, seqs: List[str]):
         embeddings = self.model(seqs)  # Get transformer embeddings
         logits = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
+
+        # from transformers import BertConfig, BertForMaskedLM
+        # kwargs = {'hidden_size': 768, 'num_hidden_layers': 12, 'num_attention_heads': 12, 'intermediate_size': 3072, 'hidden_act': 'gelu', 'hidden_dropout_prob': 0.1, 'attention_probs_dropout_prob': 0.1, 'max_position_embeddings': 512, 'type_vocab_size': 2, 'initializer_range': 0.02, 'position_embedding_type': 'absolute'}
+        # config = BertConfig(
+        #     **kwargs,
+        #     vocab_size=len(ft.AMINO_ACIDS_WITH_ALL_ADDITIONAL),
+        #     pad_token_id=ft.AMINO_ACIDS_WITH_ALL_ADDITIONAL_TO_IDX[ft.PAD],
+        # )
+        # model = BertForMaskedLM(config)
+
+        # set the state of the model to the state of the pretrained model
+        # model.load_state_dict(self.model.model.state_dict())
+        # self.model.model = model
+        # embeddings2 = self.model(seqs[:10])  # Get transformer embeddings
+        # logits2 = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
+
+        # max_len: int = 64
+        # seqs2 = [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seqs]
+        # encoded = self.model.tok(
+        #     *seqs2, padding="max_length", max_length=max_len, return_tensors="pt"
+        # )
+        # encoded = {k: v.to(self.device) for k, v in encoded.items()}
+        #
+        # x = model.forward(**encoded, output_hidden_states=True, output_attentions=True)
+        # out = model(seqs[:10])
+
         return logits
 
     def predict(self, seqs: List[str]):

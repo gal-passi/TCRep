@@ -1,8 +1,0 @@
-Curation:
-    1. after we finish with tcrdb for add a parameter to each sample of whether they came from the same patient and update for relevant studies. 
-    2. we need to decide whether we want to aggregate different samples from the same tumor
-
-Organ Classification task:
-    1. 	Use untrained ESM-2 for classification
-    2.  Use normally fine-tuned ESM-2 for classification
-    3.  Use contrastive learning ESM-2 for classification 

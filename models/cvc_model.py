@@ -133,12 +133,12 @@ class CVCModel(nn.Module):
 
         # Freeze all Bert layers except the last 4
         for i, layer in enumerate(self.model.encoder.layer):
-            if i < 8:  # Freeze first 8 layers (0 to 7)
+            if i < 9:  # Freeze first 9 layers (0 to 8)
                 for param in layer.parameters():
                     param.requires_grad = False
 
-        # Keep the last 4 layers (8 to 11) trainable
-        for i in range(8, 12):
+        # Keep the last 3 layers (9 to 11) trainable
+        for i in range(9, 12):
             for param in self.model.encoder.layer[i].parameters():
                 param.requires_grad = True
 
@@ -153,6 +153,7 @@ class CVCClassifierModel(nn.Module):
         self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model)
         self.batch_size = batch_size
         self.method = method
+        dropout_rate = 0.2
 
         # Add linear layers
         # self.linear = nn.Linear(768, 2).to(device)
@@ -160,8 +161,10 @@ class CVCClassifierModel(nn.Module):
         self.linear = nn.Sequential(
             nn.Linear(768, hidden_dim),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),  # Add dropout after first layer
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
+            nn.Dropout(dropout_rate),  # Add another dropout layer
             nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
         ).to(device)
 

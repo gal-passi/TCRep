@@ -8,25 +8,9 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 import time
 import wandb
+from cache_handler import save_model_state
 
 
-def save_model_state(model, args, epoch):
-    # Define the base save directory
-    base_dir = "cache/models"
-    os.makedirs(base_dir, exist_ok=True)
-
-    # Create a readable folder name based on the model configuration
-    config_str = f"{args.model_type}_loss-{args.loss_type}_epochs-{args.epochs}_" \
-                 f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
-                 f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
-    save_dir = os.path.join(base_dir, config_str)
-    os.makedirs(save_dir, exist_ok=True)
-
-    # Define the save path for the model state_dict
-    model_save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pth")
-
-    # Save the model state_dict
-    torch.save(model.state_dict(), model_save_path)
 
 
 # Costume loss with L2 regularization term
@@ -122,7 +106,7 @@ def print_trainable_parameters(model):
 
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                log_wandb, model_type, loss_type, freeze_embed_model, special_criterion, args,
+                log_wandb, model_type, loss_type, freeze_embed_model, special_criterion, reg_coef, args,
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -157,13 +141,13 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     if loss_type == "ce":
         criterion = nn.CrossEntropyLoss(weight=class_weights)
     else:
-        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=0.1)
+        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef)
 
     if model_type == "cvc" and not freeze_embed_model and special_criterion:
         encoder_lr = 5e-5  # this is the default learning rate for BERT
         classification_head_lr = lr
         optimizer = optim.Adam([
-            {'params': model.model.model.encoder.layer[8:].parameters(), 'lr': encoder_lr},  # Later layers
+            {'params': model.model.model.encoder.layer[9:].parameters(), 'lr': encoder_lr},  # Later layers
             {'params': model.linear.parameters(), 'lr': classification_head_lr}  # Classification head
         ])
     else:

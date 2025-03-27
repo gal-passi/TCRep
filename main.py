@@ -34,6 +34,8 @@ import random
 import seaborn as sns
 from model_trainer import train_model, display_training_results
 import wandb
+from cache_handler import load_model_state
+from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -58,7 +60,7 @@ TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
-TO_RETRAIN_CLASSIFIER_MODEL = True
+TO_RETRAIN_CLASSIFIER_MODEL = False
 
 
 def get_all_usable_healthy_data():
@@ -883,45 +885,6 @@ def generate_neighbors(sequences, valid_letters):
     return neighbor_set
 
 
-def plot_output_distribution(model, set_name, model_type, pos_seqs, neg_seqs=None, device='cuda'):
-    model.to(device)
-    model.eval()
-
-    # Convert sequences to tensors and move to device
-    pos_inputs = pos_seqs
-    if neg_seqs is not None:
-        neg_inputs = neg_seqs
-
-    # Get model outputs (logits)
-    with torch.no_grad():
-        pos_logits = model(pos_inputs)  # Shape: (N_pos, 2)
-        if neg_seqs is not None:
-            neg_logits = model(neg_inputs)  # Shape: (N_neg, 2)
-
-    # Convert logits to probabilities (Softmax\Sigmoid)
-    # pos_probs = torch.sigmoid(pos_logits[:, 1]).cpu().numpy()  # Positive class probability
-    pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
-    if neg_seqs is not None:
-        # neg_probs = torch.sigmoid(neg_logits[:, 1]).cpu().numpy()  # Positive class probability
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()  # Positive class probability
-
-    # Plot histogram and KDE
-    plt.figure(figsize=(8, 6))
-    sns.histplot(pos_probs, bins=30, kde=True, color='blue', label="Positive Samples", stat="density", alpha=0.6)
-    if neg_seqs is not None:
-        sns.histplot(neg_probs, bins=30, kde=True, color='red', label="Negative Samples", stat="density", alpha=0.6)
-
-    plt.xlabel("Predicted Probability for Positive Class")
-    plt.ylabel("Density")
-    plt.title(f"Distribution of Model Outputs on {set_name} Set")
-    plt.legend()
-
-    # Save the plot
-    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/dist_model_output/{set_name}.png")
-    plt.show()
-
-
 def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights, learning_rate, reg_coef, freeze_embed_model, special_criterion, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
@@ -942,240 +905,9 @@ def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weig
             "special_criterion": special_criterion,
             "device": device,
         },
+        notes="Added dropout on classification head of 0.2",
     )
     return run
-
-
-def kde_normalizer(kde):
-    for line in kde.get_lines():
-        y_data = line.get_ydata()
-        line.set_ydata(y_data / y_data.max())  # Normalize to max value of 1
-
-
-def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
-                                     valid_masks, positive_seqs, df_bld, patient_id_masks,
-                                     train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device='cuda'):
-    """
-    Create a comprehensive visualization of model output distributions across validation,
-    training, and healthy patient sets.
-    Parameters:
-    - trained_model: The trained neural network model
-    - Various data-related parameters to extract sequences and patient sets
-    """
-    # Set up the figure with three subplots
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 6))
-    fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
-    # Color palettes for different sets
-    validation_colors = plt.cm.Blues(np.linspace(0.35, 0.95, len(valid_patient_inds)))
-    train_colors = plt.cm.Greens(np.linspace(0.35, 0.95, 3))
-    healthy_colors = plt.cm.Oranges(np.linspace(0.35, 0.95, 3))
-    # Subplot 1: Validation Set Distributions
-    ax1.set_title("Validation Set")
-    for i, patient_ind in enumerate(valid_patient_inds):
-        mask = (valid_masks[i] == 1)
-        pos_seqs = np.array(positive_seqs)[mask]
-        # Negative sequences for this patient
-        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        neg_seqs = np.unique(neg_seqs)
-        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            pos_logits = trained_model(pos_seqs)
-            neg_logits = trained_model(neg_seqs)
-        # Convert to probabilities
-        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for positive and negative samples
-        kde = sns.kdeplot(pos_probs, ax=ax1, color=validation_colors[i], label=f'Pos Set {i}', common_norm=True)
-        kde_normalizer(kde)
-        kde = sns.kdeplot(neg_probs, ax=ax1, color=validation_colors[i], linestyle='--', label=f'Neg Set {i}', common_norm=True)
-        kde_normalizer(kde)
-    ax1.set_xlabel("Predicted Probability for Positive Class")
-    ax1.set_ylabel("Density")
-    ax1.set_ylim(0, 1.1)
-    ax1.legend()
-    # Subplot 2: Training Set Distributions
-    ax2.set_title("Training Set")
-    for i, patient_ind in enumerate(train_patient_inds[:3]):  # Limit to first 3 for visibility
-        mask_i = patient_id_masks[patient_ind]
-        mask = ((mask_i == 1) & train_inds)
-        pos_seqs = np.array(positive_seqs)[mask]
-        # Negative sequences for this patient
-        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        neg_seqs = np.unique(neg_seqs)
-        neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            pos_logits = trained_model(pos_seqs)
-            neg_logits = trained_model(neg_seqs)
-        # Convert to probabilities
-        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for positive and negative samples
-        kde = sns.kdeplot(pos_probs, ax=ax2, color=train_colors[i], label=f'Pos Set {i}', common_norm=True)
-        kde_normalizer(kde)
-        kde = sns.kdeplot(neg_probs, ax=ax2, color=train_colors[i], linestyle='--', label=f'Neg Set {i}', common_norm=True)
-        kde_normalizer(kde)
-    ax2.set_xlabel("Predicted Probability for Positive Class")
-    ax2.set_ylabel("Density")
-    ax2.set_ylim(0, 1.1)
-    ax2.legend()
-    # Subplot 3: Healthy Patients Distributions
-    ax3.set_title("Healthy Patients")
-    healthy_patients = df_hlt["patient_id"].unique()
-    for i in range(3):
-        patient = healthy_patients[i]
-        seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-        seqs = np.unique(seqs)
-        seqs = np.random.choice(seqs, size=min(10000, len(seqs)), replace=False)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            logits = trained_model(seqs)
-        # Convert to probabilities
-        probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for healthy patient samples
-        kde = sns.kdeplot(probs, ax=ax3, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
-        kde_normalizer(kde)
-    ax3.set_xlabel("Predicted Probability for Positive Class")
-    ax3.set_ylabel("Density")
-    ax3.set_ylim(0, 1.1)
-    ax3.legend()
-    # Save the plot
-    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
-    plt.tight_layout()
-
-    # save the figure in wandb:
-    if log_wandb:
-        wandb.log({"output_distributions": wandb.Image(plt)})
-    else:
-        plt.show()
-
-
-def plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                          test_masks, valid_masks, positive_seqs, df_bld,
-                                          df_hlt, model_type, log_wandb, device='cuda'):
-    """
-    Create a comprehensive visualization of model output distributions across validation,
-    training, and healthy patient sets.
-    Parameters:
-    - trained_model: The trained neural network model
-    - Various data-related parameters to extract sequences and patient sets
-    """
-    # Set up the figure with three subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-    fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
-
-    # Create new test_inds which is all test_patient_inds and one from valid_patient_inds
-    test_inds = np.concatenate([test_patient_inds, [valid_patient_inds[0]]])
-    # And create a new test_mask which contains both
-    test_masks = np.concatenate((test_masks, valid_masks[0].reshape(1, -1)), axis=0)
-
-    # Color palettes for different sets
-    min_color, max_color = 0.4, 0.8
-    test_pos_colors = plt.cm.Greens(np.linspace(min_color, max_color, len(test_inds)))
-    test_neg_colors = plt.cm.Reds(np.linspace(min_color, max_color, len(test_inds)))
-    test_colors = plt.cm.Purples(np.linspace(min_color, max_color, len(test_inds)))
-    healthy_colors = plt.cm.Oranges(np.linspace(min_color, max_color, len(test_inds)))
-
-    # Subplot 1: Validation Set Distributions
-    ax1.set_title("Test Set Positives and Negatives")
-    for i, patient_ind in enumerate(test_inds):
-        mask = (test_masks[i] == 1)
-        pos_seqs = np.array(positive_seqs)[mask]
-        # Negative sequences for this patient
-        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        neg_seqs = np.unique(neg_seqs)
-        # make sure that all pos_seqs are in neg_seqs
-        assert np.all(np.isin(pos_seqs, neg_seqs)), f"Positives are not in negatives for patient {patient_ind}"
-        # Make sure that there are no sequences in the negative set that are in the positive set
-        neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            pos_logits = trained_model(pos_seqs)
-            neg_logits = trained_model(neg_seqs)
-        # Convert to probabilities
-        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for positive and negative samples
-        kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
-        kde_normalizer(kde)
-        kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
-        kde_normalizer(kde)
-    ax1.set_xlabel("Predicted Probability for Positive Class")
-    ax1.set_ylabel("Density")
-    ax1.set_ylim(0, 1.1)
-    ax1.legend()
-
-    # Subplot 2: Healthy Patients Distributions
-    ax2.set_title("Healthy vs Ill Patients")
-    healthy_patients = df_hlt["patient_id"].unique()
-    np.random.shuffle(healthy_patients)
-    for i, patient_ind in enumerate(test_inds):
-        patient = healthy_patients[i]
-        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-        healthy_seqs = np.unique(healthy_seqs)
-        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        disease_seqs = np.unique(disease_seqs)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            healthy_logits = trained_model(healthy_seqs)
-            disease_logits = trained_model(disease_seqs)
-        # Convert to probabilities
-        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for healthy patient samples
-        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
-        kde_normalizer(kde)
-        kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
-        kde_normalizer(kde)
-    ax2.set_xlabel("Predicted Probability for Positive Class")
-    ax2.set_ylabel("Density")
-    ax2.set_ylim(0, 1.1)
-    ax2.legend()
-    # Save the plot
-    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
-    plt.tight_layout()
-
-    # save the figure in wandb:
-    if log_wandb:
-        wandb.log({"output_distributions_per_patient": wandb.Image(plt)})
-    else:
-        plt.show()
-
-
-# TODO: Move this and save_model_state (from model_trainer.py) to a new file!
-def load_model_state(model, args, epoch, device):
-    # Define the base directory
-    base_dir = "cache/models"
-
-    # Create the expected folder name based on model configuration
-    config_str = f"{args.model_type}_loss-{args.loss_type}_epochs-{args.epochs}_" \
-                 f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
-                 f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
-    save_dir = os.path.join(base_dir, config_str)
-
-    # Define the expected model save path
-    model_save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pth")
-
-    # Load the model if the file exists
-    if os.path.exists(model_save_path):
-        model.load_state_dict(torch.load(model_save_path, map_location=device))
-        return model
-    else:
-        print("No saved model found for the given epoch and configuration.")
-        return None
 
 
 if __name__ == '__main__':
@@ -1421,6 +1153,7 @@ if __name__ == '__main__':
                                              loss_type=loss_type,
                                              freeze_embed_model=freeze_embed_model,
                                              special_criterion=special_criterion,
+                                             reg_coef=reg_coef,
                                              args=args,
                                              )
         display_training_results(history, model_type)

@@ -922,7 +922,7 @@ def plot_output_distribution(model, set_name, model_type, pos_seqs, neg_seqs=Non
     plt.show()
 
 
-def wand_init(model_type, epochs, batch_size, neg_pos_ratio, pos_weights, learning_rate, freeze_embed_model, device):
+def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights, learning_rate, reg_coef, freeze_embed_model, special_criterion, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -931,16 +931,25 @@ def wand_init(model_type, epochs, batch_size, neg_pos_ratio, pos_weights, learni
         project="TCRep",  # Set the wandb project where this run will be logged
         config={
             "model_type": model_type,
+            "loss_type": loss_type,
             "epochs": epochs,
             "batch_size": batch_size,
             "neg_pos_ratio": neg_pos_ratio,
             "pos_weights": pos_weights,
             "learning_rate": learning_rate,
+            "reg_coef": reg_coef,
             "freeze_embed_model": freeze_embed_model,
+            "special_criterion": special_criterion,
             "device": device,
         },
     )
     return run
+
+
+def kde_normalizer(kde):
+    for line in kde.get_lines():
+        y_data = line.get_ydata()
+        line.set_ydata(y_data / y_data.max())  # Normalize to max value of 1
 
 
 def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
@@ -967,6 +976,7 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         pos_seqs = np.array(positive_seqs)[mask]
         # Negative sequences for this patient
         neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.unique(neg_seqs)
         neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
         # Get model outputs
         trained_model.to(device)
@@ -978,10 +988,13 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
         neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for positive and negative samples
-        sns.kdeplot(pos_probs, ax=ax1, color=validation_colors[i], label=f'Pos Set {i}', fill=False)
-        sns.kdeplot(neg_probs, ax=ax1, color=validation_colors[i], linestyle='--', label=f'Neg Set {i}')
+        kde = sns.kdeplot(pos_probs, ax=ax1, color=validation_colors[i], label=f'Pos Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(neg_probs, ax=ax1, color=validation_colors[i], linestyle='--', label=f'Neg Set {i}', common_norm=True)
+        kde_normalizer(kde)
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
+    ax1.set_ylim(0, 1.1)
     ax1.legend()
     # Subplot 2: Training Set Distributions
     ax2.set_title("Training Set")
@@ -991,6 +1004,7 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         pos_seqs = np.array(positive_seqs)[mask]
         # Negative sequences for this patient
         neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.unique(neg_seqs)
         neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
         # Get model outputs
         trained_model.to(device)
@@ -1002,10 +1016,13 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
         neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for positive and negative samples
-        sns.kdeplot(pos_probs, ax=ax2, color=train_colors[i], label=f'Pos Set {i}', fill=False)
-        sns.kdeplot(neg_probs, ax=ax2, color=train_colors[i], linestyle='--', label=f'Neg Set {i}')
+        kde = sns.kdeplot(pos_probs, ax=ax2, color=train_colors[i], label=f'Pos Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(neg_probs, ax=ax2, color=train_colors[i], linestyle='--', label=f'Neg Set {i}', common_norm=True)
+        kde_normalizer(kde)
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
+    ax2.set_ylim(0, 1.1)
     ax2.legend()
     # Subplot 3: Healthy Patients Distributions
     ax3.set_title("Healthy Patients")
@@ -1013,7 +1030,8 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
     for i in range(3):
         patient = healthy_patients[i]
         seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-        seqs = np.random.choice(seqs, size=2000, replace=False)
+        seqs = np.unique(seqs)
+        seqs = np.random.choice(seqs, size=min(10000, len(seqs)), replace=False)
         # Get model outputs
         trained_model.to(device)
         trained_model.eval()
@@ -1022,53 +1040,190 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         # Convert to probabilities
         probs = torch.softmax(logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for healthy patient samples
-        sns.kdeplot(probs, ax=ax3, color=healthy_colors[i], label=f'Healthy Set {i}', fill=False)
+        kde = sns.kdeplot(probs, ax=ax3, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
     ax3.set_xlabel("Predicted Probability for Positive Class")
     ax3.set_ylabel("Density")
+    ax3.set_ylim(0, 1.1)
     ax3.legend()
     # Save the plot
     os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
     plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
     plt.tight_layout()
-    # plt.show()
 
     # save the figure in wandb:
     if log_wandb:
         wandb.log({"output_distributions": wandb.Image(plt)})
+    else:
+        plt.show()
+
+
+def plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                          test_masks, valid_masks, positive_seqs, df_bld,
+                                          df_hlt, model_type, log_wandb, device='cuda'):
+    """
+    Create a comprehensive visualization of model output distributions across validation,
+    training, and healthy patient sets.
+    Parameters:
+    - trained_model: The trained neural network model
+    - Various data-related parameters to extract sequences and patient sets
+    """
+    # Set up the figure with three subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
+
+    # Create new test_inds which is all test_patient_inds and one from valid_patient_inds
+    test_inds = np.concatenate([test_patient_inds, [valid_patient_inds[0]]])
+    # And create a new test_mask which contains both
+    test_masks = np.concatenate((test_masks, valid_masks[0].reshape(1, -1)), axis=0)
+
+    # Color palettes for different sets
+    min_color, max_color = 0.4, 0.8
+    test_pos_colors = plt.cm.Greens(np.linspace(min_color, max_color, len(test_inds)))
+    test_neg_colors = plt.cm.Reds(np.linspace(min_color, max_color, len(test_inds)))
+    test_colors = plt.cm.Purples(np.linspace(min_color, max_color, len(test_inds)))
+    healthy_colors = plt.cm.Oranges(np.linspace(min_color, max_color, len(test_inds)))
+
+    # Subplot 1: Validation Set Distributions
+    ax1.set_title("Test Set Positives and Negatives")
+    for i, patient_ind in enumerate(test_inds):
+        mask = (test_masks[i] == 1)
+        pos_seqs = np.array(positive_seqs)[mask]
+        # Negative sequences for this patient
+        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.unique(neg_seqs)
+        # make sure that all pos_seqs are in neg_seqs
+        assert np.all(np.isin(pos_seqs, neg_seqs)), f"Positives are not in negatives for patient {patient_ind}"
+        # Make sure that there are no sequences in the negative set that are in the positive set
+        neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            pos_logits = trained_model(pos_seqs)
+            neg_logits = trained_model(neg_seqs)
+        # Convert to probabilities
+        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for positive and negative samples
+        kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
+        kde_normalizer(kde)
+        kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
+        kde_normalizer(kde)
+    ax1.set_xlabel("Predicted Probability for Positive Class")
+    ax1.set_ylabel("Density")
+    ax1.set_ylim(0, 1.1)
+    ax1.legend()
+
+    # Subplot 2: Healthy Patients Distributions
+    ax2.set_title("Healthy vs Ill Patients")
+    healthy_patients = df_hlt["patient_id"].unique()
+    np.random.shuffle(healthy_patients)
+    for i, patient_ind in enumerate(test_inds):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        disease_seqs = np.unique(disease_seqs)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+            disease_logits = trained_model(disease_seqs)
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for healthy patient samples
+        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
+        kde_normalizer(kde)
+    ax2.set_xlabel("Predicted Probability for Positive Class")
+    ax2.set_ylabel("Density")
+    ax2.set_ylim(0, 1.1)
+    ax2.legend()
+    # Save the plot
+    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
+    plt.tight_layout()
+
+    # save the figure in wandb:
+    if log_wandb:
+        wandb.log({"output_distributions_per_patient": wandb.Image(plt)})
+    else:
+        plt.show()
+
+
+# TODO: Move this and save_model_state (from model_trainer.py) to a new file!
+def load_model_state(model, args, epoch, device):
+    # Define the base directory
+    base_dir = "cache/models"
+
+    # Create the expected folder name based on model configuration
+    config_str = f"{args.model_type}_loss-{args.loss_type}_epochs-{args.epochs}_" \
+                 f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
+                 f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
+    save_dir = os.path.join(base_dir, config_str)
+
+    # Define the expected model save path
+    model_save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pth")
+
+    # Load the model if the file exists
+    if os.path.exists(model_save_path):
+        model.load_state_dict(torch.load(model_save_path, map_location=device))
+        return model
+    else:
+        print("No saved model found for the given epoch and configuration.")
+        return None
 
 
 if __name__ == '__main__':
     # get program arguments
     model_types = ['ff', 'cvc', 'esmc']
+    loss_types = ['ce', 'ce_l2', 'ce_entropy']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='ff', help='Type of model to train')
-    parser.add_argument('--epochs', type=int, default=6, help='Number of training epochs')
+    parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=330, help='Batch size for training')
     parser.add_argument('--neg_pos_ratio', type=int, default=10, help='Negative to positive sample ratio')
     parser.add_argument('--pos_weights', type=float, default=3, help='Positive class weight for loss function')
     parser.add_argument('--learning_rate', type=float, default=0.0005, help='Learning rate for optimizer')
+    parser.add_argument('--regularization_coefficient', '--reg_coef', type=float, default=0.25, help='Coefficient for the regularization term')
     parser.add_argument('--freeze_embed_model', '-freeze', action='store_true', help='Freeze the embedding model (the classification layers are unfrozen)')
+    parser.add_argument('--special_criterion', '-scrit', action='store_true', help='Using a more complex criterion for the model (different lrs)')
     parser.add_argument('--no_wandb_log', '-nolog', action='store_true', help='Disable Weights & Biases logging')
     args = parser.parse_args()
 
     model_type = args.model_type
+    loss_type = args.loss_type
     epochs = args.epochs
     batch_size = args.batch_size
     neg_pos_ratio = args.neg_pos_ratio
     pos_weights = args.pos_weights
     learning_rate = args.learning_rate
+    reg_coef = args.regularization_coefficient if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
     freeze_embed_model = args.freeze_embed_model if model_type == 'cvc' else False  # Only CVC model can freeze the embedding model
+    special_criterion = args.special_criterion
     log_wandb = not args.no_wandb_log
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
+    assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
+    assert not (freeze_embed_model and special_criterion), "Cannot use both freeze_embed_model and special_criterion"
+    assert not (freeze_embed_model and model_type != 'cvc'), "Only CVC model can freeze the embedding model"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
+    print(f"\tLoss Type: {args.loss_type}")
     print(f"\tEpochs: {args.epochs}")
     print(f"\tBatch Size: {args.batch_size}")
     print(f"\tNegative to Positive Ratio: {args.neg_pos_ratio}")
     print(f"\tPositive Class Weight: {args.pos_weights}")
     print(f"\tLearning Rate: {args.learning_rate}")
+    print(f"\tRegularization Coefficient: {args.regularization_coefficient}")
+    print(f"\tFreeze Embedding Model: {args.freeze_embed_model}")
+    print(f"\tSpecial Criterion: {args.special_criterion}")
     print("\n")
 
     np.random.seed(42)
@@ -1078,12 +1233,15 @@ if __name__ == '__main__':
     if log_wandb:
         run = wand_init(
             model_type=model_type,
+            loss_type=loss_type,
             epochs=epochs,
             batch_size=batch_size,
             neg_pos_ratio=neg_pos_ratio,
             pos_weights=pos_weights,
             learning_rate=learning_rate,
+            reg_coef=reg_coef,
             freeze_embed_model=freeze_embed_model,
+            special_criterion=special_criterion,
             device=device,
         )
 
@@ -1176,6 +1334,7 @@ if __name__ == '__main__':
 
     # getting patient id masks in order to do k-fold by patient (according to synovial samples)
     unique_patient_ids = df_bld["patient_id"].unique()
+    unique_patient_ids = np.random.permutation(unique_patient_ids)
     masks = []
     for patient in unique_patient_ids:
         # Get sequences that belong to the current patient
@@ -1189,7 +1348,6 @@ if __name__ == '__main__':
 
     # pick index of 10 unique patients from unique_patient_ids as test patients and the rest as train patients
     num_test_patients = 8
-    unique_patient_ids = np.random.permutation(unique_patient_ids)
     test_patient_ids = unique_patient_ids[:num_test_patients]
     test_patient_ids, valid_patient_ids = test_patient_ids[:num_test_patients // 2], test_patient_ids[num_test_patients // 2:]
     train_patient_ids = unique_patient_ids[num_test_patients:]
@@ -1198,7 +1356,7 @@ if __name__ == '__main__':
     valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
     train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
 
-    # get the masks for the test and train patients
+    # Get the masks for the test and train patients
     test_masks = patient_id_masks[test_patient_inds]
     valid_masks = patient_id_masks[valid_patient_inds]
     train_masks = patient_id_masks[train_patient_inds]
@@ -1225,66 +1383,57 @@ if __name__ == '__main__':
     neg_seqs = df_bld[df_bld['patient_id'].isin(train_patient_ids)]['AASeq'].unique()
     test_neg_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]['AASeq'].unique()
     valid_neg_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]['AASeq'].unique()
+    # Get all sequences that are in valid_neg_seqs and valid_neg_seqs
+    valid_test_neg_seqs = np.array(list(set(test_neg_seqs) & set(valid_neg_seqs)))
+    if len(test_neg_seqs) < len(valid_neg_seqs):
+        # remove valid_test_neg_seqs from valid_neg_seqs
+        valid_neg_seqs = valid_neg_seqs[~np.isin(valid_neg_seqs, valid_test_neg_seqs)]
+    else:
+        # remove valid_test_neg_seqs from test_neg_seqs
+        test_neg_seqs = test_neg_seqs[~np.isin(test_neg_seqs, valid_test_neg_seqs)]
+    # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
+    neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
+    # neg_seqs = neg_seqs[~np.isin(neg_seqs, np.concatenate((valid_neg_seqs, test_neg_seqs)))]
 
     if model_type == 'ff':
         max_seq_len = max(len(seq) for seq in positive_seqs)
         model = FeedForwardClassifier(max_seq_len)
     elif model_type == 'cvc':
         model = CVCClassifierModel(batch_size=batch_size, freeze_embed_model=freeze_embed_model, device=device)
-        # model = CVCClassifierModel(batch_size=1024 // 2, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
     else:
         raise ValueError(f"Model type {model_type} is not supported")
 
     # load the model if possible
-    model_cache = f"cache/{model_type}_model.pth"
-    if os.path.exists(model_cache) and not TO_RETRAIN_CLASSIFIER_MODEL:
-        trained_model = model
-        # load on the device
-        trained_model.load_state_dict(torch.load(model_cache, map_location=device))
-    else:
+    trained_model = None
+    if not TO_RETRAIN_CLASSIFIER_MODEL:
+        trained_model = load_model_state(model, args, args.epochs - 1, device)
+    if trained_model is None:
         # Training the model and saving it
         trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                                              epochs=epochs,
                                              lr=learning_rate,
                                              pos_batch_size=batch_size // neg_pos_ratio,
                                              neg_pos_ratio=neg_pos_ratio,
-                                             log_wandb=log_wandb)
+                                             log_wandb=log_wandb,
+                                             model_type=model_type,
+                                             loss_type=loss_type,
+                                             freeze_embed_model=freeze_embed_model,
+                                             special_criterion=special_criterion,
+                                             args=args,
+                                             )
         display_training_results(history, model_type)
-        torch.save(trained_model.state_dict(), model_cache)
 
-    # # Use the model to display the histogram of the output distribution on validation set
-    # for i, patient_ind in enumerate(valid_patient_inds):
-    #     mask = (valid_masks[i] == 1)
-    #     pos_seqs = np.array(positive_seqs)[mask]
-    #     neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-    #     neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
-    #
-    #     plot_output_distribution(trained_model, f'Validation (set {i})', model_type, pos_seqs, neg_seqs, device=device)
-    #
-    # # Display of train set
-    # for i in range(3):
-    #     mask_i = patient_id_masks[train_patient_inds[i]]
-    #     mask = ((mask_i == 1) & train_inds)
-    #     pos_seqs = np.array(positive_seqs)[mask]
-    #     neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[train_patient_inds[i]], "AASeq"].values
-    #     neg_seqs = np.random.choice(neg_seqs, size=min(10 * len(pos_seqs), len(neg_seqs)), replace=False)
-    #
-    #     plot_output_distribution(trained_model, f'Train (set {i})', model_type, pos_seqs, neg_seqs, device=device)
-    #
-    # # Display of healthy patients
-    # healthy_patients = df_hlt["patient_id"].unique()
-    # for i in range(3):
-    #     patient = healthy_patients[i]
-    #     seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-    #     seqs = np.random.choice(seqs, size=2000, replace=False)
-    #
-    #     plot_output_distribution(trained_model, f'Healthy (set {i})', model_type, seqs, neg_seqs=None, device=device)
-
+    # Plotting the output distributions
     plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
-                              valid_masks, positive_seqs, df_bld, patient_id_masks,
-                              train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device)
+                                     valid_masks, positive_seqs, df_bld, patient_id_masks,
+                                     train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device)
+
+    # Other distribution plot
+    plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                          test_masks, valid_masks, positive_seqs, df_bld,
+                                          df_hlt, model_type, log_wandb, device)
 
     exit(0)
 

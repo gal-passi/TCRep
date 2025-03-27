@@ -130,11 +130,13 @@ class CVCModel(nn.Module):
         # Freeze the embeddings (word, position, token type)
         for param in self.model.embeddings.parameters():
             param.requires_grad = False
+
         # Freeze all Bert layers except the last 4
         for i, layer in enumerate(self.model.encoder.layer):
             if i < 8:  # Freeze first 8 layers (0 to 7)
                 for param in layer.parameters():
                     param.requires_grad = False
+
         # Keep the last 4 layers (8 to 11) trainable
         for i in range(8, 12):
             for param in self.model.encoder.layer[i].parameters():

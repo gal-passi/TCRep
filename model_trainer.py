@@ -9,10 +9,31 @@ from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 import time
 import wandb
 
+
+def save_model_state(model, args, epoch):
+    # Define the base save directory
+    base_dir = "cache/models"
+    os.makedirs(base_dir, exist_ok=True)
+
+    # Create a readable folder name based on the model configuration
+    config_str = f"{args.model_type}_loss-{args.loss_type}_epochs-{args.epochs}_" \
+                 f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
+                 f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
+    save_dir = os.path.join(base_dir, config_str)
+    os.makedirs(save_dir, exist_ok=True)
+
+    # Define the save path for the model state_dict
+    model_save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pth")
+
+    # Save the model state_dict
+    torch.save(model.state_dict(), model_save_path)
+
+
 # Costume loss with L2 regularization term
 def custom_l2_loss(logits, labels, R=0.1):
     ce_loss = F.cross_entropy(logits, labels)
-    l2_norm = torch.norm(logits, p=2, dim=1).mean()  # Compute L2 norm
+    probs = F.softmax(logits, dim=1)  # Apply softmax on logits to get probabilities
+    l2_norm = torch.norm(probs, p=2, dim=1).mean()  # Compute L2 norm
     reg_term = (1 - l2_norm)  # Regularization term
     return ce_loss + R * reg_term  # Combined loss
 
@@ -22,11 +43,71 @@ def entropy_loss(logits):
     probs = F.softmax(logits, dim=1)  # Convert logits to probabilities
     entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()  # Compute entropy
     return entropy
+
 def custom_loss_entropy(logits, labels, R=0.1, n_classes=2):
     ce_loss = F.cross_entropy(logits, labels)
     max_entropy = torch.log(torch.tensor(n_classes, dtype=torch.float32))
     reg_term = (1 - (max_entropy - entropy_loss(logits)) / max_entropy)
     return ce_loss + R * reg_term
+
+
+class CustomLossCriterion(nn.Module):
+    def __init__(self, loss_type='ce', class_weights=None, R=0.1, n_classes=2):
+        """
+        Flexible loss criterion that supports different loss types and class weights.
+
+        Args:
+            loss_type (str): Type of loss to use
+            class_weights (torch.Tensor, optional): Weights for each class
+            R (float): Regularization strength for custom losses
+            n_classes (int): Number of classes for entropy-based regularization
+        """
+        super(CustomLossCriterion, self).__init__()
+
+        self.loss_type = loss_type
+        self.class_weights = class_weights
+        self.R = R
+        self.n_classes = n_classes
+
+    def forward(self, logits, labels):
+        """
+        Compute loss based on specified loss type.
+
+        Args:
+            logits (torch.Tensor): Model output logits
+            labels (torch.Tensor): Ground truth labels
+
+        Returns:
+            torch.Tensor: Computed loss
+        """
+        # Apply class weights if provided
+        if self.class_weights is not None:
+            # Ensure class_weights is on the same device as labels
+            class_weights = self.class_weights.to(labels.device)
+
+        if self.loss_type == 'ce':
+            # Standard Cross Entropy with optional class weights
+            return F.cross_entropy(logits, labels, weight=self.class_weights)
+
+        elif self.loss_type == 'ce_l2':
+            # Custom L2 regularized loss
+            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
+            probs = F.softmax(logits, dim=1)
+            l2_norm = torch.norm(probs, p=2, dim=1).mean()
+            reg_term = (1 - l2_norm)
+            return ce_loss + self.R * reg_term
+
+        elif self.loss_type == 'ce_entropy':
+            # Custom entropy regularized loss
+            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
+            probs = F.softmax(logits, dim=1)
+            entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
+            max_entropy = torch.log(torch.tensor(self.n_classes, dtype=torch.float32))
+            reg_term = (1 - (max_entropy - entropy) / max_entropy)
+            return ce_loss + self.R * reg_term
+
+        else:
+            raise ValueError(f"Unsupported loss type: {self.loss_type}")
 
 
 def print_trainable_parameters(model):
@@ -40,7 +121,8 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}")
 
 
-def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, log_wandb,
+def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                log_wandb, model_type, loss_type, freeze_embed_model, special_criterion, args,
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -64,16 +146,28 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
-    # TODO: Print the trainable parameters in the model
+    # Print the trainable parameters in the model
     print_trainable_parameters(model)
 
     # Define loss function and optimizer
     # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
     pos_weight = 3  # Adjust this weight as needed
     class_weights = torch.tensor([1.0, pos_weight], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+    if loss_type == "ce":
+        criterion = nn.CrossEntropyLoss(weight=class_weights)
+    else:
+        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=0.1)
+
+    if model_type == "cvc" and not freeze_embed_model and special_criterion:
+        encoder_lr = 5e-5  # this is the default learning rate for BERT
+        classification_head_lr = lr
+        optimizer = optim.Adam([
+            {'params': model.model.model.encoder.layer[8:].parameters(), 'lr': encoder_lr},  # Later layers
+            {'params': model.linear.parameters(), 'lr': classification_head_lr}  # Classification head
+        ])
+    else:
+        optimizer = optim.Adam(model.parameters(), lr=lr)
 
     # Calculate number of batches
     num_pos_samples = len(train_pos_seqs)
@@ -183,6 +277,8 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_auc": val_auc,
                 "val_prauc": val_prauc
             })
+        # saving the model for this epoch
+        save_model_state(model, args, epoch)
 
     return model, history
 

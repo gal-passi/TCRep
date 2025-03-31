@@ -209,7 +209,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     ax2.legend()
     # Save the plot
     os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution.png")
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution_per_patients.png")
     plt.tight_layout()
 
     # save the figure in wandb:

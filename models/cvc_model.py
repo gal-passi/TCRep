@@ -147,13 +147,13 @@ class CVCModel(nn.Module):
 
 
 class CVCClassifierModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
         super().__init__()
         self.device = device
         self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model)
         self.batch_size = batch_size
         self.method = method
-        dropout_rate = 0.2
+        dropout_rate = ch_dropout
 
         # Add linear layers
         # self.linear = nn.Linear(768, 2).to(device)

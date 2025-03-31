@@ -36,6 +36,7 @@ from model_trainer import train_model, display_training_results
 import wandb
 from cache_handler import load_model_state
 from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient
+import yaml
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -885,7 +886,8 @@ def generate_neighbors(sequences, valid_letters):
     return neighbor_set
 
 
-def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights, learning_rate, reg_coef, freeze_embed_model, special_criterion, device):
+def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights,
+              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -903,6 +905,8 @@ def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weig
             "reg_coef": reg_coef,
             "freeze_embed_model": freeze_embed_model,
             "special_criterion": special_criterion,
+            "embedding_lr": embedding_lr,
+            "ch_dropout": ch_dropout,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -915,9 +919,9 @@ if __name__ == '__main__':
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model_type', type=str, choices=model_types, default='ff', help='Type of model to train')
+    parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
-    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=330, help='Batch size for training')
     parser.add_argument('--neg_pos_ratio', type=int, default=10, help='Negative to positive sample ratio')
     parser.add_argument('--pos_weights', type=float, default=3, help='Positive class weight for loss function')
@@ -925,7 +929,11 @@ if __name__ == '__main__':
     parser.add_argument('--regularization_coefficient', '--reg_coef', type=float, default=0.25, help='Coefficient for the regularization term')
     parser.add_argument('--freeze_embed_model', '-freeze', action='store_true', help='Freeze the embedding model (the classification layers are unfrozen)')
     parser.add_argument('--special_criterion', '-scrit', action='store_true', help='Using a more complex criterion for the model (different lrs)')
+    parser.add_argument('--embedding_lr', '--embed_lr', type=float, default=0.00005, help='Learning rate for optimizer of the embedding model only')
     parser.add_argument('--no_wandb_log', '-nolog', action='store_true', help='Disable Weights & Biases logging')
+    parser.add_argument('--test_mode_epoch', type=int, default=-1, help='Only Inferencing mode. Loading the model instead of training in the given epoch')
+    parser.add_argument('--classification_dropout', '--dropout', type=float, default=0.2, help='Dropout rate for the classification head')
+    parser.add_argument('--to_sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
     args = parser.parse_args()
 
     model_type = args.model_type
@@ -938,12 +946,19 @@ if __name__ == '__main__':
     reg_coef = args.regularization_coefficient if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
     freeze_embed_model = args.freeze_embed_model if model_type == 'cvc' else False  # Only CVC model can freeze the embedding model
     special_criterion = args.special_criterion
+    embedding_lr = args.embedding_lr if special_criterion else 0  # Only used when special_criterion is True
     log_wandb = not args.no_wandb_log
+    test_mode_epoch = args.test_mode_epoch
+    ch_dropout = args.classification_dropout
+    to_sweep = args.to_sweep
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
     assert not (freeze_embed_model and special_criterion), "Cannot use both freeze_embed_model and special_criterion"
     assert not (freeze_embed_model and model_type != 'cvc'), "Only CVC model can freeze the embedding model"
+    if test_mode_epoch >= 0:
+        assert not log_wandb, "Cannot log to wandb in test mode"
+        assert not TO_RETRAIN_CLASSIFIER_MODEL, "Cannot test the model if we are retraining it"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -956,26 +971,12 @@ if __name__ == '__main__':
     print(f"\tRegularization Coefficient: {args.regularization_coefficient}")
     print(f"\tFreeze Embedding Model: {args.freeze_embed_model}")
     print(f"\tSpecial Criterion: {args.special_criterion}")
+    print(f"\tEmbedding Learning Rate: {args.embedding_lr}")
+    print(f"\tClassification Head Dropout: {args.classification_dropout}")
     print("\n")
 
     np.random.seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # wandb init
-    if log_wandb:
-        run = wand_init(
-            model_type=model_type,
-            loss_type=loss_type,
-            epochs=epochs,
-            batch_size=batch_size,
-            neg_pos_ratio=neg_pos_ratio,
-            pos_weights=pos_weights,
-            learning_rate=learning_rate,
-            reg_coef=reg_coef,
-            freeze_embed_model=freeze_embed_model,
-            special_criterion=special_criterion,
-            device=device,
-        )
 
     # Load studies
     disease = 'Multiple sclerosis'
@@ -1127,43 +1128,186 @@ if __name__ == '__main__':
     neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
     # neg_seqs = neg_seqs[~np.isin(neg_seqs, np.concatenate((valid_neg_seqs, test_neg_seqs)))]
 
-    if model_type == 'ff':
-        max_seq_len = max(len(seq) for seq in positive_seqs)
-        model = FeedForwardClassifier(max_seq_len)
-    elif model_type == 'cvc':
-        model = CVCClassifierModel(batch_size=batch_size, freeze_embed_model=freeze_embed_model, device=device)
-    elif model_type == 'esmc':
-        model = ESMCFeedForwardClassifier(device=device)
-    else:
-        raise ValueError(f"Model type {model_type} is not supported")
+    # TODO: Refactor this following part! (It's a mess!)
+    if to_sweep:
+        def sweep_model():
+            wandb.init()
 
-    # load the model if possible
-    trained_model = None
-    if not TO_RETRAIN_CLASSIFIER_MODEL:
-        trained_model = load_model_state(model, args, args.epochs - 1, device)
-    if trained_model is None:
-        # Training the model and saving it
-        trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                                             epochs=epochs,
-                                             lr=learning_rate,
-                                             pos_batch_size=batch_size // neg_pos_ratio,
-                                             neg_pos_ratio=neg_pos_ratio,
-                                             log_wandb=log_wandb,
-                                             model_type=model_type,
-                                             loss_type=loss_type,
-                                             freeze_embed_model=freeze_embed_model,
-                                             special_criterion=special_criterion,
-                                             reg_coef=reg_coef,
-                                             args=args,
-                                             )
-        display_training_results(history, model_type)
+            model_type = wandb.config.model_type
+            loss_type = wandb.config.loss_type
+            epochs = wandb.config.epochs
+            batch_size = wandb.config.batch_size
+            neg_pos_ratio = wandb.config.neg_pos_ratio
+            pos_weights = wandb.config.pos_weights
+            learning_rate = wandb.config.learning_rate
+            reg_coef = wandb.config.regularization_coefficient
+            freeze_embed_model = wandb.config.freeze_embed_model
+            special_criterion = wandb.config.special_criterion
+            embedding_lr = wandb.config.embedding_lr
+            ch_dropout = wandb.config.classification_dropout
+            test_mode_epoch = wandb.config.test_mode_epoch
+            log_wandb = not wandb.config.no_wandb_log
+
+            if model_type == 'ff':
+                max_seq_len = max(len(seq) for seq in positive_seqs)
+                model = FeedForwardClassifier(max_seq_len)
+            elif model_type == 'cvc':
+                model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model, device=device)
+            elif model_type == 'esmc':
+                model = ESMCFeedForwardClassifier(device=device)
+            else:
+                raise ValueError(f"Model type {model_type} is not supported")
+
+            # load the model if possible
+            trained_model = None
+            if not TO_RETRAIN_CLASSIFIER_MODEL:
+                if test_mode_epoch >= 0:
+                    trained_model = load_model_state(model, args, test_mode_epoch, device)
+                    if trained_model is None:
+                        print(f"Model for epoch {test_mode_epoch} is not available!")
+                        exit(1)
+                else:
+                    trained_model = load_model_state(model, args, args.epochs - 1, device)
+            if trained_model is None:
+                # Training the model and saving it
+                trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                                                     epochs=epochs,
+                                                     lr=learning_rate,
+                                                     pos_batch_size=batch_size // neg_pos_ratio,
+                                                     neg_pos_ratio=neg_pos_ratio,
+                                                     log_wandb=log_wandb,
+                                                     model_type=model_type,
+                                                     loss_type=loss_type,
+                                                     freeze_embed_model=freeze_embed_model,
+                                                     special_criterion=special_criterion,
+                                                     embedding_lr=embedding_lr,
+                                                     reg_coef=reg_coef,
+                                                     pos_weights=pos_weights,
+                                                     args=args,
+                                                     is_sweep=to_sweep,
+                                                     )
+
+        with open('sweep.yaml', 'r') as f:
+            sweep_config = yaml.safe_load(f)
+        sweep_id = wandb.sweep(sweep_config, project='TCRep')
+        wandb.agent(sweep_id, function=sweep_model, count=2)  # Run 2 trials in parallel
+        exit(0)
+    else:
+        # wandb init
+        if log_wandb:
+            run = wand_init(
+                model_type=model_type,
+                loss_type=loss_type,
+                epochs=epochs,
+                batch_size=batch_size,
+                neg_pos_ratio=neg_pos_ratio,
+                pos_weights=pos_weights,
+                learning_rate=learning_rate,
+                reg_coef=reg_coef,
+                freeze_embed_model=freeze_embed_model,
+                special_criterion=special_criterion,
+                embedding_lr=embedding_lr,
+                ch_dropout=ch_dropout,
+                device=device,
+            )
+
+        if model_type == 'ff':
+            max_seq_len = max(len(seq) for seq in positive_seqs)
+            model = FeedForwardClassifier(max_seq_len)
+        elif model_type == 'cvc':
+            model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model, device=device)
+        elif model_type == 'esmc':
+            model = ESMCFeedForwardClassifier(device=device)
+        else:
+            raise ValueError(f"Model type {model_type} is not supported")
+
+        # load the model if possible
+        trained_model = None
+        if not TO_RETRAIN_CLASSIFIER_MODEL:
+            if test_mode_epoch >= 0:
+                trained_model = load_model_state(model, args, test_mode_epoch, device)
+                if trained_model is None:
+                    print(f"Model for epoch {test_mode_epoch} is not available!")
+                    exit(1)
+            else:
+                trained_model = load_model_state(model, args, args.epochs - 1, device)
+        if trained_model is None:
+            # Training the model and saving it
+            trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                                                 epochs=epochs,
+                                                 lr=learning_rate,
+                                                 pos_batch_size=batch_size // neg_pos_ratio,
+                                                 neg_pos_ratio=neg_pos_ratio,
+                                                 log_wandb=log_wandb,
+                                                 model_type=model_type,
+                                                 loss_type=loss_type,
+                                                 freeze_embed_model=freeze_embed_model,
+                                                 special_criterion=special_criterion,
+                                                 embedding_lr=embedding_lr,
+                                                 reg_coef=reg_coef,
+                                                 pos_weights=pos_weights,
+                                                 args=args,
+                                                 )
+            # display_training_results(history, model_type)
+
+    # TODO: Continue from here!
+    # Inference:
+    print("Dina INFERENCE:\nDevice:", device)
+    probas_disease = list()
+    for patient_id in valid_patient_ids:
+        patient_seqs = df_bld.loc[df_bld["patient_id"] == patient_id, "AASeq"].values
+        patient_seqs = np.unique(patient_seqs)
+
+        # Apply the model
+        print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
+        trained_model.eval()
+        with torch.no_grad():
+            pred = trained_model(patient_seqs)
+
+        # Apply softmax
+        pred = torch.softmax(pred, dim=1)
+
+        # Get the probabilities
+        proba = pred[:, 1].cpu().numpy()
+        probas_disease.append(proba)
+
+    healthy_patient_ids = df_hlt["patient_id"].unique()
+    healthy_patient_ids = np.random.permutation(healthy_patient_ids)
+    probas_healthy = list()
+    for patient_id in healthy_patient_ids[:5]:
+        patient_seqs = df_hlt.loc[df_hlt["patient_id"] == patient_id, "AASeq"].values
+        patient_seqs = np.unique(patient_seqs)
+
+        # Apply the model
+        print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
+        trained_model.eval()
+        with torch.no_grad():
+            pred = trained_model(patient_seqs)
+
+        # Apply softmax
+        pred = torch.softmax(pred, dim=1)
+
+        # Get the probabilities
+        proba = pred[:, 1].cpu().numpy()
+        probas_healthy.append(proba)
+
+    # print num of samples with prob > 0.5
+    print("Disease:")
+    for proba in probas_disease:
+        print(f"Number of samples with prob > 0.5: {sum(proba > 0.5)}")
+
+    print("Healthy:")
+    for proba in probas_healthy:
+        print(f"Number of samples with prob > 0.5: {sum(proba > 0.5)}")
 
     # Plotting the output distributions
+    print("Plotting the output distributions")
     plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
                                      valid_masks, positive_seqs, df_bld, patient_id_masks,
                                      train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device)
 
     # Other distribution plot
+    print("Plotting the output distributions per patient")
     plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                           test_masks, valid_masks, positive_seqs, df_bld,
                                           df_hlt, model_type, log_wandb, device)

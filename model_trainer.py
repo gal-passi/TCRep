@@ -106,8 +106,9 @@ def print_trainable_parameters(model):
 
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                log_wandb, model_type, loss_type, freeze_embed_model, special_criterion, reg_coef, args,
-                epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10):  # pos_batch_size=256
+                log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
+                embedding_lr, reg_coef, pos_weights, args,
+                epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
     while validating on a separate validation set during training.
@@ -135,8 +136,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
     # Define loss function and optimizer
     # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
-    pos_weight = 3  # Adjust this weight as needed
-    class_weights = torch.tensor([1.0, pos_weight], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
+    class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
 
     if loss_type == "ce":
         criterion = nn.CrossEntropyLoss(weight=class_weights)
@@ -144,7 +144,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef)
 
     if model_type == "cvc" and not freeze_embed_model and special_criterion:
-        encoder_lr = 5e-5  # this is the default learning rate for BERT
+        encoder_lr = embedding_lr  # this is the default learning rate for BERT
         classification_head_lr = lr
         optimizer = optim.Adam([
             {'params': model.model.model.encoder.layer[9:].parameters(), 'lr': encoder_lr},  # Later layers
@@ -262,7 +262,8 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_prauc": val_prauc
             })
         # saving the model for this epoch
-        save_model_state(model, args, epoch)
+        if not is_sweep:
+            save_model_state(model, args, epoch)
 
     return model, history
 

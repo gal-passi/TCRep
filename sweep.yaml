@@ -1,0 +1,51 @@
+method: random  # Random search over hyperparameters
+name: my_sweep
+metric:
+  name: val_loss  # Optimize for validation loss
+  goal: minimize  # Minimize the loss
+parameters:
+  model_type:
+    value: 'cvc'  # Fixed default value
+  loss_type:
+    values: ['ce', 'ce_l2', 'ce_entropy']
+  epochs:
+    values: [15, 20, 25, 30, 40]  # Sweeping different epochs
+  batch_size:
+    value: 330  # Fixed default value
+  neg_pos_ratio:
+    value: 10  # Fixed default value
+  pos_weights:
+    distribution: uniform
+    min: 1.5
+    max: 5.0  # Sweeping different positive weights
+  learning_rate:
+    distribution: log_uniform_values
+    min: 0.0001
+    max: 0.01  # Sweeping different learning rates
+  embedding_lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0005  # Always smaller than learning rate
+  regularization_coefficient:
+    distribution: uniform
+    min: 0.1
+    max: 1.0  # Sweeping different regularization coefficients
+  freeze_embed_model:
+    value: False  # Always False
+  special_criterion:
+    value: True  # Always True
+  no_wandb_log:
+    value: False  # Always False
+  test_mode_epoch:
+    value: -1  # Always -1
+  classification_dropout:
+    distribution: uniform
+    min: 0.1
+    max: 0.5  # Sweeping different dropout rates
+
+# Conditional logic for loss_type and regularization_coefficient
+# conditions:
+#   - condition:
+#       loss_type: 'ce'
+#     fixed:
+#       regularization_coefficient: 0

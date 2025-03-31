@@ -1,5 +1,6 @@
 import warnings
 from gc import freeze
+from sched import scheduler
 
 from triton.language.semantic import device_print
 warnings.simplefilter("ignore", category=FutureWarning)
@@ -61,7 +62,7 @@ TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
-TO_RETRAIN_CLASSIFIER_MODEL = False
+TO_RETRAIN_CLASSIFIER_MODEL = False  # TODO: Remove this variable later!
 
 
 def get_all_usable_healthy_data():
@@ -887,7 +888,7 @@ def generate_neighbors(sequences, valid_letters):
 
 
 def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights,
-              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, device):
+              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -907,6 +908,7 @@ def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weig
             "special_criterion": special_criterion,
             "embedding_lr": embedding_lr,
             "ch_dropout": ch_dropout,
+            "scheduler_type": scheduler_type,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -918,6 +920,7 @@ if __name__ == '__main__':
     # get program arguments
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
+    scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -934,10 +937,12 @@ if __name__ == '__main__':
     parser.add_argument('--test_mode_epoch', type=int, default=-1, help='Only Inferencing mode. Loading the model instead of training in the given epoch')
     parser.add_argument('--classification_dropout', '--dropout', type=float, default=0.2, help='Dropout rate for the classification head')
     parser.add_argument('--to_sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
+    parser.add_argument('--scheduler_type', type=str, choices=scheduler_types, default='None', help='Type of schedulers to use')
+    parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
     args = parser.parse_args()
 
-    model_type = args.model_type
-    loss_type = args.loss_type
+    model_type = args.model_type.lower()
+    loss_type = args.loss_type.lower()
     epochs = args.epochs
     batch_size = args.batch_size
     neg_pos_ratio = args.neg_pos_ratio
@@ -951,9 +956,12 @@ if __name__ == '__main__':
     test_mode_epoch = args.test_mode_epoch
     ch_dropout = args.classification_dropout
     to_sweep = args.to_sweep
+    scheduler_type = args.scheduler_type.lower()
+    force_retrain = args.force_retrain
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
+    assert scheduler_type in [x.lower() for x in scheduler_types], f"Scheduler type must be one of {scheduler_types}"
     assert not (freeze_embed_model and special_criterion), "Cannot use both freeze_embed_model and special_criterion"
     assert not (freeze_embed_model and model_type != 'cvc'), "Only CVC model can freeze the embedding model"
     if test_mode_epoch >= 0:
@@ -973,6 +981,8 @@ if __name__ == '__main__':
     print(f"\tSpecial Criterion: {args.special_criterion}")
     print(f"\tEmbedding Learning Rate: {args.embedding_lr}")
     print(f"\tClassification Head Dropout: {args.classification_dropout}")
+    print(f"\tScheduler Type: {args.scheduler_type}")
+    print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
     np.random.seed(42)
@@ -1208,6 +1218,7 @@ if __name__ == '__main__':
                 special_criterion=special_criterion,
                 embedding_lr=embedding_lr,
                 ch_dropout=ch_dropout,
+                scheduler_type=scheduler_type,
                 device=device,
             )
 
@@ -1223,7 +1234,7 @@ if __name__ == '__main__':
 
         # load the model if possible
         trained_model = None
-        if not TO_RETRAIN_CLASSIFIER_MODEL:
+        if not TO_RETRAIN_CLASSIFIER_MODEL and not force_retrain:
             if test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1246,59 +1257,18 @@ if __name__ == '__main__':
                                                  embedding_lr=embedding_lr,
                                                  reg_coef=reg_coef,
                                                  pos_weights=pos_weights,
+                                                 scheduler_type=scheduler_type,
                                                  args=args,
                                                  )
             # display_training_results(history, model_type)
 
-    # TODO: Continue from here!
+    # TODO: This inference part tries to search for options to somehow quantify the model's performance in other ways than just figures. (Remove it later after we are done with testing).
     # Inference:
-    print("Dina INFERENCE:\nDevice:", device)
-    probas_disease = list()
-    for patient_id in valid_patient_ids:
-        patient_seqs = df_bld.loc[df_bld["patient_id"] == patient_id, "AASeq"].values
-        patient_seqs = np.unique(patient_seqs)
-
-        # Apply the model
-        print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
-        trained_model.eval()
-        with torch.no_grad():
-            pred = trained_model(patient_seqs)
-
-        # Apply softmax
-        pred = torch.softmax(pred, dim=1)
-
-        # Get the probabilities
-        proba = pred[:, 1].cpu().numpy()
-        probas_disease.append(proba)
-
-    healthy_patient_ids = df_hlt["patient_id"].unique()
-    healthy_patient_ids = np.random.permutation(healthy_patient_ids)
-    probas_healthy = list()
-    for patient_id in healthy_patient_ids[:5]:
-        patient_seqs = df_hlt.loc[df_hlt["patient_id"] == patient_id, "AASeq"].values
-        patient_seqs = np.unique(patient_seqs)
-
-        # Apply the model
-        print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
-        trained_model.eval()
-        with torch.no_grad():
-            pred = trained_model(patient_seqs)
-
-        # Apply softmax
-        pred = torch.softmax(pred, dim=1)
-
-        # Get the probabilities
-        proba = pred[:, 1].cpu().numpy()
-        probas_healthy.append(proba)
-
-    # print num of samples with prob > 0.5
-    print("Disease:")
-    for proba in probas_disease:
-        print(f"Number of samples with prob > 0.5: {sum(proba > 0.5)}")
-
-    print("Healthy:")
-    for proba in probas_healthy:
-        print(f"Number of samples with prob > 0.5: {sum(proba > 0.5)}")
+    if not force_retrain and not log_wandb:
+        print("Inference:")
+        from inference.inference_testing import dina_inference_suggestion, background_dist_inference
+        # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
+        background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
 
     # Plotting the output distributions
     print("Plotting the output distributions")

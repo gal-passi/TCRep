@@ -9,8 +9,7 @@ from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 import time
 import wandb
 from cache_handler import save_model_state
-
-
+from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau, CosineAnnealingLR, ExponentialLR
 
 
 # Costume loss with L2 regularization term
@@ -27,6 +26,7 @@ def entropy_loss(logits):
     probs = F.softmax(logits, dim=1)  # Convert logits to probabilities
     entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()  # Compute entropy
     return entropy
+
 
 def custom_loss_entropy(logits, labels, R=0.1, n_classes=2):
     ce_loss = F.cross_entropy(logits, labels)
@@ -105,9 +105,26 @@ def print_trainable_parameters(model):
         f"trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}")
 
 
+def get_scheduler(optimizer, scheduler_type, **kwargs):
+    """Returns the selected scheduler based on the given string."""
+    if scheduler_type == "StepLR".lower():
+        return StepLR(optimizer, step_size=kwargs.get("step_size", 8), gamma=kwargs.get("gamma", 0.1))
+    elif scheduler_type == "ReduceLROnPlateau".lower():
+        return ReduceLROnPlateau(optimizer, mode="min", factor=kwargs.get("factor", 0.1),
+                                 patience=kwargs.get("patience", 5), verbose=True)
+    elif scheduler_type == "CosineAnnealingLR".lower():
+        return CosineAnnealingLR(optimizer, T_max=kwargs.get("T_max", 50), eta_min=kwargs.get("eta_min", 1e-6))
+    elif scheduler_type == "ExponentialLR".lower():
+        return ExponentialLR(optimizer, gamma=kwargs.get("gamma", 0.95))
+    elif scheduler_type == "none":
+        return None
+    else:
+        raise ValueError(f"Unsupported scheduler type: {scheduler_type}")
+
+
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, args,
+                embedding_lr, reg_coef, pos_weights, args, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -152,6 +169,8 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         ])
     else:
         optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    scheduler = get_scheduler(optimizer, scheduler_type)
 
     # Calculate number of batches
     num_pos_samples = len(train_pos_seqs)
@@ -235,6 +254,11 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
         # Validation phase
         val_loss, val_acc, val_auc, val_prauc = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
+        if scheduler is not None:
+            if scheduler_type == "ReduceLROnPlateau".lower():
+                scheduler.step(val_loss)
+            else:
+                scheduler.step()
 
         # Update history
         history['train_loss'].append(train_loss)

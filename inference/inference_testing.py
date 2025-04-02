@@ -242,7 +242,7 @@ def background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, 
     healthy_patient_ids = df_hlt["patient_id"].unique()
     healthy_patient_ids = np.random.permutation(healthy_patient_ids)
     probas_healthy = list()
-    for patient_id in healthy_patient_ids[:40]:
+    for patient_id in healthy_patient_ids[:50]:
         patient_seqs = df_hlt.loc[df_hlt["patient_id"] == patient_id, "AASeq"].values
         patient_seqs = np.unique(patient_seqs)
 
@@ -259,7 +259,7 @@ def background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, 
         probas_healthy.append(proba)
 
     # Split into reference and comparison groups
-    probas_healthy_ref, probas_healthy_other = probas_healthy[:30], probas_healthy[30:]
+    probas_healthy_ref, probas_healthy_other = probas_healthy[:40], probas_healthy[40:]
 
     # Calculate probabilities for validation and test sets
     probas_valid = calculate_probas(df_bld, trained_model, valid_patient_ids)

@@ -285,8 +285,10 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_auc": val_auc,
                 "val_prauc": val_prauc
             })
-        # saving the model for this epoch
-        if not is_sweep:
+
+        # saving the model for this epoch on odd epochs or on last epoch
+        is_odd_or_last_epoch = (epoch + 1) % 2 == 1 or epoch + 1 == epochs
+        if not is_sweep and is_odd_or_last_epoch:
             save_model_state(model, args, epoch)
 
     return model, history

@@ -36,7 +36,7 @@ import seaborn as sns
 from model_trainer import train_model, display_training_results
 import wandb
 from cache_handler import load_model_state
-from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient
+from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new
 import yaml
 
 
@@ -659,6 +659,29 @@ def average_dicts(outer_list):
 
     return averaged_list
 
+def combine_to_dataframe(metrics_data, additional_values):
+    """
+    Combines two variables into a single pandas DataFrame.
+
+    Parameters:
+    metrics_data (list): List of dictionaries containing metrics
+    additional_values (list): List of additional values to be added as a column
+
+    Returns:
+    pandas.DataFrame: Combined DataFrame with all data
+    """
+    # Convert the first variable (list of dictionaries) to a DataFrame
+    df = pd.DataFrame(metrics_data)
+
+    # Add the second variable as a new column
+    df['std'] = additional_values
+
+    # Ensure the length of additional_values matches the number of rows in the DataFrame
+    if len(additional_values) != len(df):
+        raise ValueError(
+            f"Length mismatch: metrics_data has {len(df)} entries but additional_values has {len(additional_values)} entries")
+
+    return df
 
 def display_common_sequences_figure(df, df_h, l=8, log_space=True):
     # find max len of uniques patient_id
@@ -698,26 +721,46 @@ def display_common_sequences_figure(df, df_h, l=8, log_space=True):
     x_healthy = np.array(x_healthy_list).mean(axis=0)
     x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
 
+    # Average the results of all patients with disease and healthy then save them to a csv file
+    x_avg_hlt = average_dicts(x_healthy_list_all)
+    disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
+    healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
+    # Save the dfs
+    disease_df.to_csv("disease_df.csv", index=False)
+    healthy_df.to_csv("healthy_df.csv", index=False)
+
     if log_space:
         x_disease = np.log(x_disease)
         x_healthy = np.log(x_healthy)
 
-    # plot the results
-    plt.figure(figsize=(10, 6))
-    plt.plot(range(2, len(x_disease) + 2), x_disease, label="Disease")
-    plt.plot(range(2, len(x_healthy) + 2), x_healthy, label="Healthy")
-    plt.fill_between(range(2, len(x_disease) + 2), x_disease - x_disease_std, x_disease + x_disease_std, alpha=0.2)
-    plt.fill_between(range(2, len(x_healthy) + 2), x_healthy - x_healthy_std, x_healthy + x_healthy_std, alpha=0.2)
-    # add the percentage of common sequences in the plot
+    # Figure without legend
+    plt.figure(figsize=(6, 6), dpi=600)
+    ax = plt.gca()
+    for spine in ax.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(0.75)
+    plt.plot(range(2, len(x_disease) + 2), x_disease, label="Patients", color="#FFA500")
+    plt.plot(range(2, len(x_healthy) + 2), x_healthy, label="Healthy", color="#7BC8F6")
+    plt.fill_between(range(2, len(x_disease) + 2), x_disease - x_disease_std, x_disease + x_disease_std,
+                     color="#FFA500", alpha=0.2)
+    plt.fill_between(range(2, len(x_healthy) + 2), x_healthy - x_healthy_std, x_healthy + x_healthy_std,
+                     color="#7BC8F6", alpha=0.2)
+    # add the percentage of common sequences in the plot with rounded values
     for i, txt in enumerate(x_disease):
-        plt.annotate(f"{txt:.5f}", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+        plt.annotate(f"{txt:.2f}", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
     for i, txt in enumerate(x_healthy):
-        plt.annotate(f"{txt:.5f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+        plt.annotate(f"{txt:.2f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
     plt.xlabel("Number of Patients")
-    plt.ylabel("Percentage of Common Sequences (Only CD8)")
-    plt.title("Percentage of Common Sequences in Disease and Healthy Samples" + (" (Log Scale)" if log_space else ""))
-    plt.ylim(min(min(x_disease), min(x_healthy)), max(max(x_disease + x_disease_std), max(x_healthy + x_healthy_std)) * 1.)
-    plt.legend()
+    plt.ylabel("Percentage of Common Sequences")
+    plt.title("Percentage of Common Sequences in Patients" + (" (Log Scale)" if log_space else ""))
+    plt.ylim(min(min(x_disease), min(x_healthy)),
+             max(max(x_disease + x_disease_std), max(x_healthy + x_healthy_std)) * 1.)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+    plt.savefig('plot_common_sequences_nolegend.png')
+    plt.legend(framealpha=1.0)
+    plt.savefig('plot_common_sequences.png')
     plt.show()
 
 
@@ -939,6 +982,9 @@ if __name__ == '__main__':
     parser.add_argument('--to_sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
     parser.add_argument('--scheduler_type', type=str, choices=scheduler_types, default='None', help='Type of schedulers to use')
     parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
+    parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
+    parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
+    parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')  # TODO: REMOVE!
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -958,6 +1004,9 @@ if __name__ == '__main__':
     to_sweep = args.to_sweep
     scheduler_type = args.scheduler_type.lower()
     force_retrain = args.force_retrain
+    v2_inference = args.v2_inference
+    dont_inference = args.dont_inference
+    dont_plot = args.dont_plot
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -1264,23 +1313,34 @@ if __name__ == '__main__':
 
     # TODO: This inference part tries to search for options to somehow quantify the model's performance in other ways than just figures. (Remove it later after we are done with testing).
     # Inference:
-    if not force_retrain and not log_wandb:
+    if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")
-        from inference.inference_testing import dina_inference_suggestion, background_dist_inference
-        # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
-        background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+        if not v2_inference:
+            from inference.inference_testing import background_dist_inference  # dina_inference_suggestion
+            # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
+            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+        else:
+            from inference.inference_testing_v2 import background_dist_inference
+            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
 
-    # Plotting the output distributions
-    print("Plotting the output distributions")
-    plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
-                                     valid_masks, positive_seqs, df_bld, patient_id_masks,
-                                     train_patient_inds, train_inds, df_hlt, model_type, log_wandb, device)
+    if not dont_plot:
+        # New distribution plot
+        print("Plotting the output distributions per patient (New)")
+        plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                              test_masks, valid_masks, positive_seqs, df_bld,
+                                              df_hlt, model_type, log_wandb, args, device)
 
-    # Other distribution plot
-    print("Plotting the output distributions per patient")
-    plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                          test_masks, valid_masks, positive_seqs, df_bld,
-                                          df_hlt, model_type, log_wandb, device)
+        # Plotting the output distributions
+        print("Plotting the output distributions")
+        plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
+                                         valid_masks, positive_seqs, df_bld, patient_id_masks,
+                                         train_patient_inds, train_inds, df_hlt, model_type, log_wandb, args, device)
+
+        # Other distribution plot
+        print("Plotting the output distributions per patient")
+        plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                              test_masks, valid_masks, positive_seqs, df_bld,
+                                              df_hlt, model_type, log_wandb, args, device)
 
     exit(0)
 

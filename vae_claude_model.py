@@ -555,7 +555,6 @@ def evaluate_vae_distributions(vae_model, base_model, pos_seqs, neg_seqs, embedd
     with torch.no_grad():
         for i in range(0, len(pos_embeddings), batch_size):
             batch_embeddings = pos_embeddings[i:i + batch_size].to(device)
-            # TODO: FIX dtype
             mu, log_var = vae_model.encode(batch_embeddings)
             z = vae_model.reparameterize(mu, log_var)
             recon = vae_model.decode(z)

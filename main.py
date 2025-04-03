@@ -726,8 +726,8 @@ def display_common_sequences_figure(df, df_h, l=8, log_space=True):
     disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
     healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
     # Save the dfs
-    disease_df.to_csv("disease_df.csv", index=False)
-    healthy_df.to_csv("healthy_df.csv", index=False)
+    disease_df.to_csv("cache/disease_df.csv", index=False)
+    healthy_df.to_csv("cache/healthy_df.csv", index=False)
 
     if log_space:
         x_disease = np.log(x_disease)
@@ -797,7 +797,7 @@ def display_common_sequences_figure_healthy(df_h, l=8, log_space=True):
 
 # TODO: Remove the variable healthy_unique from the function signature
 # TODO: This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
-def get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=False):
+def get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=False):
     # Defining constants
     synapse_db_folder = "db/synapse_Mal_ID"
     synapse_metadata_file = os.path.join(synapse_db_folder, "metadata.tsv")
@@ -806,10 +806,11 @@ def get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=False):
     file_suffix = "_all" if get_all else "_healthy_only"
     df_filename = os.path.join(synapse_db_folder, f"synapse_mal_id_dataframe{file_suffix}.pkl")
     # Check if the DataFrame is already saved
-    if os.path.exists(df_filename):
-        # Load the DataFrame from file
-        df = pd.read_pickle(df_filename)
-        return df
+    if not to_recalculate:
+        if os.path.exists(df_filename):
+            # Load the DataFrame from file
+            df = pd.read_pickle(df_filename)
+            return df
 
     # Reading metadata
     synapse_metadata = pd.read_csv(synapse_metadata_file, sep='\t')
@@ -818,7 +819,7 @@ def get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=False):
     synapse_datafiles = [x for x in os.listdir(synapse_db_folder) if x.endswith(".bz2")]
 
     healthy_samples = []
-    for datafile in synapse_datafiles:
+    for datafile in tqdm(synapse_datafiles, desc="Processing data files", total=len(synapse_datafiles)):
         datafile_id = datafile.split("_")[-1][:-4]
         datafile_path = os.path.join(synapse_db_folder, datafile)
 
@@ -829,6 +830,10 @@ def get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=False):
             data = pd.read_csv(datafile_path, sep='\t', compression='bz2')
             data = data.loc[:, ['cdr3_seq_aa_q', 'participant_label', 'specimen_tissue']]
             data['cdr3_seq_aa_q'] = data['cdr3_seq_aa_q'].str.replace(' ', '')
+            # add the condition to the metadata
+            if 'Healthy' in condition:
+                condition = 'Healthy'
+            data['condition'] = condition
             healthy_samples.append(data)
 
     # need to make a df with: AASeq, patient_id, tissue, cell_type
@@ -836,6 +841,9 @@ def get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=False):
     df = df.dropna(subset=['cdr3_seq_aa_q'])
     # rename columns
     df = df.rename(columns={'cdr3_seq_aa_q': 'AASeq', 'participant_label': 'patient_id', 'specimen_tissue': 'tissue'})
+
+    df = df[~df['AASeq'].str.contains('[^ACDEFGHIKLMNPQRSTVWY]', regex=True)]
+    df['AASeq'] = 'C' + df['AASeq'] + 'F'
 
     # Save the DataFrame for future use
     df.to_pickle(df_filename)
@@ -930,7 +938,7 @@ def generate_neighbors(sequences, valid_letters):
     return neighbor_set
 
 
-def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weights,
+def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
@@ -941,6 +949,7 @@ def wand_init(model_type, loss_type, epochs, batch_size, neg_pos_ratio, pos_weig
         config={
             "model_type": model_type,
             "loss_type": loss_type,
+            "dataset_type": dataset_type,
             "epochs": epochs,
             "batch_size": batch_size,
             "neg_pos_ratio": neg_pos_ratio,
@@ -964,9 +973,12 @@ if __name__ == '__main__':
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
+    dataset_types = ['ms', 'article']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
+    parser.add_argument('--scheduler_type', type=str, choices=scheduler_types, default='None', help='Type of schedulers to use')
+    parser.add_argument('--dataset_type', type=str, choices=dataset_types, default='ms', help='Type of the dataset to run on')
     parser.add_argument('--epochs', type=int, default=20, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=330, help='Batch size for training')
     parser.add_argument('--neg_pos_ratio', type=int, default=10, help='Negative to positive sample ratio')
@@ -980,7 +992,6 @@ if __name__ == '__main__':
     parser.add_argument('--test_mode_epoch', type=int, default=-1, help='Only Inferencing mode. Loading the model instead of training in the given epoch')
     parser.add_argument('--classification_dropout', '--dropout', type=float, default=0.2, help='Dropout rate for the classification head')
     parser.add_argument('--to_sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
-    parser.add_argument('--scheduler_type', type=str, choices=scheduler_types, default='None', help='Type of schedulers to use')
     parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
     parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
     parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
@@ -989,6 +1000,7 @@ if __name__ == '__main__':
 
     model_type = args.model_type.lower()
     loss_type = args.loss_type.lower()
+    dataset_type = args.dataset_type.lower()
     epochs = args.epochs
     batch_size = args.batch_size
     neg_pos_ratio = args.neg_pos_ratio
@@ -1011,8 +1023,10 @@ if __name__ == '__main__':
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
     assert scheduler_type in [x.lower() for x in scheduler_types], f"Scheduler type must be one of {scheduler_types}"
+    assert dataset_type in dataset_types, f"Dataset type must be one of {dataset_types}"
     assert not (freeze_embed_model and special_criterion), "Cannot use both freeze_embed_model and special_criterion"
     assert not (freeze_embed_model and model_type != 'cvc'), "Only CVC model can freeze the embedding model"
+    assert not (to_sweep and not log_wandb), "Cannot sweep hyperparameters without logging to wandb"
     if test_mode_epoch >= 0:
         assert not log_wandb, "Cannot log to wandb in test mode"
         assert not TO_RETRAIN_CLASSIFIER_MODEL, "Cannot test the model if we are retraining it"
@@ -1020,6 +1034,7 @@ if __name__ == '__main__':
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
     print(f"\tLoss Type: {args.loss_type}")
+    print(f"\tDataset Type: {args.dataset_type}")
     print(f"\tEpochs: {args.epochs}")
     print(f"\tBatch Size: {args.batch_size}")
     print(f"\tNegative to Positive Ratio: {args.neg_pos_ratio}")
@@ -1062,20 +1077,28 @@ if __name__ == '__main__':
 
     # Choosing cell type
     cell_type = ['DC8', 'CD4', 'ALL'][2]
-    if cell_type != 'ALL':
+    if cell_type != 'ALL' and dataset_type == 'ms':
         # reading blood samples
         df_bld = df[df['cell_type'] == cell_type]
         # reading healthy study:
         df_hlt = df_h[df_h['cell_type'] == cell_type]
     else:
-        df_bld, df_hlt = df, df_h
+        if dataset_type == 'ms':
+            df_bld, df_hlt = df, df_h
+        elif dataset_type == 'article':
+            df_article = get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            # TODO: Consider adding the other healthy dataset to the article healthy dataset!
+            df_bld = df_article[df_article["condition"] == "T1D"]
+            df_hlt = df_article[df_article["condition"] == "Healthy"]
+        else:
+            raise ValueError("Invalid dataset type")
 
     # TODO: This code checks the intersection of healthy and disease samples with the article
     # healthy_unique = set(df_hlt['AASeq'].unique())
-    # df_article = get_full_healthy_synapse_mal_id_dataframe(healthy_unique, get_all=True)
+    # df_article = get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
     # article_unique = set(df_article['AASeq'].unique())
     # print(f"Number of sequences in the article: \t{len(df_article['AASeq'])}")
-    # print(f"Number of unique sequences in the article: {len(df_article['AASeq'].unique())}")
+    # print(f"Number of unique sequences in the article: {len(article_unique)}")
     # print(f"Number of sequences in the intersection of healthy and article: {len(healthy_unique & article_unique)}")
     # print(f"Number of sequences in the intersection of disease and article: {len(set(df_bld['AASeq']) & article_unique)}")
     # exit(0)
@@ -1086,7 +1109,7 @@ if __name__ == '__main__':
         valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=num_of_patients)
         all_common_seqs = all_common_seqs - valid_seqs_healthy
         # choosing valid samples according to their re-occurrence in different patients and a given distance
-        valid_seqs_disease = calculate_valid_near_sequences(df_bld, save_name=f'disease_{cell_type}_neighbours{num_of_patients}', lev_dist_accept=1,
+        valid_seqs_disease = calculate_valid_near_sequences(df_bld, save_name=f'disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}', lev_dist_accept=1,
                                                             num_of_patients=num_of_patients, all_common_seqs=all_common_seqs)
 
         positive_seqs = set(valid_seqs_disease)
@@ -1107,7 +1130,6 @@ if __name__ == '__main__':
         negative_seqs = set(valid_seqs_healthy)  # Negative sequences remain unchanged
         return positive_seqs, negative_seqs
 
-    # positive_seqs2, negative_seqs2 = get_positive_negative(num_of_patients=2)
     positive_seqs, negative_seqs = get_positive_negative(num_of_patients=3)
     all_common_seqs = find_all_common_sequences(df_bld, num_of_patients=3)
     valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=3)
@@ -1257,6 +1279,7 @@ if __name__ == '__main__':
             run = wand_init(
                 model_type=model_type,
                 loss_type=loss_type,
+                dataset_type=dataset_type,
                 epochs=epochs,
                 batch_size=batch_size,
                 neg_pos_ratio=neg_pos_ratio,
@@ -1311,18 +1334,6 @@ if __name__ == '__main__':
                                                  )
             # display_training_results(history, model_type)
 
-    # TODO: This inference part tries to search for options to somehow quantify the model's performance in other ways than just figures. (Remove it later after we are done with testing).
-    # Inference:
-    if not dont_inference and not force_retrain and not log_wandb:
-        print("Inference:")
-        if not v2_inference:
-            from inference.inference_testing import background_dist_inference  # dina_inference_suggestion
-            # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
-            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-        else:
-            from inference.inference_testing_v2 import background_dist_inference
-            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-
     if not dont_plot:
         # New distribution plot
         print("Plotting the output distributions per patient (New)")
@@ -1341,6 +1352,18 @@ if __name__ == '__main__':
         plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, args, device)
+
+    # TODO: This inference part tries to search for options to somehow quantify the model's performance in other ways than just figures. (Remove it later after we are done with testing).
+    # Inference:
+    if not dont_inference and not force_retrain and not log_wandb:
+        print("Inference:")
+        if not v2_inference:
+            from inference.inference_testing import background_dist_inference  # dina_inference_suggestion
+            # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
+            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+        else:
+            from inference.inference_testing_v2 import background_dist_inference
+            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
 
     exit(0)
 

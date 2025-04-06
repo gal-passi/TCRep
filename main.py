@@ -44,7 +44,7 @@ from dataset_loader import DatasetLoader
 # Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = False
+TO_DISPLAY_COMMON_SEQUENCES = True
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
@@ -507,9 +507,14 @@ def display_common_sequences_figure(dataset_loader, df, df_h, l=8, log_space=Tru
     if l == None:
         l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
 
-    study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-    rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
-    rand_patients = list(chain(*rand_patients))
+    # check if study_id is in the df
+    if 'study_id' in df.columns:
+        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+        rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
+        rand_patients = list(chain(*rand_patients))
+    else:
+        # random patients from the df
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
     df = df[df['patient_id'].isin(rand_patients)]
 
     # calculate common sequences in disease and healthy samples
@@ -584,9 +589,12 @@ def display_common_sequences_figure(dataset_loader, df, df_h, l=8, log_space=Tru
 
 
 def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space=True):
-    study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
-    rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
-    rand_patients = list(chain(*rand_patients))
+    if 'study_id' in df_h.columns:
+        study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
+        rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
+        rand_patients = list(chain(*rand_patients))
+    else:
+        rand_patients = np.random.choice(df_h['patient_id'].unique(), size=15, replace=False)
     df_h = df_h[df_h['patient_id'].isin(rand_patients)]
 
     # calculate common sequences in healthy samples

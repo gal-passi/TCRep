@@ -87,7 +87,7 @@ class DatasetLoader:
         # Convert to ndarray
         patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
 
-        # pick index of 10 unique patients from unique_patient_ids as test patients and the rest as train patients
+        # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
         num_test_patients = 8
         test_patient_ids = unique_patient_ids[:num_test_patients]
         test_patient_ids, valid_patient_ids = test_patient_ids[:num_test_patients // 2], test_patient_ids[
@@ -116,6 +116,9 @@ class DatasetLoader:
         print(f"Number of Positive Sequences in Test: {sum(test_inds)}, Percentage: {sum(test_inds) / len(positive_seqs) * 100:.2f}%")
         print(f"Number of Positive Sequences in Valid: {sum(valid_inds)}, Percentage: {sum(valid_inds) / len(positive_seqs) * 100:.2f}%")
         print(f"Number of Positive Sequences in Train: {sum(train_inds)}, Percentage: {sum(train_inds) / len(positive_seqs) * 100:.2f}%\n")
+        print(f"Number of patients in General: {df_bld['patient_id'].nunique() + df_hlt['patient_id'].nunique()}")
+        print(f"Number of Disease patients: {df_bld['patient_id'].nunique()}")
+        print(f"Number of Healthy patients: {df_hlt['patient_id'].nunique()}")
 
         # Get the positive sequences for the test and train sets
         test_pos_seqs = np.array(positive_seqs)[test_inds]
@@ -136,6 +139,9 @@ class DatasetLoader:
         # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
         neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
         # neg_seqs = neg_seqs[~np.isin(neg_seqs, np.concatenate((valid_neg_seqs, test_neg_seqs)))]
+
+        # TODO: Figure out what to do about cases where negative sequences appear in other sets
+        #  (such as positives and maybe in across different valid\test\train sets)
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs

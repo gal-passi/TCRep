@@ -4,7 +4,6 @@ from sched import scheduler
 
 from triton.language.semantic import device_print
 warnings.simplefilter("ignore", category=FutureWarning)
-from Curation import Study
 import pandas as pd
 import numpy as np
 import torch
@@ -38,22 +37,11 @@ import wandb
 from cache_handler import load_model_state
 from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new
 import yaml
+from collections import defaultdict
+from dataset_loader import DatasetLoader
 
 
-STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
-STUDY_ID2 = 'immunoSEQ47'  # Hepatitis B virus study
-STUDY_ID3 = 'immunoSEQ77'  # Rheumatoid arthritis study (plus healthy)
-STUDY_ID4 = 'PRJNA258001'  # HIV study (plus healthy)
-STUDY_ID5 = 'PRJNA390125'  # Only healthy study
-STUDY_ID6 = 'PRJNA495603'  # Multiple sclerosis study (plus healthy)
-STUDY_ID7 = 'PRJNA579190'  #  Multiple sclerosis study (plus healthy)
-STUDY_ID8 = 'PRJNA280417'  #  Multiple sclerosis study
-HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
-HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
-HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
-HEALTHY_STUDY_ID4 = STUDY_ID6  # Other healthy study
-HEALTHY_STUDY_ID5 = STUDY_ID7  # Other healthy study
-STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
+# Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
 TO_DISPLAY_COMMON_SEQUENCES = False
@@ -62,48 +50,6 @@ TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
-TO_RETRAIN_CLASSIFIER_MODEL = False  # TODO: Remove this variable later!
-
-
-def get_all_usable_healthy_data():
-    healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4, HEALTHY_STUDY_ID5]
-    healthy_studies = []
-    for study_id in healthy_study_ids:
-        study = Study(study_id)
-        usable_samples = study._samples['usable']
-        df = study.read_sample(usable_samples)
-        df = df[df['condition'] == 'Healthy']
-        df['study_id'] = study_id
-        healthy_studies.append(df)
-    df_concat = pd.concat(healthy_studies, ignore_index=True)
-    df_concat = df_concat.dropna(subset=['AASeq'])
-    return df_concat
-
-
-def get_all_usable_disease_data(disease='Multiple sclerosis'):
-    studies = []
-    if disease == 'Ankylosing spondylitis':
-        study_ids = [STUDY_ID]
-    elif disease == 'Hepatitis B virus':
-        study_ids = [STUDY_ID2]
-    elif disease == 'Rheumatoid arthritis':
-        study_ids = [STUDY_ID3]
-    elif disease == 'HIV':
-        study_ids = [STUDY_ID4]
-    elif disease == 'Multiple sclerosis':
-        study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]
-    else:
-        raise ValueError(f"Invalid disease: {disease}")
-
-    for study_id in study_ids:
-        study = Study(study_id)
-        usable_samples = study._samples['usable']
-        df = study.read_sample(usable_samples)
-        df = df[df['condition'] == disease]
-        df['study_id'] = study_id
-        studies.append(df)
-
-    return pd.concat(studies, ignore_index=True)
 
 
 def t_sne_display(X_bld, X_hlt, study_name, cell_type, name_opt=''):
@@ -152,26 +98,27 @@ def process_and_evaluate(bld, healthy, bld_mask, k_fold_type, study_name,
     # Plotting if needed
     if TO_DISPLAY_RESULTS_PLOT_TSNE:
         # Apply t-SNE
-        tsne = TSNE(n_components=2, perplexity=5, random_state=42)
-        X_tsne = tsne.fit_transform(np.concatenate([X_bld]))
-        X_tsne_syn = X_tsne[:len(syn)]
-        X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
-
-        # plotting
-        plt.figure(figsize=(12, 8))
-        plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
-                    c='red', label='Blood', alpha=0.4)
-        plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
-                    c='blue', label='Synovial Fluid', alpha=0.4)
-        plt.legend()
-        plt.title(f't-SNE Visualization of CD{cd_type} Data')
-        plt.xlabel('t-SNE 1')
-        plt.ylabel('t-SNE 2')
-        # save plot
-        plots_folder = f"plots/{study_name}"
-        os.makedirs(plots_folder, exist_ok=True)
-        plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
-        plt.show()
+        raise NotImplementedError("t-SNE visualization is not implemented in this code.")
+        # tsne = TSNE(n_components=2, perplexity=5, random_state=42)
+        # X_tsne = tsne.fit_transform(np.concatenate([X_bld]))
+        # X_tsne_syn = X_tsne[:len(syn)]
+        # X_tsne_bld = X_tsne[len(syn):len(syn) + len(bld)]
+        #
+        # # plotting
+        # plt.figure(figsize=(12, 8))
+        # plt.scatter(X_tsne_bld[:, 0], X_tsne_bld[:, 1],
+        #             c='red', label='Blood', alpha=0.4)
+        # plt.scatter(X_tsne_syn[:, 0], X_tsne_syn[:, 1],
+        #             c='blue', label='Synovial Fluid', alpha=0.4)
+        # plt.legend()
+        # plt.title(f't-SNE Visualization of CD{cd_type} Data')
+        # plt.xlabel('t-SNE 1')
+        # plt.ylabel('t-SNE 2')
+        # # save plot
+        # plots_folder = f"plots/{study_name}"
+        # os.makedirs(plots_folder, exist_ok=True)
+        # plt.savefig(os.path.join(plots_folder, f"tsne_cd{cd_type}{name_opt}.png"))
+        # plt.show()
 
     # K-fold cross validation
     if k_fold_type == 0:  # random k-fold
@@ -480,135 +427,6 @@ def display_accuracy_bin_by_dist_figure(syn, hlt, bld, syn_mask, bld_mask, syn_s
     print(f"CD{cd_type} - KNN {n_neighbors} neighbours: Accuracy: {mean_acc:.3f} ± {std_acc:.3f}. (Random split per patient!)")
 
 
-def helper_function_common_aaseq_analysis(df, lev_dist_accept, only_valid=False, verbose=True):
-    # Step 1: Create patient-wise groups
-    seqs_by_patient = df.groupby('patient_id')['AASeq'].unique().to_dict()
-
-    # Step 2: Compare sequences across different patients
-    valid_sequences = set()
-    iterator = list(combinations(seqs_by_patient.items(), 2))
-    if verbose and len(iterator) > 1:
-        iterator = tqdm(iterator, total=len(iterator))
-    for (pid1, seqs1), (pid2, seqs2) in iterator:
-        # Sort seqs1 by length
-        seqs1_by_len = {}
-        for seq in seqs1:
-            seq_len = len(seq)
-            if seq_len not in seqs1_by_len:
-                seqs1_by_len[seq_len] = []
-            seqs1_by_len[seq_len].append(seq)
-
-        # Convert lists to numpy arrays for efficiency
-        seqs1_by_len = {k: np.array(v, dtype=object) for k, v in seqs1_by_len.items()}
-
-        # Sort seqs2 by length for efficient filtering
-        seqs2_by_len = np.array(sorted(seqs2, key=len), dtype=object)
-        seqs2_lens = np.array([len(seq) for seq in seqs2_by_len])
-
-        # Iterate over length groups in seqs1
-        inner_itter = list(seqs1_by_len.items())
-        if verbose:
-            inner_itter = tqdm(inner_itter, total=len(inner_itter))
-        for length, group1 in inner_itter:
-            # Select seqs2 that are in the range [length-1, length+1] (or +- lev_dist_accept)
-            min_len, max_len = length - lev_dist_accept, length + lev_dist_accept
-            mask = (seqs2_lens >= min_len) & (seqs2_lens <= max_len)
-            group2 = seqs2_by_len[mask]
-
-            if len(group2) > 0:
-                # Compute pairwise identity matrix
-                pwc_mat = pairwise_scores(group1, group2, score=levenshtein_dist_non_bin)
-                sim_inxs = np.where(pwc_mat <= lev_dist_accept)
-
-                # Add matching sequences with patient_id to valid set
-                for x, y in zip(sim_inxs[0], sim_inxs[1]):
-                    if only_valid:
-                        valid_sequences.add(group1[x])
-                        valid_sequences.add(group2[y])
-                    else:
-                        valid_sequences.add((group1[x], pid1, pid2))  # Tuple (seq, originating pid x2)
-                        valid_sequences.add((group2[y], pid1, pid2))  # Tuple (seq, originating pid x2)
-
-    if only_valid:
-        return valid_sequences
-
-    # Step 3: Calculate the mean number of common sequences and percentages
-    unique_patient_ids = df["patient_id"].unique()
-    masks = []
-    for patient in unique_patient_ids:
-        # Get sequences that belong to the current patient
-        patient_seqs = set(df.loc[df["patient_id"] == patient, "AASeq"])
-
-        # Create a mask for sequences
-        mask = np.array([1 if seq[0] in patient_seqs else 0 for seq in valid_sequences])
-        masks.append(mask)
-
-    # Convert to ndarray
-    masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
-    return masks
-
-
-def common_aaseq_analysis(df, num_of_patients, lev_dist_accept=0, mode=1):
-    # Select the unique patients
-    unique_patients = df['patient_id'].unique()
-
-    if len(unique_patients) < num_of_patients:
-        raise ValueError("Number of patients in the dataframe is less than num_of_patients")
-
-    # Create a dictionary mapping each patient_id to their set of AASeq
-    patient_sequences = {pid: set(df[df['patient_id'] == pid]['AASeq']) for pid in unique_patients}
-
-    results = []
-    if mode == 1:
-        # Mode 1: All combinations
-        patient_combinations = combinations(unique_patients, num_of_patients)
-    elif mode == 2:
-        # Mode 2: Always include the first patient
-        patient_combinations = [tuple([unique_patients[0]] + list(comb)) for comb in combinations(unique_patients[1:], num_of_patients - 1)]
-    else:
-        raise ValueError("Mode must be 1 (All combinations) or 2 (Always include the first patient).")
-
-    percent_of_total_values = []
-    for combination in patient_combinations:
-        selected_sequences = [patient_sequences[pid] for pid in combination]
-
-        if lev_dist_accept >= 1:
-            temp_df = df[df['patient_id'].isin(combination)]
-            masks = helper_function_common_aaseq_analysis(temp_df, lev_dist_accept)
-            num_common = np.sum(np.any(masks == 1, axis=0))  # TODO: This will always increase when we look at more patients... this isnt the calculation that we want here
-        else:
-            common_sequences = set.intersection(*selected_sequences)
-            num_common = len(common_sequences)
-        total_sequences = sum(len(seqs) for seqs in selected_sequences)
-        min_sequences = min(len(seqs) for seqs in selected_sequences)
-        max_sequences = max(len(seqs) for seqs in selected_sequences)
-        percent_of_total = (num_common / total_sequences) * 100 if total_sequences > 0 else 0
-        percent_of_min = (num_common / min_sequences) * 100 if min_sequences > 0 else 0
-        percent_of_max = (num_common / max_sequences) * 100 if max_sequences > 0 else 0
-        percent_of_total_values.append(percent_of_total)
-        results.append({
-            'num_total_seqs': total_sequences,
-            'num_common': num_common,
-            'percent_of_total': percent_of_total,
-            'percent_of_min': percent_of_min,
-            'percent_of_max': percent_of_max
-        })
-
-    # Calculate means
-    mean_results = {
-        'num_total_seqs': sum(r['num_total_seqs'] for r in results) / len(results),
-        'num_common': sum(r['num_common'] for r in results) / len(results),
-        'percent_of_total': sum(r['percent_of_total'] for r in results) / len(results),
-        'percent_of_min': sum(r['percent_of_min'] for r in results) / len(results),
-        'percent_of_max': sum(r['percent_of_max'] for r in results) / len(results)
-    }
-
-    # Calculate std for percent_of_total
-    std_percent_of_total = np.std(percent_of_total_values)  # Calculate std for percent_of_total
-
-    return mean_results, std_percent_of_total
-
-
 def generate_patient_samples(df1, all_seqs_h: np.ndarray, patient_seqs_len: int) -> pd.DataFrame:
     """
     Generate a DataFrame where 'patient_id' ranges from H1 to H10, and 'AASeq' contains
@@ -632,7 +450,6 @@ def generate_patient_samples(df1, all_seqs_h: np.ndarray, patient_seqs_len: int)
 
 
 # This function can be applied on x_healthy_list_all in the function below to get average values across all differently picked patients
-from collections import defaultdict
 def average_dicts(outer_list):
     # The number of inner lists
     num_inner_lists = len(outer_list)
@@ -659,6 +476,7 @@ def average_dicts(outer_list):
 
     return averaged_list
 
+
 def combine_to_dataframe(metrics_data, additional_values):
     """
     Combines two variables into a single pandas DataFrame.
@@ -683,7 +501,8 @@ def combine_to_dataframe(metrics_data, additional_values):
 
     return df
 
-def display_common_sequences_figure(df, df_h, l=8, log_space=True):
+
+def display_common_sequences_figure(dataset_loader, df, df_h, l=8, log_space=True):
     # find max len of uniques patient_id
     if l == None:
         l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
@@ -695,7 +514,7 @@ def display_common_sequences_figure(df, df_h, l=8, log_space=True):
 
     # calculate common sequences in disease and healthy samples
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-    x_disease_list = [common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
+    x_disease_list = [dataset_loader.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
     x_disease = np.array([x[0][value_to_take] for x in x_disease_list])
     x_disease_std = np.array([x[1] for x in x_disease_list])
 
@@ -711,7 +530,7 @@ def display_common_sequences_figure(df, df_h, l=8, log_space=True):
             patient_seqs_len = len(df1)
             all_seqs_h = df_h["AASeq"]
             df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-        x_healthy = [common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]
+        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]
         return x_healthy
 
     # Average the results of all patients with disease
@@ -764,7 +583,7 @@ def display_common_sequences_figure(df, df_h, l=8, log_space=True):
     plt.show()
 
 
-def display_common_sequences_figure_healthy(df_h, l=8, log_space=True):
+def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space=True):
     study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
     rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
     rand_patients = list(chain(*rand_patients))
@@ -772,7 +591,7 @@ def display_common_sequences_figure_healthy(df_h, l=8, log_space=True):
 
     # calculate common sequences in healthy samples
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-    x_healthy_list = [common_aaseq_analysis(df_h, num_of_patients=i, mode=1) for i in range(2, l)]
+    x_healthy_list = [dataset_loader.common_aaseq_analysis(df_h, num_of_patients=i, mode=1) for i in range(2, l)]
     x_healthy = np.array([x[0][value_to_take] for x in x_healthy_list])
     x_healthy_std = np.array([x[1] for x in x_healthy_list])
 
@@ -793,149 +612,6 @@ def display_common_sequences_figure_healthy(df_h, l=8, log_space=True):
     # plt.ylim(min(x_healthy), max(x_healthy + x_healthy_std))
     plt.legend()
     plt.show()
-
-
-# TODO: Remove the variable healthy_unique from the function signature
-# TODO: This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
-def get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=False):
-    # Defining constants
-    synapse_db_folder = "db/synapse_Mal_ID"
-    synapse_metadata_file = os.path.join(synapse_db_folder, "metadata.tsv")
-
-    # Define the filename based on the get_all flag
-    file_suffix = "_all" if get_all else "_healthy_only"
-    df_filename = os.path.join(synapse_db_folder, f"synapse_mal_id_dataframe{file_suffix}.pkl")
-    # Check if the DataFrame is already saved
-    if not to_recalculate:
-        if os.path.exists(df_filename):
-            # Load the DataFrame from file
-            df = pd.read_pickle(df_filename)
-            return df
-
-    # Reading metadata
-    synapse_metadata = pd.read_csv(synapse_metadata_file, sep='\t')
-
-    # Reading and interpreting data files
-    synapse_datafiles = [x for x in os.listdir(synapse_db_folder) if x.endswith(".bz2")]
-
-    healthy_samples = []
-    for datafile in tqdm(synapse_datafiles, desc="Processing data files", total=len(synapse_datafiles)):
-        datafile_id = datafile.split("_")[-1][:-4]
-        datafile_path = os.path.join(synapse_db_folder, datafile)
-
-        # Reading metadata and data
-        metadata = synapse_metadata[synapse_metadata['participant_label'] == datafile_id]
-        condition = metadata['disease'].values[0]
-        if get_all or 'Healthy' in condition:
-            data = pd.read_csv(datafile_path, sep='\t', compression='bz2')
-            data = data.loc[:, ['cdr3_seq_aa_q', 'participant_label', 'specimen_tissue']]
-            data['cdr3_seq_aa_q'] = data['cdr3_seq_aa_q'].str.replace(' ', '')
-            # add the condition to the metadata
-            if 'Healthy' in condition:
-                condition = 'Healthy'
-            data['condition'] = condition
-            healthy_samples.append(data)
-
-    # need to make a df with: AASeq, patient_id, tissue, cell_type
-    df = pd.concat(healthy_samples, ignore_index=True)
-    df = df.dropna(subset=['cdr3_seq_aa_q'])
-    # rename columns
-    df = df.rename(columns={'cdr3_seq_aa_q': 'AASeq', 'participant_label': 'patient_id', 'specimen_tissue': 'tissue'})
-
-    df = df[~df['AASeq'].str.contains('[^ACDEFGHIKLMNPQRSTVWY]', regex=True)]
-    df['AASeq'] = 'C' + df['AASeq'] + 'F'
-
-    # Save the DataFrame for future use
-    df.to_pickle(df_filename)
-
-    return df
-
-
-def find_all_common_sequences(df, num_of_patients=3):
-    # Step 1: Group by 'patient_id' and get unique AASeqs
-    grouped = df.groupby('patient_id')['AASeq'].unique()
-
-    # Step 2: Count occurrences of each AASeq across different patient groups
-    aa_seq_counter = Counter()
-    for aa_seqs in grouped:
-        aa_seq_counter.update(aa_seqs)
-
-    # Step 3: Filter AASeqs that appear in at least num_of_patients different patients
-    valid_aa_seqs = {aa_seq for aa_seq, count in aa_seq_counter.items() if count >= num_of_patients}
-
-    return valid_aa_seqs
-
-
-def process_in_batches(df, all_common_seqs, batch_size, lev_dist_accept):
-    all_common_seqs = list(all_common_seqs)
-    # Split all_common_seqs into batches
-    all_common_seqs_batches = [all_common_seqs[i:i + batch_size] for i in range(0, len(all_common_seqs), batch_size)]
-
-    valid_seqs_set = set()  # Use a set to store valid sequences across batches
-
-    for batch in tqdm(all_common_seqs_batches):
-        df_new = df.copy()
-
-        # Flag 'valid' for sequences in the current batch
-        df_new['patient_id'] = df_new['AASeq'].apply(lambda x: 'valid' if x in batch else 'all')
-
-        # Separate valid and all sequences
-        valid_df = df_new[df_new['patient_id'] == 'valid'].drop_duplicates(subset='AASeq')
-        all_df = df_new[df_new['patient_id'] == 'all'].drop_duplicates(subset='AASeq')
-
-        # Concatenate and reset index
-        df_combined = pd.concat([valid_df, all_df]).reset_index(drop=True)
-
-        # Apply the analysis function to the valid sequences
-        valid_seqs_batch = helper_function_common_aaseq_analysis(df_combined, lev_dist_accept, only_valid=True, verbose=False)
-
-        # Accumulate valid sequences from this batch (as a set)
-        valid_seqs_set.update(valid_seqs_batch)
-
-    # The result is a set of valid sequences
-    return valid_seqs_set
-
-
-def calculate_valid_near_sequences(df, save_name, lev_dist_accept=1, num_of_patients=3, all_common_seqs=None):
-    save_folder = "cache/valid_sequences/multiple_sclerosis"
-    save_file = os.path.join(save_folder, f"{save_name}_valid_seqs_dist_{lev_dist_accept}.pkl")
-    if not os.path.exists(save_file):
-        if all_common_seqs is None:
-            all_common_seqs = find_all_common_sequences(df, num_of_patients=num_of_patients)
-        valid_seqs = process_in_batches(df, all_common_seqs, 512, lev_dist_accept)
-        os.makedirs(save_folder, exist_ok=True)
-        with open(save_file, "wb") as f:
-            pickle.dump(valid_seqs, f)
-    else:
-        with open(save_file, "rb") as f:
-            valid_seqs = pickle.load(f)
-    return valid_seqs
-
-
-def generate_neighbors(sequences, valid_letters):
-    valid_letters = set(valid_letters)  # Ensure valid letters are a set for quick lookup
-    neighbor_set = set(sequences)  # Start with the original sequences
-
-    for seq in sequences:
-        seq_len = len(seq)
-
-        # Generate substitutions
-        for i in range(seq_len):
-            for letter in valid_letters:
-                if seq[i] != letter:  # Avoid replacing with the same letter
-                    neighbor_set.add(seq[:i] + letter + seq[i + 1:])
-
-        # Generate insertions
-        for i in range(seq_len + 1):
-            for letter in valid_letters:
-                neighbor_set.add(seq[:i] + letter + seq[i:])
-
-        # Generate deletions
-        if seq_len > 1:  # Ensure we don't delete the only character
-            for i in range(seq_len):
-                neighbor_set.add(seq[:i] + seq[i + 1:])
-
-    return neighbor_set
 
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
@@ -966,6 +642,53 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
         notes="Added dropout on classification head of 0.2",
     )
     return run
+
+
+def sweep_model():
+    wandb.init()
+
+    model_type = wandb.config.model_type
+    loss_type = wandb.config.loss_type
+    epochs = wandb.config.epochs
+    batch_size = wandb.config.batch_size
+    neg_pos_ratio = wandb.config.neg_pos_ratio
+    pos_weights = wandb.config.pos_weights
+    learning_rate = wandb.config.learning_rate
+    reg_coef = wandb.config.regularization_coefficient
+    freeze_embed_model = wandb.config.freeze_embed_model
+    special_criterion = wandb.config.special_criterion
+    embedding_lr = wandb.config.embedding_lr
+    ch_dropout = wandb.config.classification_dropout
+    log_wandb = not wandb.config.no_wandb_log
+
+    if model_type == 'ff':
+        max_seq_len = max(len(seq) for seq in positive_seqs)
+        model = FeedForwardClassifier(max_seq_len)
+    elif model_type == 'cvc':
+        model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model,
+                                   device=device)
+    elif model_type == 'esmc':
+        model = ESMCFeedForwardClassifier(device=device)
+    else:
+        raise ValueError(f"Model type {model_type} is not supported")
+
+    # load the model if possible
+    trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                                         epochs=epochs,
+                                         lr=learning_rate,
+                                         pos_batch_size=batch_size // neg_pos_ratio,
+                                         neg_pos_ratio=neg_pos_ratio,
+                                         log_wandb=log_wandb,
+                                         model_type=model_type,
+                                         loss_type=loss_type,
+                                         freeze_embed_model=freeze_embed_model,
+                                         special_criterion=special_criterion,
+                                         embedding_lr=embedding_lr,
+                                         reg_coef=reg_coef,
+                                         pos_weights=pos_weights,
+                                         args=args,
+                                         is_sweep=to_sweep,
+                                         )
 
 
 if __name__ == '__main__':
@@ -1029,7 +752,6 @@ if __name__ == '__main__':
     assert not (to_sweep and not log_wandb), "Cannot sweep hyperparameters without logging to wandb"
     if test_mode_epoch >= 0:
         assert not log_wandb, "Cannot log to wandb in test mode"
-        assert not TO_RETRAIN_CLASSIFIER_MODEL, "Cannot test the model if we are retraining it"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -1052,18 +774,25 @@ if __name__ == '__main__':
     np.random.seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    # Load studies
-    disease = 'Multiple sclerosis'
-    df = get_all_usable_disease_data(disease=disease)
-    df_h = get_all_usable_healthy_data()
+    # Load data
+    dataset_loader = DatasetLoader(dataset_type=dataset_type)
+    df_bld, df_hlt = dataset_loader.get_dfs()
+    positive_seqs = dataset_loader.positive_seqs
+    train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
+    train_patient_ids, valid_patient_ids, test_patient_ids = dataset_loader.get_patient_ids()
+    train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
+    train_masks, valid_masks, test_masks = dataset_loader.get_masks()
+    train_inds = dataset_loader.train_inds
+    unique_patient_ids = dataset_loader.unique_patient_ids
+    patient_id_masks = dataset_loader.patient_id_masks
 
     # Get all common sequences
     if TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES:
         for i in range(2, 6):
             print(f"Number of Patients: {i}")
-            all_common_seqs = find_all_common_sequences(df, num_of_patients=i)
+            all_common_seqs = dataset_loader.find_all_common_sequences(df_bld, num_of_patients=i)
             print(f"Number of unique common sequences: {len(all_common_seqs)}")
-            all_common_seqs_healthy = find_all_common_sequences(df_h, num_of_patients=i)
+            all_common_seqs_healthy = dataset_loader.find_all_common_sequences(df_hlt, num_of_patients=i)
             print(f"Number of unique common sequences (Healthy): {len(all_common_seqs_healthy)}")
             all_common_seqs = all_common_seqs - all_common_seqs_healthy
             print(f"Number of unique common sequences (Disease / Healthy): {len(all_common_seqs)}")
@@ -1072,202 +801,10 @@ if __name__ == '__main__':
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
-        display_common_sequences_figure(df, df_h, l=l)
-        display_common_sequences_figure_healthy(df_h, l=l)
+        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, l=l)
+        display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
-    # Choosing cell type
-    cell_type = ['DC8', 'CD4', 'ALL'][2]
-    if cell_type != 'ALL' and dataset_type == 'ms':
-        # reading blood samples
-        df_bld = df[df['cell_type'] == cell_type]
-        # reading healthy study:
-        df_hlt = df_h[df_h['cell_type'] == cell_type]
-    else:
-        if dataset_type == 'ms':
-            df_bld, df_hlt = df, df_h
-        elif dataset_type == 'article':
-            df_article = get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-            # TODO: Consider adding the other healthy dataset to the article healthy dataset!
-            df_bld = df_article[df_article["condition"] == "T1D"]
-            df_hlt = df_article[df_article["condition"] == "Healthy"]
-        else:
-            raise ValueError("Invalid dataset type")
-
-    # TODO: This code checks the intersection of healthy and disease samples with the article
-    # healthy_unique = set(df_hlt['AASeq'].unique())
-    # df_article = get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-    # article_unique = set(df_article['AASeq'].unique())
-    # print(f"Number of sequences in the article: \t{len(df_article['AASeq'])}")
-    # print(f"Number of unique sequences in the article: {len(article_unique)}")
-    # print(f"Number of sequences in the intersection of healthy and article: {len(healthy_unique & article_unique)}")
-    # print(f"Number of sequences in the intersection of disease and article: {len(set(df_bld['AASeq']) & article_unique)}")
-    # exit(0)
-
-    # Loading all valid sequences for disease and healthy samples
-    def get_positive_negative(num_of_patients=3):
-        all_common_seqs = find_all_common_sequences(df_bld, num_of_patients=num_of_patients)
-        valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=num_of_patients)
-        all_common_seqs = all_common_seqs - valid_seqs_healthy
-        # choosing valid samples according to their re-occurrence in different patients and a given distance
-        valid_seqs_disease = calculate_valid_near_sequences(df_bld, save_name=f'disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}', lev_dist_accept=1,
-                                                            num_of_patients=num_of_patients, all_common_seqs=all_common_seqs)
-
-        positive_seqs = set(valid_seqs_disease)
-        print(f"Valid Disease Sequence (num of common = {num_of_patients}): {len(positive_seqs)}")
-
-        # Extract valid letters
-        valid_letters = set(''.join(valid_seqs_healthy))
-        # Group healthy sequences by length
-        length_groups = {}
-        for seq in valid_seqs_healthy:
-            length_groups.setdefault(len(seq), set()).add(seq)
-        # Process each length group separately
-        for seq_len, seq_group in length_groups.items():
-            # Generate neighbors for this group
-            neighbors = generate_neighbors(seq_group, valid_letters)
-            # Remove neighbors from positive_seqs immediately
-            positive_seqs -= neighbors  # This prevents storing all neighbors
-        negative_seqs = set(valid_seqs_healthy)  # Negative sequences remain unchanged
-        return positive_seqs, negative_seqs
-
-    positive_seqs, negative_seqs = get_positive_negative(num_of_patients=3)
-    all_common_seqs = find_all_common_sequences(df_bld, num_of_patients=3)
-    valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=3)
-    all_common_seqs = all_common_seqs - valid_seqs_healthy
-    positive_seqs.update(all_common_seqs)
-
-    # make list and sort
-    positive_seqs = list(positive_seqs)
-    positive_seqs.sort()
-    # negative_seqs = list(negative_seqs)
-    # negative_seqs.sort()
-    # shuffle according to a certain seed
-    np.random.seed(42)
-    np.random.shuffle(positive_seqs)
-    # np.random.shuffle(negative_seqs)
-
-    # getting patient id masks in order to do k-fold by patient (according to synovial samples)
-    unique_patient_ids = df_bld["patient_id"].unique()
-    unique_patient_ids = np.random.permutation(unique_patient_ids)
-    masks = []
-    for patient in unique_patient_ids:
-        # Get sequences that belong to the current patient
-        patient_seqs = set(df_bld.loc[df_bld["patient_id"] == patient, "AASeq"])
-        # Create a mask for sequences
-        mask = np.array([1 if seq in patient_seqs else 0 for seq in positive_seqs])
-        if 1 in mask:
-            masks.append(mask)
-    # Convert to ndarray
-    patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
-
-    # pick index of 10 unique patients from unique_patient_ids as test patients and the rest as train patients
-    num_test_patients = 8
-    test_patient_ids = unique_patient_ids[:num_test_patients]
-    test_patient_ids, valid_patient_ids = test_patient_ids[:num_test_patients // 2], test_patient_ids[num_test_patients // 2:]
-    train_patient_ids = unique_patient_ids[num_test_patients:]
-    # now translate back to the inds according to unique_patient_ids
-    test_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in test_patient_ids])
-    valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
-    train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
-
-    # Get the masks for the test and train patients
-    test_masks = patient_id_masks[test_patient_inds]
-    valid_masks = patient_id_masks[valid_patient_inds]
-    train_masks = patient_id_masks[train_patient_inds]
-    test_inds = test_masks.any(axis=0)
-    valid_inds = valid_masks.any(axis=0)
-    valid_test_inds = test_inds & valid_inds
-    if sum(valid_inds) > sum(test_inds):
-        test_inds = test_inds | valid_test_inds
-        valid_inds = valid_inds & ~valid_test_inds
-    else:
-        valid_inds = valid_inds | valid_test_inds
-        test_inds = test_inds & ~valid_test_inds
-    train_inds = (~test_inds) & (~valid_inds)
-    print(f"Number of Positive Sequences in General: {len(positive_seqs)}")
-    print(f"Number of Positive Sequences in Test: {sum(test_inds)}, Percentage: {sum(test_inds) / len(positive_seqs) * 100:.2f}%")
-    print(f"Number of Positive Sequences in Valid: {sum(valid_inds)}, Percentage: {sum(valid_inds) / len(positive_seqs) * 100:.2f}%")
-    print(f"Number of Positive Sequences in Train: {sum(train_inds)}, Percentage: {sum(train_inds) / len(positive_seqs) * 100:.2f}%\n")
-
-    # Get the positive sequences for the test and train sets
-    test_pos_seqs = np.array(positive_seqs)[test_inds]
-    valid_pos_seqs = np.array(positive_seqs)[valid_inds]
-    train_pos_seqs = np.array(positive_seqs)[train_inds]
-    # Get the negative sequences
-    neg_seqs = df_bld[df_bld['patient_id'].isin(train_patient_ids)]['AASeq'].unique()
-    test_neg_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]['AASeq'].unique()
-    valid_neg_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]['AASeq'].unique()
-    # Get all sequences that are in valid_neg_seqs and valid_neg_seqs
-    valid_test_neg_seqs = np.array(list(set(test_neg_seqs) & set(valid_neg_seqs)))
-    if len(test_neg_seqs) < len(valid_neg_seqs):
-        # remove valid_test_neg_seqs from valid_neg_seqs
-        valid_neg_seqs = valid_neg_seqs[~np.isin(valid_neg_seqs, valid_test_neg_seqs)]
-    else:
-        # remove valid_test_neg_seqs from test_neg_seqs
-        test_neg_seqs = test_neg_seqs[~np.isin(test_neg_seqs, valid_test_neg_seqs)]
-    # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
-    neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
-    # neg_seqs = neg_seqs[~np.isin(neg_seqs, np.concatenate((valid_neg_seqs, test_neg_seqs)))]
-
-    # TODO: Refactor this following part! (It's a mess!)
     if to_sweep:
-        def sweep_model():
-            wandb.init()
-
-            model_type = wandb.config.model_type
-            loss_type = wandb.config.loss_type
-            epochs = wandb.config.epochs
-            batch_size = wandb.config.batch_size
-            neg_pos_ratio = wandb.config.neg_pos_ratio
-            pos_weights = wandb.config.pos_weights
-            learning_rate = wandb.config.learning_rate
-            reg_coef = wandb.config.regularization_coefficient
-            freeze_embed_model = wandb.config.freeze_embed_model
-            special_criterion = wandb.config.special_criterion
-            embedding_lr = wandb.config.embedding_lr
-            ch_dropout = wandb.config.classification_dropout
-            test_mode_epoch = wandb.config.test_mode_epoch
-            log_wandb = not wandb.config.no_wandb_log
-
-            if model_type == 'ff':
-                max_seq_len = max(len(seq) for seq in positive_seqs)
-                model = FeedForwardClassifier(max_seq_len)
-            elif model_type == 'cvc':
-                model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model, device=device)
-            elif model_type == 'esmc':
-                model = ESMCFeedForwardClassifier(device=device)
-            else:
-                raise ValueError(f"Model type {model_type} is not supported")
-
-            # load the model if possible
-            trained_model = None
-            if not TO_RETRAIN_CLASSIFIER_MODEL:
-                if test_mode_epoch >= 0:
-                    trained_model = load_model_state(model, args, test_mode_epoch, device)
-                    if trained_model is None:
-                        print(f"Model for epoch {test_mode_epoch} is not available!")
-                        exit(1)
-                else:
-                    trained_model = load_model_state(model, args, args.epochs - 1, device)
-            if trained_model is None:
-                # Training the model and saving it
-                trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                                                     epochs=epochs,
-                                                     lr=learning_rate,
-                                                     pos_batch_size=batch_size // neg_pos_ratio,
-                                                     neg_pos_ratio=neg_pos_ratio,
-                                                     log_wandb=log_wandb,
-                                                     model_type=model_type,
-                                                     loss_type=loss_type,
-                                                     freeze_embed_model=freeze_embed_model,
-                                                     special_criterion=special_criterion,
-                                                     embedding_lr=embedding_lr,
-                                                     reg_coef=reg_coef,
-                                                     pos_weights=pos_weights,
-                                                     args=args,
-                                                     is_sweep=to_sweep,
-                                                     )
-
         with open('sweep.yaml', 'r') as f:
             sweep_config = yaml.safe_load(f)
         sweep_id = wandb.sweep(sweep_config, project='TCRep')
@@ -1306,7 +843,7 @@ if __name__ == '__main__':
 
         # load the model if possible
         trained_model = None
-        if not TO_RETRAIN_CLASSIFIER_MODEL and not force_retrain:
+        if not force_retrain:
             if test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1353,7 +890,6 @@ if __name__ == '__main__':
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, args, device)
 
-    # TODO: This inference part tries to search for options to somehow quantify the model's performance in other ways than just figures. (Remove it later after we are done with testing).
     # Inference:
     if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")

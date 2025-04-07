@@ -16,12 +16,12 @@ warnings.simplefilter("ignore", category=FutureWarning)
 
 
 class CVCModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3):
         super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
-        self.freeze_bert_layers(freeze_embed_model)
+        self.freeze_bert_layers(freeze_embed_model, cvc_layers_to_train)
         self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool"
         self.batch_size = batch_size
 
@@ -120,7 +120,7 @@ class CVCModel(nn.Module):
         embeddings = torch.cat(embeddings)
         return embeddings
 
-    def freeze_bert_layers(self, freeze_embed_model: bool):
+    def freeze_bert_layers(self, freeze_embed_model: bool, cvc_layers_to_train: int):
         if freeze_embed_model:
             # Freeze the embeddings (word, position, token type)
             for param in self.model.parameters():
@@ -131,14 +131,14 @@ class CVCModel(nn.Module):
         for param in self.model.embeddings.parameters():
             param.requires_grad = False
 
-        # Freeze all Bert layers except the last 4
+        # Freeze all Bert layers except the last cvc_layers_to_train layers
         for i, layer in enumerate(self.model.encoder.layer):
-            if i < 9:  # Freeze first 9 layers (0 to 8)
+            if i < 12 - cvc_layers_to_train:  # Freeze first 9 layers (0 to 8)
                 for param in layer.parameters():
                     param.requires_grad = False
 
-        # Keep the last 3 layers (9 to 11) trainable
-        for i in range(9, 12):
+        # Keep the last cvc_layers_to_train layers (12-cvc_layers_to_train to 11) trainable
+        for i in range(12 - cvc_layers_to_train, 12):
             for param in self.model.encoder.layer[i].parameters():
                 param.requires_grad = True
 
@@ -147,10 +147,10 @@ class CVCModel(nn.Module):
 
 
 class CVCClassifierModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3):
         super().__init__()
         self.device = device
-        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model)
+        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model, cvc_layers_to_train)
         self.batch_size = batch_size
         self.method = method
         dropout_rate = ch_dropout

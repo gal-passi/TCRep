@@ -5,6 +5,7 @@ import seaborn as sns
 import torch
 import wandb
 from cache_handler import get_model_config_str
+import pandas as pd
 
 
 def kde_normalizer(kde):
@@ -471,6 +472,141 @@ def plot_average_dist_with_std(ax, distributions, color, label, bins=50, min_val
     line.set_label(label)
 
     return line
+
+
+def plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                        test_masks, valid_masks, positive_seqs, df_bld,
+                                        df_hlt, model_type, log_wandb, args, device='cuda'):
+    # read the .xlsx file "db/ms_related/IEDB_MS_AB.xlsx"
+    df_ms = pd.read_excel("db/ms_related/IEDB_MS_AB.xlsx")
+    # read the .csv file "db/ms_related/McPAS-TCR_MS_seqs.csv"
+    df_mcpas = pd.read_csv("db/ms_related/McPAS-TCR_MS_seqs.csv")
+    seqs1 = df_ms["Chain 1 CDR3"]  # TODO: I think chain 1 is not necessary related to our sequences.
+    seqs2 = df_ms["Chain 2 CDR3"]
+    seqs3 = df_mcpas["CDR3.beta.aa"]
+    AA_LETTERS = "ACDEFGHIKLMNPQRSTVWY"
+    all_seqs = np.concatenate([seqs1, seqs2, seqs3])
+    # Filter out sequences that are not in the AA_LETTERS
+    all_seqs = [seq for seq in all_seqs if all(letter in AA_LETTERS for letter in seq)]
+    # If the start of a sequence does not start with C add it
+    all_seqs = [seq if seq.startswith("C") else "C" + seq for seq in all_seqs]
+    all_seqs = list(set([seq if seq.endswith("F") else seq + "F" for seq in all_seqs]))
+
+    # Get 10 random healthy patients for average healthy distribution
+    healthy_patients = df_hlt["patient_id"].unique()
+    np.random.shuffle(healthy_patients)
+    healthy_patients = healthy_patients[:10]
+
+    # Collect distributions
+    healthy_dists = []
+    disease_dists = []
+    individual_disease_dists = []
+    individual_disease_labels = []
+
+    # Process healthy patients to create average distribution
+    for patient in healthy_patients:
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        healthy_dists.append(healthy_probs)
+
+    # Process disease patients
+    # for i, patient_ind in enumerate(test_inds):
+    # Get disease sequences for this patient
+    disease_seqs = np.array(all_seqs)
+
+    # Get model outputs
+    trained_model.to(device)
+    trained_model.eval()
+    with torch.no_grad():
+        disease_logits = trained_model(disease_seqs)
+
+    # Convert to probabilities
+    disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+
+    # Add to collections
+    disease_dists.append(disease_probs)
+
+    # Store individual distributions with labels (test or validation)
+    individual_disease_dists.append(disease_probs)
+    individual_disease_labels.append(f"Test Patient {0}")
+
+    # FIGUREs variables:
+    xlim = (-0.15, 1.05)
+    ylim = (-0.02, 1.2)
+    dpi = 600
+
+    # FIGURE 1: Average distributions with std
+    fig1, ax1 = plt.subplots(figsize=(6, 6))
+    for spine in ax1.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(0.75)
+    fig1.suptitle(f"Average Output Distributions for {model_type} Model", fontsize=16)
+    # Plot average healthy distribution with std
+    plot_average_dist_with_std(ax1, healthy_dists, color="#7BC8F6", label="Healthy Distribution")
+    # Plot average disease distribution with std
+    plot_average_dist_with_std(ax1, disease_dists, color="#FFA500", label="Patient Distribution")
+    ax1.set_xlabel("Predicted Probability for Positive Class")
+    ax1.set_ylabel("Density")
+    ax1.set_xlim(xlim[0], xlim[1])  # Focus on the set range
+    ax1.set_ylim(ylim[0], ylim[1])  # Focus on the set range
+    ax1.set_xticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.1
+    ax1.set_yticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.2
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+
+    # Save figure 1
+    fig1_path = f"plots/{model_type}_model/dist_model_output/ms_data/distributions_nolegend_{get_model_config_str(args)}.png"
+    os.makedirs(os.path.dirname(fig1_path), exist_ok=True)
+    plt.savefig(fig1_path, dpi=dpi)
+    ax1.legend(loc='upper right', framealpha=1.0)
+    fig1_path = f"plots/{model_type}_model/dist_model_output/ms_data/distributions_{get_model_config_str(args)}.png"
+    plt.savefig(fig1_path, dpi=dpi)
+
+    # Plot a histogram of the disease distributions
+    fig2, ax2 = plt.subplots(figsize=(6, 6))
+    for spine in ax2.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(0.75)
+    fig2.suptitle(f"Histogram of Disease Distributions for {model_type} Model", fontsize=16)
+    # Plot histogram
+    ax2.hist(disease_probs, bins=50, color="#FFA500", alpha=0.7, label="Disease Distribution")
+    ax2.set_xlabel("Predicted Probability for Positive Class")
+    ax2.set_ylabel("Count")
+    ax2.set_xticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.1
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+
+    # Save figure 2
+    fig2_path = f"plots/{model_type}_model/dist_model_output/ms_data/histogram_{get_model_config_str(args)}.png"
+    os.makedirs(os.path.dirname(fig2_path), exist_ok=True)
+    plt.savefig(fig2_path, dpi=dpi)
+    ax2.legend(loc='upper right', framealpha=1.0)
+    fig2_path = f"plots/{model_type}_model/dist_model_output/ms_data/histogram_{get_model_config_str(args)}.png"
+    plt.savefig(fig2_path, dpi=dpi)
+
+    # Log to wandb if requested
+    if log_wandb:
+        wandb.log({
+            "average_distributions": wandb.Image(fig1),
+            "individual_distributions": wandb.Image(fig2)
+        })
+    else:
+        plt.show()
+
+    plt.close(fig1)
+    plt.close(fig2)
+
 
 # def kde_normalizer(kde, max_density=1.0):
 #     """

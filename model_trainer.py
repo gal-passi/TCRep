@@ -164,7 +164,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         encoder_lr = embedding_lr  # this is the default learning rate for BERT
         classification_head_lr = lr
         optimizer = optim.Adam([
-            {'params': model.model.model.encoder.layer[9:].parameters(), 'lr': encoder_lr},  # Later layers
+            {'params': model.model.model.encoder.layer[12-args.cvc_layers_to_train:].parameters(), 'lr': encoder_lr},  # Later layers
             {'params': model.linear.parameters(), 'lr': classification_head_lr}  # Classification head
         ])
     else:

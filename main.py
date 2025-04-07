@@ -2,6 +2,7 @@ import warnings
 from gc import freeze
 from sched import scheduler
 
+from pyarrow.dataset import dataset
 from triton.language.semantic import device_print
 warnings.simplefilter("ignore", category=FutureWarning)
 import pandas as pd
@@ -35,7 +36,7 @@ import seaborn as sns
 from model_trainer import train_model, display_training_results
 import wandb
 from cache_handler import load_model_state
-from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new
+from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new, plot_output_distributions_unseen_ms
 import yaml
 from collections import defaultdict
 from dataset_loader import DatasetLoader
@@ -44,12 +45,15 @@ from dataset_loader import DatasetLoader
 # Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = True
+TO_DISPLAY_COMMON_SEQUENCES = False
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
+
+# Best CVC Model params: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
+# Best Article Model Pa: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot --dataset_type "article" --test_mode_epoch 18
 
 
 def t_sne_display(X_bld, X_hlt, study_name, cell_type, name_opt=''):
@@ -623,7 +627,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
-              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, device):
+              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, cvc_layers_to_train, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -645,6 +649,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "embedding_lr": embedding_lr,
             "ch_dropout": ch_dropout,
             "scheduler_type": scheduler_type,
+            "cvc_layers_to_train": cvc_layers_to_train,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -674,7 +679,7 @@ def sweep_model():
         model = FeedForwardClassifier(max_seq_len)
     elif model_type == 'cvc':
         model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model,
-                                   device=device)
+                                   cvc_layers_to_train=cvc_layers_to_train, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
     else:
@@ -727,6 +732,7 @@ if __name__ == '__main__':
     parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
     parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
     parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')  # TODO: REMOVE!
+    parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -750,6 +756,7 @@ if __name__ == '__main__':
     v2_inference = args.v2_inference
     dont_inference = args.dont_inference
     dont_plot = args.dont_plot
+    cvc_layers_to_train = args.cvc_layers_to_train if not freeze_embed_model else 0  # No layers to train if embedding model is frozen
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -776,6 +783,8 @@ if __name__ == '__main__':
     print(f"\tEmbedding Learning Rate: {args.embedding_lr}")
     print(f"\tClassification Head Dropout: {args.classification_dropout}")
     print(f"\tScheduler Type: {args.scheduler_type}")
+    print(f"\tForce Retrain: {args.force_retrain}")
+    print(f"\tCVC model layers to train: {args.cvc_layers_to_train}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -836,6 +845,7 @@ if __name__ == '__main__':
                 embedding_lr=embedding_lr,
                 ch_dropout=ch_dropout,
                 scheduler_type=scheduler_type,
+                cvc_layers_to_train=cvc_layers_to_train,
                 device=device,
             )
 
@@ -843,7 +853,8 @@ if __name__ == '__main__':
             max_seq_len = max(len(seq) for seq in positive_seqs)
             model = FeedForwardClassifier(max_seq_len)
         elif model_type == 'cvc':
-            model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model, device=device)
+            model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
+                                       freeze_embed_model=freeze_embed_model, device=device)
         elif model_type == 'esmc':
             model = ESMCFeedForwardClassifier(device=device)
         else:
@@ -897,6 +908,13 @@ if __name__ == '__main__':
         plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, args, device)
+
+        # Distribution of unseen MS related dataset plot
+        # if dataset_type == 'ms':
+        #     print("Plotting the output distributions on unseen MS related dataset")
+        #     plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+        #                                           test_masks, valid_masks, positive_seqs, df_bld,
+        #                                           df_hlt, model_type, log_wandb, args, device)
 
     # Inference:
     if not dont_inference and not force_retrain and not log_wandb:

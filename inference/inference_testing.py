@@ -1,19 +1,25 @@
+import os
 import torch
 import numpy as np
 from scipy import stats
 from scipy.special import kl_div
 import matplotlib.pyplot as plt
 from sklearn.neighbors import KernelDensity
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import wasserstein_distance, ks_2samp
+from sklearn.preprocessing import KBinsDiscretizer
+from cache_handler import get_model_config_str
 
 
-def calculate_probas(df, trained_model, patient_ids):
+def calculate_probas(df, trained_model, patient_ids, to_print=True):
     probas = list()
     for patient_id in patient_ids:
         patient_seqs = df.loc[df["patient_id"] == patient_id, "AASeq"].values
         patient_seqs = np.unique(patient_seqs)
 
         # Apply the model
-        print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
+        if to_print:
+            print(f"Patient ID: {patient_id}, Number of Sequences: {len(patient_seqs)}")
         trained_model.eval()
         with torch.no_grad():
             pred = trained_model(patient_seqs)
@@ -409,3 +415,163 @@ def background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, 
                             ["Healthy Reference", "Validation Reference", "Healthy Other", "Test"])
 
     return results, (healthy_bin_centers, healthy_density, healthy_kde), (valid_bin_centers, valid_density, valid_kde)
+
+
+def flatten_probas(list_of_arrays):
+    return np.concatenate(list_of_arrays, axis=0)
+
+
+def discretize_probas(probas, n_bins=50):
+    # Discretize for JS/KL if needed
+    hist, bin_edges = np.histogram(probas, bins=n_bins, range=(0, 1), density=True)
+    return hist + 1e-8  # add epsilon to avoid zero divisions
+
+
+def my_plot_distributions(dists_dict, args, n_bins=50):
+    plt.figure(figsize=(6, 6), dpi=600)
+
+    last_hist = None
+    for label, data in dists_dict.items():
+        last_hist = plt.hist(data, bins=n_bins, range=(0, 1), alpha=0.3, density=True, label=label, histtype='stepfilled')
+
+    plt.title("Probability Distribution Comparison")
+    plt.xlabel("Probability (model output)")
+    plt.ylabel("Density")
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    plt.ylim(0, last_hist[0][1] + 1)
+    plt.savefig(f"plots/inference_plots/inference_histogram_{get_model_config_str(args)}.png", dpi=600, bbox_inches='tight')
+    plt.show()
+
+
+def generate_conclusion(results):
+    from collections import defaultdict
+
+    grouped = defaultdict(list)
+    for name, value in results.items():
+        metric = name.split()[0]  # JSD, KS, Wasserstein, etc.
+        grouped[metric].append((name, value))
+
+    conclusion = {}
+    for metric, entries in grouped.items():
+        # Filter comparisons
+        healthy_entries = [e for e in entries if "Healthy (Base)" in e[0]]
+        disease_entries = [e for e in entries if "Disease (Base)" in e[0]]
+
+        if healthy_entries:
+            best_h = min(healthy_entries, key=lambda x: x[1])
+            conclusion[f"{metric:<12} Healthy (Base)"] = f"{best_h[0]:<47} (score: {best_h[1]:.4f})"
+
+        if disease_entries:
+            best_d = min(disease_entries, key=lambda x: x[1])
+            conclusion[f"{metric:<12} Disease (Base)"] = f"{best_d[0]:<47} (score: {best_d[1]:.4f})"
+
+    return conclusion
+
+
+def print_results_table(results):
+    print("\nDistribution Distance Metrics")
+    print("-" * 53)
+    print(f"{'Metric':<43} {'Value':>8}")
+    print("-" * 53)
+    for k, v in results.items():
+        print(f"{k:<30} {v:>8.4f}")
+    print("-" * 53)
+
+    conclusion = generate_conclusion(results)
+    print("\nConclusion (Closest Match per Metric Type)")
+    print("-" * 65)
+    for k, v in conclusion.items():
+        print(f"{k:<25} {v}")
+    print("-" * 65)
+
+
+def write_results_table(results, filename):
+    with open(filename, "w") as f:
+        f.write("\nDistribution Distance Metrics\n")
+        f.write("-" * 53 + "\n")
+        f.write(f"{'Metric':<43} {'Value':>8}\n")
+        f.write("-" * 53 + "\n")
+        for k, v in results.items():
+            f.write(f"{k:<30} {v:>8.4f}\n")
+        f.write("-" * 53 + "\n")
+
+        conclusion = generate_conclusion(results)
+        f.write("\nConclusion (Closest Match per Metric Type)\n")
+        f.write("-" * 65 + "\n")
+        for k, v in conclusion.items():
+            f.write(f"{k:<25} {v}\n")
+        f.write("-" * 65 + "\n")
+
+
+def my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args, n_bins=100):
+    # Get healthy patient distributions
+    healthy_patient_ids = df_hlt["patient_id"].unique()
+    healthy_patient_ids = np.random.permutation(healthy_patient_ids)
+    probas_healthy = list()
+
+    print("\nCalculating healthy patient distributions...")
+    for patient_id in healthy_patient_ids[:60]:
+        patient_seqs = df_hlt.loc[df_hlt["patient_id"] == patient_id, "AASeq"].values
+        patient_seqs = np.unique(patient_seqs)
+
+        trained_model.eval()
+        with torch.no_grad():
+            pred = trained_model(patient_seqs)
+            pred = torch.softmax(pred, dim=1)
+            proba = pred[:, 1].cpu().numpy()
+            probas_healthy.append(proba)
+
+    probas_healthy_ref = probas_healthy[:45]
+    probas_healthy_other = probas_healthy[45:]
+
+    # Validation and test
+    print("Calculating validation and test distributions...")
+    probas_valid = calculate_probas(df_bld, trained_model, valid_patient_ids, to_print=False)
+    probas_test = calculate_probas(df_bld, trained_model, test_patient_ids, to_print=False)
+
+    # Flatten for comparison
+    healthy_base = flatten_probas(probas_healthy_ref)
+    healthy_test = flatten_probas(probas_healthy_other)
+    disease_base = flatten_probas(probas_valid)
+    disease_test = flatten_probas(probas_test)
+
+    # Discretize for JS divergence
+    print("Discretizing distributions...")
+    healthy_base_bins = discretize_probas(healthy_base, n_bins)
+    healthy_test_bins = discretize_probas(healthy_test, n_bins)
+    disease_base_bins = discretize_probas(disease_base, n_bins)
+    disease_test_bins = discretize_probas(disease_test, n_bins)
+
+    # Calculate distribution distances
+    print("Calculating distribution distances...")
+    results = {
+        "JSD         Disease (Base) vs Disease (Test)": jensenshannon(disease_base_bins, disease_test_bins),
+        "JSD         Disease (Base) vs Healthy (Test)": jensenshannon(disease_base_bins, healthy_test_bins),
+        "JSD         Healthy (Base) vs Healthy (Test)": jensenshannon(healthy_base_bins, healthy_test_bins),
+        "JSD         Healthy (Base) vs Disease (Test)": jensenshannon(healthy_base_bins, disease_test_bins),
+        "Wasserstein Disease (Base) vs Disease (Test)": wasserstein_distance(disease_base, disease_test),
+        "Wasserstein Disease (Base) vs Healthy (Test)": wasserstein_distance(disease_base, healthy_test),
+        "Wasserstein Healthy (Base) vs Healthy (Test)": wasserstein_distance(healthy_base, healthy_test),
+        "Wasserstein Healthy (Base) vs Disease (Test)": wasserstein_distance(healthy_base, disease_test),
+        "KS          Disease (Base) vs Disease (Test)": ks_2samp(disease_base, disease_test).statistic,
+        "KS          Disease (Base) vs Healthy (Test)": ks_2samp(disease_base, healthy_test).statistic,
+        "KS          Healthy (Base) vs Healthy (Test)": ks_2samp(healthy_base, healthy_test).statistic,
+        "KS          Healthy (Base) vs Disease (Test)": ks_2samp(healthy_base, disease_test).statistic
+    }
+
+    # Pretty print and save to file
+    print_results_table(results)
+    os.makedirs("results/inference_results", exist_ok=True)
+    write_results_table(results, f"results/inference_results/inference_results_{get_model_config_str(args)}.txt")
+
+    # Plot the distributions and save the plot
+    my_plot_distributions({
+        "Healthy (Base)": healthy_base,
+        "Healthy (Test)": healthy_test,
+        "Disease (Base)": disease_base,
+        "Disease (Test)": disease_test
+    }, args, n_bins=n_bins)
+
+    return results

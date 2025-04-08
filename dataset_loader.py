@@ -26,7 +26,7 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 
 
 class DatasetLoader:
-    def __init__(self, dataset_type: str):
+    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -54,6 +54,9 @@ class DatasetLoader:
             else:
                 raise ValueError("Invalid dataset type")
 
+        if get_only_unique_patient_ids:
+            self.df_bld, self.df_hlt = df_bld, df_hlt
+            return
         # TODO: This code checks the intersection of healthy and disease samples with the article
         # healthy_unique = set(df_hlt['AASeq'].unique())
         # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
@@ -64,36 +67,11 @@ class DatasetLoader:
         # print(f"Number of sequences in the intersection of disease and article: {len(set(df_bld['AASeq']) & article_unique)}")
         # exit(0)
 
-        # positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, dataset_type, cell_type, num_of_patients=3)
-        # all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
-        # valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
-        # all_common_seqs = all_common_seqs - valid_seqs_healthy
-        # positive_seqs.update(all_common_seqs)
-        #
-        # # make list and sort
-        # positive_seqs = list(positive_seqs)
-        # positive_seqs.sort()
-        # np.random.seed(42)
-        # np.random.shuffle(positive_seqs)
-        #
-        # # getting patient id masks in order to do k-fold by patient (according to synovial samples)
-        # unique_patient_ids = df_bld["patient_id"].unique()
-        # unique_patient_ids = np.random.permutation(unique_patient_ids)
-        # masks = []
-        # for patient in unique_patient_ids:
-        #     # Get sequences that belong to the current patient
-        #     patient_seqs = set(df_bld.loc[df_bld["patient_id"] == patient, "AASeq"])
-        #     # Create a mask for sequences
-        #     mask = np.array([1 if seq in patient_seqs else 0 for seq in positive_seqs])
-        #     if 1 in mask:
-        #         masks.append(mask)
-        # # Convert to ndarray
-        # patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
-
         # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
         num_test_patients = 8
-        unique_patient_ids = df_bld["patient_id"].unique()
-        unique_patient_ids = np.random.permutation(unique_patient_ids)
+        if unique_patient_ids is None:
+            unique_patient_ids = df_bld["patient_id"].unique()
+            unique_patient_ids = np.random.permutation(unique_patient_ids)
         test_patient_ids = unique_patient_ids[:num_test_patients // 2]
         valid_patient_ids = unique_patient_ids[num_test_patients // 2:num_test_patients]
         train_patient_ids = unique_patient_ids[num_test_patients:]
@@ -102,15 +80,21 @@ class DatasetLoader:
         valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
         train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
 
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train", train_patient_ids, dataset_type, cell_type, num_of_patients=3)
+        if k_fold > 0:
+            name_metadata = f"_fold_{k_fold}"
+        else:
+            name_metadata = ""
+
+        # TODO: The save cache files when doing k-fold should have different names!
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=3)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid", train_and_valid_ids, dataset_type, cell_type, num_of_patients=3)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=3)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test", train_and_test_ids, dataset_type, cell_type, num_of_patients=3)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=3)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 

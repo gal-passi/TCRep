@@ -3,7 +3,11 @@ import torch
 
 
 def get_model_config_str(args):
-    config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}_epochs-{args.epochs}_" \
+    if args.k_fold > 0:
+        metadata = f"_fold-{args.k_fold}"
+    else:
+        metadata = ""
+    config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}{metadata}_epochs-{args.epochs}_" \
                  f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
                  f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
     return config_str

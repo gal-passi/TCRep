@@ -139,9 +139,9 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
 
     # Create new test_inds which is all test_patient_inds and one from valid_patient_inds
-    test_inds = np.concatenate([test_patient_inds, [valid_patient_inds[0]]])
+    test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
     # And create a new test_mask which contains both
-    test_masks = np.concatenate((test_masks, valid_masks[0].reshape(1, -1)), axis=0)
+    test_masks = np.concatenate((test_masks, valid_masks), axis=0)
 
     # Color palettes for different sets
     min_color, max_color = 0.4, 0.8

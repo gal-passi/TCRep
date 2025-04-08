@@ -627,7 +627,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
-              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, cvc_layers_to_train, device):
+              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, cvc_layers_to_train, k_fold, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -650,6 +650,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "ch_dropout": ch_dropout,
             "scheduler_type": scheduler_type,
             "cvc_layers_to_train": cvc_layers_to_train,
+            "k_fold": k_fold,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -733,6 +734,7 @@ if __name__ == '__main__':
     parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
     parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')  # TODO: REMOVE!
     parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
+    parser.add_argument('--k_fold', type=int, default=0, help='K-Fold Index (0 for no k-fold)')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -757,6 +759,8 @@ if __name__ == '__main__':
     dont_inference = args.dont_inference
     dont_plot = args.dont_plot
     cvc_layers_to_train = args.cvc_layers_to_train if not freeze_embed_model else 0  # No layers to train if embedding model is frozen
+    k_fold = args.k_fold if args.k_fold >= 0 else 0  # Set to 0 if negative
+    to_k_fold = k_fold > 0
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -767,6 +771,7 @@ if __name__ == '__main__':
     assert not (to_sweep and not log_wandb), "Cannot sweep hyperparameters without logging to wandb"
     if test_mode_epoch >= 0:
         assert not log_wandb, "Cannot log to wandb in test mode"
+    assert not (to_k_fold and to_sweep), "Cannot do k-fold cross-validation and sweep at the same time"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -785,6 +790,7 @@ if __name__ == '__main__':
     print(f"\tScheduler Type: {args.scheduler_type}")
     print(f"\tForce Retrain: {args.force_retrain}")
     print(f"\tCVC model layers to train: {args.cvc_layers_to_train}")
+    print(f"\tDo K-Fold Cross-Validation: {args.k_fold}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -792,7 +798,57 @@ if __name__ == '__main__':
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load data
-    dataset_loader = DatasetLoader(dataset_type=dataset_type)
+    unique_patient_ids = None
+    if to_k_fold:
+        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True)
+        df_bld, df_hlt = dataset_loader.get_dfs()
+        unique_patient_ids = df_bld["patient_id"].unique()
+        unique_patient_ids = np.random.permutation(unique_patient_ids)
+        def generate_shifted_lists(patient_ids):
+            """
+            Generate altered lists by shifting the original list of patient IDs.
+            Each altered list is shifted by increments of 8 positions to the right.
+            Stops generating lists when any element from the first 8 positions would reappear.
+
+            Args:
+                patient_ids: List of unique patient ID strings
+
+            Returns:
+                A list of altered lists
+            """
+            n = len(patient_ids)
+
+            # If the list has 8 or fewer elements, we can only create one list
+            if n <= 8:
+                return [patient_ids.copy()]
+
+            # Calculate how many shifts we can make without bringing back elements from first 8 positions
+            first_eight = set(patient_ids[:8])
+            max_shifts = (n // 8) - 1
+
+            # Create the altered lists
+            altered_lists = []
+
+            for shift_count in range(max_shifts + 1):
+                # Calculate the shift amount
+                shift = (shift_count * 8) % n
+
+                # Create a new shifted list
+                shifted_list = patient_ids[shift:] + patient_ids[:shift]
+
+                # Check if any of the first 8 elements are in the shifted list
+                if len(first_eight.intersection(set(shifted_list[:8]))) > 0 and shift_count > 0:
+                    print(shifted_list[:8], patient_ids[:8])
+
+                # Add to our collection of altered lists
+                altered_lists.append(shifted_list)
+
+            return np.array(altered_lists)
+
+        altered_lists = generate_shifted_lists(list(unique_patient_ids))
+        unique_patient_ids = altered_lists[k_fold]
+
+    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids, k_fold=k_fold)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -846,6 +902,7 @@ if __name__ == '__main__':
                 ch_dropout=ch_dropout,
                 scheduler_type=scheduler_type,
                 cvc_layers_to_train=cvc_layers_to_train,
+                k_fold=k_fold,
                 device=device,
             )
 
@@ -920,9 +977,10 @@ if __name__ == '__main__':
     if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")
         if not v2_inference:
-            from inference.inference_testing import background_dist_inference  # dina_inference_suggestion
+            from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
             # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
-            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+            # background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+            my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)
         else:
             from inference.inference_testing_v2 import background_dist_inference
             background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)

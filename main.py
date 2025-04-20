@@ -53,6 +53,7 @@ TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
 
 # Best CVC Model params: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
+# Best CVC Model params: --model_type "cvc" --epochs 30 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5.75 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
 # Best Article Model Pa: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot --dataset_type "article" --test_mode_epoch 18
 
 
@@ -858,6 +859,12 @@ if __name__ == '__main__':
     train_inds = dataset_loader.train_inds
     unique_patient_ids = dataset_loader.unique_patient_ids
     patient_id_masks = dataset_loader.patient_id_masks
+
+    # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data
+    if dataset_type == 'ms' and not os.path.exists('cache/temp_split_MS_data.npz'):
+        np.savez('cache/temp_split_MS_data.npz', train_pos_seqs=train_pos_seqs, neg_seqs=neg_seqs,
+                 valid_pos_seqs=valid_pos_seqs, valid_neg_seqs=valid_neg_seqs, test_pos_seqs=test_pos_seqs,
+                 test_neg_seqs=test_neg_seqs)
 
     # Get all common sequences
     if TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES:

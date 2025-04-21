@@ -12,14 +12,32 @@ import cvc.data_loader as dl
 import cvc.featurization as ft
 import warnings
 from lab_notebooks.utils import TRANSFORMER
+from peft import LoraConfig, get_peft_model, TaskType
 warnings.simplefilter("ignore", category=FutureWarning)
 
 
 class CVCModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
         super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
+
+        # TODO: Add option to go do with / without PEFT !!! (And any other options if needed, like lora_dropout, etc.)
+        if lora:
+            # Define PEFT configuration
+            peft_config_esmc = LoraConfig(
+                r=8,
+                lora_alpha=32,
+                lora_dropout=0.1,
+                bias='none',
+                layers_to_transform=list(range(11, 11-cvc_layers_to_train, -1)),
+                task_type=TaskType.FEATURE_EXTRACTION,
+                target_modules=['attention.self.query', 'attention.self.key', 'attention.self.value',
+                                'attention.output.dense', 'intermediate.dense', 'output.dense'],
+            )
+            # Load pre-trained model
+            self.model = get_peft_model(self.model, peft_config_esmc).to(device)
+
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
         self.freeze_bert_layers(freeze_embed_model, cvc_layers_to_train)
         self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool"
@@ -147,10 +165,11 @@ class CVCModel(nn.Module):
 
 
 class CVCClassifierModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda',
+                 batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
         super().__init__()
         self.device = device
-        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model, cvc_layers_to_train)
+        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model, cvc_layers_to_train, lora)
         self.batch_size = batch_size
         self.method = method
         dropout_rate = ch_dropout

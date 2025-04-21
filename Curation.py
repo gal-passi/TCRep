@@ -261,6 +261,12 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'PRJNA280417':
         return build_study_PRJNA280417(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA427746':
+        return build_study_PRJNA427746(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA318421':
+        return build_study_PRJNA318421(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA473147':
+        return build_study_PRJNA473147(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -512,6 +518,95 @@ def build_study_PRJNA280417(study_id, study_df, study_desc, usable, uncertain, b
         cell_type = row['Cell Type']
         condition = row['Condition']
         patient_id = comment
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA427746(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    comment_counter = {}
+
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type'].split(' ')[0]
+        condition = row['Condition']
+        if comment in comment_counter:
+            comment_counter[comment] += 1
+        else:
+            comment_counter[comment] = 1
+
+        patient_id = f"p{comment_counter[comment]}_{study_id}"
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA318421(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        patient_id = comment.split('-')[0]
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA473147(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+
+        # Regex pattern to extract the substring between ' P' and '_'
+        match = re.search(r' ([NP]\d+)_', comment)
+        if match:
+            patient_id = f"{match.group(1)}_{study_id}"
+        else:
+            assert False, f"Pattern not found in comment: {comment}"
 
         sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
         study += sample

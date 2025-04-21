@@ -149,3 +149,21 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "The dataset contains T-cell Receptor Beta Chain sequences from multiple sclerosis patients. Individual cDNA molecules were labeled with an unique molecular identifier (UMI) tag prior to library preparation. Custom adapters with sample barcodes were used. Libraries were prepared according to our standardized protocol (http://www.frontiersin.org/Journal/10.3389/fimmu.2013.00456/abstract). Sequencing was performed using Illumina HiSeq2500.",
                 [], [], [])
+
+    study_id = "PRJNA427746"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Immune Repertoire Sequencing Using Molecular Identifiers Enables Accurate Clonality Discovery and Clone Size Quantification",
+                [], [], [])
+
+    study_id = "PRJNA318421"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Homo sapiens TCR repertoire of CD8 T lymphocytes against CMV-pp65 NLV and Flu-M1 GIL",
+                [], [], [])
+
+    study_id = "PRJNA473147"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Antigen-specific T-cell receptor signatures of cytomegalovirus infection (human)",
+                [], [], [])

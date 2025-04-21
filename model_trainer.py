@@ -124,7 +124,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, args, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, args, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -233,6 +233,9 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
             # Calculate loss using raw logits (CrossEntropyLoss applies softmax internally)
             loss = criterion(logits, batch_labels)
+
+            # TODO: Find out how to add the ratio values to the loss calculations!!!
+            # batch_sample_ratios = aaseq_to_ratio(batch_samples)
 
             # Backward pass and optimize
             optimizer.zero_grad()

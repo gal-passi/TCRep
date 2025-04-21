@@ -17,6 +17,9 @@ STUDY_ID5 = 'PRJNA390125'  # Only healthy study
 STUDY_ID6 = 'PRJNA495603'  # Multiple sclerosis study (plus healthy)
 STUDY_ID7 = 'PRJNA579190'  #  Multiple sclerosis study (plus healthy)
 STUDY_ID8 = 'PRJNA280417'  #  Multiple sclerosis study
+STUDY_ID9 = 'PRJNA427746'  #  Cytomegalovirus (plus healthy)
+STUDY_ID10 = 'PRJNA318421'  #  Cytomegalovirus
+STUDY_ID11 = 'PRJNA473147'  #  Cytomegalovirus
 HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
 HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
 HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
@@ -51,6 +54,11 @@ class DatasetLoader:
                 #  This can cause problems because the healthy people from a different study might be too different from healthy people from this dataset.
                 #  So it might be too easy for the model to separate between them.
                 df_hlt = pd.concat([df_hlt, df_h[['AASeq', 'patient_id', 'tissue', 'condition']]], axis=0, ignore_index=True)
+            elif dataset_type == 'cmv':
+                df_cmv = self.get_all_usable_disease_data(disease='CMV', get_all=True)
+                df_bld = df_cmv[df_cmv["condition"] == "CMV"]
+                df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
+                df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)
             else:
                 raise ValueError("Invalid dataset type")
 
@@ -165,6 +173,14 @@ class DatasetLoader:
         # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
         neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
 
+        # get the dataframes for the test and train sets to convert AASeqs to ratios
+        self.build_clone_fraction_df(df_bld, method='max')
+
+        def aaseq_to_ratio(aaseq_array, default_value=0.0):
+            lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
+            result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
+            return result.to_numpy()
+
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
         self.test_neg_seqs = test_neg_seqs
@@ -192,6 +208,29 @@ class DatasetLoader:
         # set dataframes as class attributes
         self.df_bld = df_bld
         self.df_hlt = df_hlt
+        self.aaseq_to_ratio = aaseq_to_ratio
+
+    def build_clone_fraction_df(self, df_bld, method='max'):
+        """
+        Create a DataFrame with unique AASeqs and their aggregated cloneFraction.
+
+        Parameters:
+        - df_bld (pd.DataFrame): Original DataFrame with 'AASeq' and 'cloneFraction'.
+        - method (str): 'max', 'min', or 'avg' for aggregation.
+
+        Returns:
+        - pd.DataFrame: With columns 'AASeq' and 'cloneFraction'.
+        """
+        method_map = {
+            'max': 'max',
+            'min': 'min',
+            'avg': 'mean'
+        }
+        if method not in method_map:
+            raise ValueError("method must be one of 'max', 'min', or 'avg'")
+
+        df_unique = df_bld.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
+        self.df_aaseq_to_ratio = df_unique
 
     def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3):
         df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
@@ -201,6 +240,9 @@ class DatasetLoader:
         all_common_seqs = all_common_seqs - valid_seqs_healthy
         positive_seqs.update(all_common_seqs)
         return positive_seqs, negative_seqs
+
+    def get_aaseq_to_ratio_func(self):
+        return self.aaseq_to_ratio
 
     def get_seqs(self):
         return self.train_pos_seqs, self.train_neg_seqs, self.valid_pos_seqs, self.valid_neg_seqs, self.test_pos_seqs, self.test_neg_seqs
@@ -247,7 +289,7 @@ class DatasetLoader:
         negative_seqs = set(valid_seqs_healthy)  # Negative sequences remain unchanged
         return positive_seqs, negative_seqs
 
-    def get_all_usable_disease_data(self, disease='Multiple sclerosis'):
+    def get_all_usable_disease_data(self, disease='Multiple sclerosis', get_all=False):
         studies = []
         if disease == 'Ankylosing spondylitis':
             study_ids = [STUDY_ID]
@@ -259,6 +301,8 @@ class DatasetLoader:
             study_ids = [STUDY_ID4]
         elif disease == 'Multiple sclerosis':
             study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]
+        elif disease == 'CMV':  # Cytomegalovirus
+            study_ids = [STUDY_ID9, STUDY_ID10, STUDY_ID11]
         else:
             raise ValueError(f"Invalid disease: {disease}")
 
@@ -266,7 +310,8 @@ class DatasetLoader:
             study = Study(study_id)
             usable_samples = study._samples['usable']
             df = study.read_sample(usable_samples)
-            df = df[df['condition'] == disease]
+            if not get_all:
+                df = df[df['condition'] == disease]
             df['study_id'] = study_id
             studies.append(df)
 

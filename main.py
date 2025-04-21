@@ -628,7 +628,8 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
-              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout, scheduler_type, cvc_layers_to_train, k_fold, device):
+              learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
+              scheduler_type, cvc_layers_to_train, k_fold, lora, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -652,6 +653,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "scheduler_type": scheduler_type,
             "cvc_layers_to_train": cvc_layers_to_train,
             "k_fold": k_fold,
+            "lora": lora,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -711,7 +713,7 @@ if __name__ == '__main__':
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
-    dataset_types = ['ms', 'article']
+    dataset_types = ['ms', 'article', 'cmv']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -736,6 +738,7 @@ if __name__ == '__main__':
     parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')  # TODO: REMOVE!
     parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
     parser.add_argument('--k_fold', type=int, default=0, help='K-Fold Index (0 for no k-fold)')
+    parser.add_argument('--lora', '-lora', action='store_true', help='Use LoRA')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -762,6 +765,7 @@ if __name__ == '__main__':
     cvc_layers_to_train = args.cvc_layers_to_train if not freeze_embed_model else 0  # No layers to train if embedding model is frozen
     k_fold = args.k_fold if args.k_fold >= 0 else 0  # Set to 0 if negative
     to_k_fold = k_fold > 0
+    lora = args.lora if model_type == 'cvc' else False  # LoRA is only applicable for CVC model
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -792,6 +796,7 @@ if __name__ == '__main__':
     print(f"\tForce Retrain: {args.force_retrain}")
     print(f"\tCVC model layers to train: {args.cvc_layers_to_train}")
     print(f"\tDo K-Fold Cross-Validation: {args.k_fold}")
+    print(f"\tUse LoRA: {args.lora}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -859,6 +864,7 @@ if __name__ == '__main__':
     train_inds = dataset_loader.train_inds
     unique_patient_ids = dataset_loader.unique_patient_ids
     patient_id_masks = dataset_loader.patient_id_masks
+    aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
 
     # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data
     if dataset_type == 'ms' and not os.path.exists('cache/temp_split_MS_data.npz'):
@@ -910,6 +916,7 @@ if __name__ == '__main__':
                 scheduler_type=scheduler_type,
                 cvc_layers_to_train=cvc_layers_to_train,
                 k_fold=k_fold,
+                lora=lora,
                 device=device,
             )
 
@@ -918,7 +925,7 @@ if __name__ == '__main__':
             model = FeedForwardClassifier(max_seq_len)
         elif model_type == 'cvc':
             model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
-                                       freeze_embed_model=freeze_embed_model, device=device)
+                                       freeze_embed_model=freeze_embed_model, lora=lora, device=device)
         elif model_type == 'esmc':
             model = ESMCFeedForwardClassifier(device=device)
         else:
@@ -950,6 +957,7 @@ if __name__ == '__main__':
                                                  reg_coef=reg_coef,
                                                  pos_weights=pos_weights,
                                                  scheduler_type=scheduler_type,
+                                                 aaseq_to_ratio=aaseq_to_ratio,
                                                  args=args,
                                                  )
             # display_training_results(history, model_type)

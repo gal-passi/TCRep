@@ -57,8 +57,10 @@ class DatasetLoader:
             elif dataset_type == 'cmv':
                 df_cmv = self.get_all_usable_disease_data(disease='CMV', get_all=True)
                 df_bld = df_cmv[df_cmv["condition"] == "CMV"]
+                filtered_patient_ids = [x[0] for x in df_bld.groupby("patient_id")["AASeq"] if len(x[1]) >= 2000]  # this leaves 25 patients
+                df_bld = df_bld[df_bld["patient_id"].isin(filtered_patient_ids)]
                 df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
-                df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)
+                # df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)  # According to Dina, it might be problematic to add healthy from different studies
             else:
                 raise ValueError("Invalid dataset type")
 
@@ -76,7 +78,10 @@ class DatasetLoader:
         # exit(0)
 
         # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
-        num_test_patients = 8
+        if dataset_type == 'cmv':
+            num_test_patients = 4
+        else:
+            num_test_patients = 8
         if unique_patient_ids is None:
             unique_patient_ids = df_bld["patient_id"].unique()
             unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -93,7 +98,6 @@ class DatasetLoader:
         else:
             name_metadata = ""
 
-        # TODO: The save cache files when doing k-fold should have different names!
         train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=3)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
@@ -124,6 +128,9 @@ class DatasetLoader:
             # Create a mask for sequences
             mask = np.array([1 if seq in patient_seqs else 0 for seq in positive_seqs])
             if 1 in mask:
+                masks.append(mask)
+            else:
+                print(f"Patient {patient} has NO positive sequences! Look into this case!")
                 masks.append(mask)
         # Convert to ndarray
         patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
@@ -176,10 +183,30 @@ class DatasetLoader:
         # get the dataframes for the test and train sets to convert AASeqs to ratios
         self.build_clone_fraction_df(df_bld, method='max')
 
+        def f(x, a=1, b=0.5, c=0.5):  # b=1.5 might be better if we want most to be 1.0
+            return a + c * (x ** b)
+
         def aaseq_to_ratio(aaseq_array, default_value=0.0):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
             result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
-            return result.to_numpy()
+            return f(result.to_numpy())
+
+        # # TODO: Think about the correct f function to use here!
+        # #  Also display the histogram\kde plots according to different patients (and according to all positives).
+        # # Example: Calculate values of ratio according to all AASeq of a certain patient in bld
+        # patient_id = df_bld['patient_id'].unique()[0]
+        # patient_sequences_to_ratio = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
+        # ratios = aaseq_to_ratio(patient_sequences_to_ratio)
+        #
+        # # plot the ratios as a figure more sensitive than a histogram
+        # import matplotlib.pyplot as plt
+        # import seaborn as sns
+        # plt.figure(figsize=(10, 6))
+        # sns.histplot(ratios, bins=50, kde=True)
+        # plt.title(f"Distribution of cloneFraction for patient {patient_id}")
+        # plt.xlabel("cloneFraction")
+        # plt.ylabel("Density")
+        # plt.show()
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -229,7 +256,11 @@ class DatasetLoader:
         if method not in method_map:
             raise ValueError("method must be one of 'max', 'min', or 'avg'")
 
-        df_unique = df_bld.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
+        df_norm = df_bld.copy()
+        df_norm['cloneFraction'] = df_norm.groupby('patient_id')['cloneFraction'].transform(
+            lambda x: (x - x.min()) / (x.max() - x.min()) if x.max() != x.min() else 0.0
+        )
+        df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
         self.df_aaseq_to_ratio = df_unique
 
     def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3):
@@ -332,8 +363,7 @@ class DatasetLoader:
         df_concat = df_concat.dropna(subset=['AASeq'])
         return df_concat
 
-    # TODO: Remove the variable healthy_unique from the function signature
-    # TODO: This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
+    # This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
     def get_full_healthy_synapse_mal_id_dataframe(self, to_recalculate=False, get_all=False):
         # Defining constants
         synapse_db_folder = "db/synapse_Mal_ID"
@@ -566,8 +596,9 @@ class DatasetLoader:
             if lev_dist_accept >= 1:
                 temp_df = df[df['patient_id'].isin(combination)]
                 masks = self.helper_function_common_aaseq_analysis(temp_df, lev_dist_accept)
-                num_common = np.sum(np.any(masks == 1,
-                                           axis=0))  # TODO: This will always increase when we look at more patients... this isnt the calculation that we want here
+                # TODO: This will always increase when we look at more patients... this isnt the calculation that we want here
+                num_common = np.sum(np.any(masks == 1, axis=0))
+                print("Using lev_dist_accept >= 1, there might be a problem in the implementation here!!")
             else:
                 common_sequences = set.intersection(*selected_sequences)
                 num_common = len(common_sequences)

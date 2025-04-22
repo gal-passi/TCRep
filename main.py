@@ -507,13 +507,17 @@ def combine_to_dataframe(metrics_data, additional_values):
     return df
 
 
-def display_common_sequences_figure(dataset_loader, df, df_h, l=8, log_space=True):
+def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True):
     # find max len of uniques patient_id
     if l == None:
         l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
 
     # check if study_id is in the df
-    if 'study_id' in df.columns:
+    if dataset_type == 'cmv':
+        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+        rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
+        rand_patients = list(chain(*rand_patients))
+    elif 'study_id' in df.columns:
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
         rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
@@ -555,8 +559,8 @@ def display_common_sequences_figure(dataset_loader, df, df_h, l=8, log_space=Tru
     disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
     healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
     # Save the dfs
-    disease_df.to_csv("cache/disease_df.csv", index=False)
-    healthy_df.to_csv("cache/healthy_df.csv", index=False)
+    # disease_df.to_csv("cache/disease_df.csv", index=False)
+    # healthy_df.to_csv("cache/healthy_df.csv", index=False)
 
     if log_space:
         x_disease = np.log(x_disease)
@@ -887,8 +891,8 @@ if __name__ == '__main__':
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
-        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, l=l)
-        display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
+        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=l)
+        # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
     if to_sweep:
         with open('sweep.yaml', 'r') as f:

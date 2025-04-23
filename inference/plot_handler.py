@@ -608,6 +608,56 @@ def plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_
     plt.close(fig2)
 
 
+def display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type, dpi=600):
+    # Pick 5 random patients
+    random_patients = np.random.choice(df_bld['patient_id'].unique(), size=5, replace=False)
+
+    # Prepare data for both plots
+    ratios_before = {}
+    ratios_after = {}
+
+    for patient_id in random_patients:
+        aaseqs = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
+        ratios_before[patient_id] = aaseq_to_ratio(aaseqs, dont_use_function=True)  # before applying f
+        ratios_after[patient_id] = aaseq_to_ratio(aaseqs, dont_use_function=False)  # after applying f
+
+    # Ratios for positive sequences
+    pos_ratios_before = aaseq_to_ratio(positive_seqs, dont_use_function=True)
+    pos_ratios_after = aaseq_to_ratio(positive_seqs, dont_use_function=False)
+
+    # Plotting (high-res)
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey='row', dpi=dpi)
+
+    # --- Top row: Random patients ---
+    for pid in random_patients:
+        sns.kdeplot(ratios_before[pid], ax=axes[0, 0], label=f"Patient {pid}")
+    axes[0, 0].set_title("KDE of Ratios for 5 Patients (BEFORE f)")
+    axes[0, 0].set_xlabel("Ratios")
+    axes[0, 0].set_ylabel("Density")
+    axes[0, 0].legend()
+
+    for pid in random_patients:
+        sns.kdeplot(ratios_after[pid], ax=axes[0, 1], label=f"Patient {pid}")
+    axes[0, 1].set_title("KDE of f(Ratios) for 5 Patients (AFTER f)")
+    axes[0, 1].set_xlabel("f(Ratios)")
+    axes[0, 1].legend()
+
+    # --- Bottom row: Positive sequences ---
+    sns.kdeplot(pos_ratios_before, ax=axes[1, 0], color='tab:green')
+    axes[1, 0].set_title("KDE of Ratios for Positive Sequences (BEFORE f)")
+    axes[1, 0].set_xlabel("Ratios")
+    axes[1, 0].set_ylabel("Density")
+
+    sns.kdeplot(pos_ratios_after, ax=axes[1, 1], color='tab:green')
+    axes[1, 1].set_title("KDE of f(Ratios) for Positive Sequences (AFTER f)")
+    axes[1, 1].set_xlabel("f(Ratios)")
+
+    plt.tight_layout()
+    os.makedirs("plots/ratio_figures", exist_ok=True)
+    plt.savefig(f"plots/ratio_figures/ratios_{dataset_type}.png", dpi=dpi)
+    plt.show()
+
+
 # def kde_normalizer(kde, max_density=1.0):
 #     """
 #     Normalize KDE plot to a maximum density.

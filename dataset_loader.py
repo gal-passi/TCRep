@@ -1,5 +1,6 @@
 import os
 import pickle
+import torch
 import numpy as np
 import pandas as pd
 from collections import Counter
@@ -186,27 +187,10 @@ class DatasetLoader:
         def f(x, a=1, b=0.5, c=0.5):  # b=1.5 might be better if we want most to be 1.0
             return a + c * (x ** b)
 
-        def aaseq_to_ratio(aaseq_array, default_value=0.0):
+        def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
             result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
-            return f(result.to_numpy())
-
-        # # TODO: Think about the correct f function to use here!
-        # #  Also display the histogram\kde plots according to different patients (and according to all positives).
-        # # Example: Calculate values of ratio according to all AASeq of a certain patient in bld
-        # patient_id = df_bld['patient_id'].unique()[0]
-        # patient_sequences_to_ratio = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
-        # ratios = aaseq_to_ratio(patient_sequences_to_ratio)
-        #
-        # # plot the ratios as a figure more sensitive than a histogram
-        # import matplotlib.pyplot as plt
-        # import seaborn as sns
-        # plt.figure(figsize=(10, 6))
-        # sns.histplot(ratios, bins=50, kde=True)
-        # plt.title(f"Distribution of cloneFraction for patient {patient_id}")
-        # plt.xlabel("cloneFraction")
-        # plt.ylabel("Density")
-        # plt.show()
+            return result if dont_use_function else f(torch.tensor(result))
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs

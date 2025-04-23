@@ -233,15 +233,11 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
             # Calculate loss using raw logits (CrossEntropyLoss applies softmax internally)
             if loss_type == "ce":  # TODO: For now, making use of ratio is possible only when using ce loss!!! Change this later!
-                batch_sample_ratios = aaseq_to_ratio(batch_samples)
+                batch_sample_ratios = aaseq_to_ratio(batch_samples).to(device)
                 per_sample_losses = criterion(logits, batch_labels)
                 sample_weights = torch.ones_like(per_sample_losses)
                 positive_indices = batch_labels == 1
-                sample_weights[positive_indices] = torch.tensor(
-                    batch_sample_ratios[positive_indices],
-                    dtype=torch.float32,
-                    device=per_sample_losses.device
-                )
+                sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
                 weighted_losses = per_sample_losses * sample_weights
                 loss = weighted_losses.mean()
             else:
@@ -346,15 +342,11 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
 
         # Calculate loss using raw logits
         if loss_type == "ce":  # TODO: For now, making use of ratio is possible only when using ce loss!!! Change this later!
-            batch_sample_ratios = aaseq_to_ratio(all_samples)
+            batch_sample_ratios = aaseq_to_ratio(all_samples).to(device)
             per_sample_losses = criterion(logits, all_labels)
             sample_weights = torch.ones_like(per_sample_losses)
             positive_indices = all_labels == 1
-            sample_weights[positive_indices] = torch.tensor(
-                batch_sample_ratios[positive_indices],
-                dtype=torch.float32,
-                device=per_sample_losses.device
-            )
+            sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
             weighted_losses = per_sample_losses * sample_weights
             loss = weighted_losses.mean()
         else:

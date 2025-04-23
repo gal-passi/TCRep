@@ -36,7 +36,7 @@ import seaborn as sns
 from model_trainer import train_model, display_training_results
 import wandb
 from cache_handler import load_model_state
-from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new, plot_output_distributions_unseen_ms
+from inference.plot_handler import plot_output_distributions_claude, plot_output_distributions_per_patient, plot_output_distributions_per_patient_new, plot_output_distributions_unseen_ms, display_ratio_figures
 import yaml
 from collections import defaultdict
 from dataset_loader import DatasetLoader
@@ -51,6 +51,7 @@ TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
+TO_DISPLAY_RATIO_FIGURES = True
 
 # Best CVC Model params: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
 # Best CVC Model params: --model_type "cvc" --epochs 30 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5.75 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
@@ -893,6 +894,9 @@ if __name__ == '__main__':
         l = 8
         display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=l)
         # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
+
+    if TO_DISPLAY_RATIO_FIGURES:
+        display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type)
 
     if to_sweep:
         with open('sweep.yaml', 'r') as f:

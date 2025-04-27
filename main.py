@@ -51,7 +51,9 @@ TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
-TO_DISPLAY_RATIO_FIGURES = True
+TO_DISPLAY_RATIO_FIGURES = False
+
+dataset_loader = None
 
 # Best CVC Model params: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
 # Best CVC Model params: --model_type "cvc" --epochs 30 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5.75 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
@@ -669,6 +671,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
 def sweep_model():
     wandb.init()
 
+    # Define the sweep configuration
     model_type = wandb.config.model_type
     loss_type = wandb.config.loss_type
     epochs = wandb.config.epochs
@@ -682,10 +685,27 @@ def sweep_model():
     embedding_lr = wandb.config.embedding_lr
     ch_dropout = wandb.config.classification_dropout
     log_wandb = not wandb.config.no_wandb_log
+    scheduler_type = wandb.config.scheduler_type.lower()
+    cvc_layers_to_train = wandb.config.cvc_layers_to_train
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+    # Load the dataset
+    global dataset_loader
+    df_bld, df_hlt = dataset_loader.get_dfs()
+    positive_seqs = dataset_loader.positive_seqs
+    train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
+    # train_patient_ids, valid_patient_ids, test_patient_ids = dataset_loader.get_patient_ids()
+    train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
+    train_masks, valid_masks, test_masks = dataset_loader.get_masks()
+    train_inds = dataset_loader.train_inds
+    unique_patient_ids = dataset_loader.unique_patient_ids
+    patient_id_masks = dataset_loader.patient_id_masks
+    aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
+
+    # Initialize Weights & Biases
     if model_type == 'ff':
         max_seq_len = max(len(seq) for seq in positive_seqs)
-        model = FeedForwardClassifier(max_seq_len)
+        model = FeedForwardClassifier(max_seq_len).to(device)
     elif model_type == 'cvc':
         model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model,
                                    cvc_layers_to_train=cvc_layers_to_train, device=device)
@@ -708,9 +728,25 @@ def sweep_model():
                                          embedding_lr=embedding_lr,
                                          reg_coef=reg_coef,
                                          pos_weights=pos_weights,
+                                         scheduler_type=scheduler_type,
+                                         aaseq_to_ratio=aaseq_to_ratio,
                                          args=args,
-                                         is_sweep=to_sweep,
                                          )
+
+    # Plotting distributions per patient (new)
+    plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                              test_masks, valid_masks, positive_seqs, df_bld,
+                                              df_hlt, model_type, log_wandb, args, device)
+
+    # Plotting the output distributions
+    plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
+                                     valid_masks, positive_seqs, df_bld, patient_id_masks,
+                                     train_patient_inds, train_inds, df_hlt, model_type, log_wandb, args, device)
+
+    # Other distribution plot
+    plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                          test_masks, valid_masks, positive_seqs, df_bld,
+                                          df_hlt, model_type, log_wandb, args, device)
 
 
 if __name__ == '__main__':
@@ -736,7 +772,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_wandb_log', '-nolog', action='store_true', help='Disable Weights & Biases logging')
     parser.add_argument('--test_mode_epoch', type=int, default=-1, help='Only Inferencing mode. Loading the model instead of training in the given epoch')
     parser.add_argument('--classification_dropout', '--dropout', type=float, default=0.2, help='Dropout rate for the classification head')
-    parser.add_argument('--to_sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
+    parser.add_argument('--to_sweep', '--sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
     parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
     parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
     parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
@@ -744,6 +780,8 @@ if __name__ == '__main__':
     parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
     parser.add_argument('--k_fold', type=int, default=0, help='K-Fold Index (0 for no k-fold)')
     parser.add_argument('--lora', '-lora', action='store_true', help='Use LoRA')
+    parser.add_argument('--sweep_version', type=int, default=0, help='Version of the sweep file to use')
+
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -771,6 +809,7 @@ if __name__ == '__main__':
     k_fold = args.k_fold if args.k_fold >= 0 else 0  # Set to 0 if negative
     to_k_fold = k_fold > 0
     lora = args.lora if model_type == 'cvc' else False  # LoRA is only applicable for CVC model
+    sweep_version = args.sweep_version
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -871,6 +910,36 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
 
+    # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
+    for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
+        if not (seq.startswith('C') and seq.endswith('F')):
+            raise ValueError(f"Sequence {seq} does not start with 'C' and end with 'F'!")
+
+    # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
+    # article2_data_folder = 'db/test_db/data_tcrb'
+    # article2_data_files = os.listdir(article2_data_folder)
+    # article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x]
+    # # Open all files and read the contents
+    # all_article2_data = set()
+    # for file_name in article2_data_files:
+    #     # read the file as .csv (include header as well)
+    #     file_path = os.path.join(article2_data_folder, file_name)
+    #     df = pd.read_csv(file_path, usecols=[0], names=['AASeq'])
+    #
+    #     # add the sequences to the set
+    #     all_article2_data.update(df['AASeq'].tolist())
+    #
+    # # Modify the strings in all_article2_data to always start with 'C' and end with 'F'
+    # all_article2_data = {'C' + seq + 'F' for seq in all_article2_data}
+    #
+    # # Compare between all sequences in the dataset and the article2 data
+    # all_dataset_data = set(df_bld['AASeq'].tolist())
+    #
+    # # Find the common sequences and print statistics
+    # common_sequences = all_dataset_data.intersection(all_article2_data)
+    # print(f"Number of common sequences (between article 2 and MS TCRdb dataset): {len(common_sequences)}")
+
+
     # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data
     if dataset_type == 'ms' and not os.path.exists('cache/temp_split_MS_data.npz'):
         np.savez('cache/temp_split_MS_data.npz', train_pos_seqs=train_pos_seqs, neg_seqs=neg_seqs,
@@ -899,10 +968,11 @@ if __name__ == '__main__':
         display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type)
 
     if to_sweep:
-        with open('sweep.yaml', 'r') as f:
+        file_version = '' if sweep_version == 0 else f'_v{sweep_version}'
+        with open(f'sweep_yaml/sweep{file_version}.yaml', 'r') as f:
             sweep_config = yaml.safe_load(f)
         sweep_id = wandb.sweep(sweep_config, project='TCRep')
-        wandb.agent(sweep_id, function=sweep_model, count=2)  # Run 2 trials in parallel
+        wandb.agent(sweep_id, function=sweep_model, count=50)  # Run sweeps one after the other for count runs
         exit(0)
     else:
         # wandb init

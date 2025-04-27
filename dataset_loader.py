@@ -184,7 +184,9 @@ class DatasetLoader:
         # get the dataframes for the test and train sets to convert AASeqs to ratios
         self.build_clone_fraction_df(df_bld, method='max')
 
-        def f(x, a=1, b=0.5, c=0.5):  # b=1.5 might be better if we want most to be 1.0
+        # V1: f(x, a=1, b=0.5, c=0.5)
+        # V2: f(x, a=1, b=0.3, c=1.5)
+        def f(x, a=1, b=0.3, c=1.5):  # b=1.5 might be better if we want most to be 1.0
             return a + c * (x ** b)
 
         def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):

@@ -1,0 +1,65 @@
+method: random  # Random search over hyperparameters
+name: my_sweep
+metric:
+  name: val_acc  # Optimize for validation accuracy
+  goal: maximize  # Maximize the accuracy
+#  name: val_loss  # Optimize for validation loss
+#  goal: minimize  # Minimize the loss
+parameters:
+  model_type:
+    value: 'cvc'  # Fixed default value
+  loss_type:
+    value: 'ce_entropy'  # Fixed default value  # NOTE: Can't sweep 'ce'! Fix training code in main!
+#    values: ['ce', 'ce_l2', 'ce_entropy']
+  epochs:
+    value: 25  # Fixed default value
+#    values: [15, 20, 25, 30, 40]  # Sweeping different epochs
+  batch_size:
+    value: 330  # Fixed default value
+  neg_pos_ratio:
+    value: 10  # Fixed default value
+  pos_weights:
+    distribution: uniform
+    min: 3.5
+    max: 9.0  # Sweeping different positive weights
+  learning_rate:
+    value: 0.0025  # Fixed default value
+#    distribution: log_uniform_values
+#    min: 0.0001
+#    max: 0.01  # Sweeping different learning rates
+  embedding_lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.0001  # Always smaller than learning rate
+#    max: 0.0005  # Always smaller than learning rate
+  regularization_coefficient:
+    value: 0.3  # Fixed default value
+#    distribution: uniform
+#    min: 0.1
+#    max: 1.0  # Sweeping different regularization coefficients
+  freeze_embed_model:
+    value: False  # Always False
+  special_criterion:
+    value: True  # Always True
+  no_wandb_log:
+    value: False  # Always False
+  test_mode_epoch:
+    value: -1  # Always -1
+  classification_dropout:
+    value: 0.0  # Fixed default value
+  cvc_layers_to_train:
+    values: [1, 3, 5, 7, 9]  # Sweeping different layers to train
+  lora:
+    value: True  # Always True
+  scheduler_type:
+    value: 'ReduceLROnPlateau'  # Fixed default value
+#    distribution: uniform
+#    min: 0.1
+#    max: 0.5  # Sweeping different dropout rates
+
+# Conditional logic for loss_type and regularization_coefficient
+# conditions:
+#   - condition:
+#       loss_type: 'ce'
+#     fixed:
+#       regularization_coefficient: 0

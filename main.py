@@ -913,21 +913,31 @@ if __name__ == '__main__':
     # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
     for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
         if not (seq.startswith('C') and seq.endswith('F')):
-            raise ValueError(f"Sequence {seq} does not start with 'C' and end with 'F'!")
+            raise ValueError(f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
 
-    # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
+    # # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
     # article2_data_folder = 'db/test_db/data_tcrb'
     # article2_data_files = os.listdir(article2_data_folder)
-    # article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x]
+    # article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x and x.endswith('2.csv')]
     # # Open all files and read the contents
     # all_article2_data = set()
+    # all_article2_dfs = []
     # for file_name in article2_data_files:
     #     # read the file as .csv (include header as well)
     #     file_path = os.path.join(article2_data_folder, file_name)
-    #     df = pd.read_csv(file_path, usecols=[0], names=['AASeq'])
+    #     df = pd.read_csv(file_path, names=['AASeq', 'col 1', 'col 2', 'ratio'])
+    #
+    #     # normalize the ratio column
+    #     df['ratio'] -= df['ratio'].min()
+    #     df['ratio'] /= df['ratio'].max()
+    #
+    #     # add patient_id as 5th column
+    #     patient_id = file_name.split('_')[0]
+    #     df['patient_id'] = patient_id
     #
     #     # add the sequences to the set
     #     all_article2_data.update(df['AASeq'].tolist())
+    #     all_article2_dfs.append(df)
     #
     # # Modify the strings in all_article2_data to always start with 'C' and end with 'F'
     # all_article2_data = {'C' + seq + 'F' for seq in all_article2_data}
@@ -938,6 +948,11 @@ if __name__ == '__main__':
     # # Find the common sequences and print statistics
     # common_sequences = all_dataset_data.intersection(all_article2_data)
     # print(f"Number of common sequences (between article 2 and MS TCRdb dataset): {len(common_sequences)}")
+    #
+    # # Filter the article2 data to only include patients with enough samples
+    # article2_df = pd.concat(all_article2_dfs, ignore_index=True)
+    # patients_with_samples = [x[0] for x in article2_df.groupby('patient_id')['AASeq'] if len(x[1]) >= 2000]
+    # article2_df = article2_df[article2_df['patient_id'].isin(patients_with_samples)]
 
 
     # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data

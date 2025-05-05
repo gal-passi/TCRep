@@ -49,7 +49,7 @@ class DatasetLoader:
                 df_bld, df_hlt = df, df_h
             elif dataset_type == 'article':
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "T1D"]
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
                 # TODO: This might be problematic: adding the other healthy dataset to the article healthy dataset!
                 #  This can cause problems because the healthy people from a different study might be too different from healthy people from this dataset.
@@ -62,6 +62,18 @@ class DatasetLoader:
                 df_bld = df_bld[df_bld["patient_id"].isin(filtered_patient_ids)]
                 df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
                 # df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)  # According to Dina, it might be problematic to add healthy from different studies
+            elif dataset_type == 'article2':
+                df_bld = self.get_full_article2_dataframe()
+                df_hlt = df_h
+            elif dataset_type == 'article_sle':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+            elif dataset_type == 'ms_plus_article2_ms':
+                df_bld_article2 = self.get_full_article2_dataframe()
+                # combine df_bld_article2 with df_bld
+                df_bld = pd.concat([df, df_bld_article2], axis=0, ignore_index=True)
+                df_hlt = df_h
             else:
                 raise ValueError("Invalid dataset type")
 
@@ -182,12 +194,15 @@ class DatasetLoader:
         neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
 
         # get the dataframes for the test and train sets to convert AASeqs to ratios
-        self.build_clone_fraction_df(df_bld, method='max')
+        if dataset_type not in ['article', 'article_sle']:
+            self.build_clone_fraction_df(df_bld, method='max')
 
         # V1: f(x, a=1, b=0.5, c=0.5)
         # V2: f(x, a=1, b=0.3, c=1.5)
-        def f(x, a=1, b=0.3, c=1.5):  # b=1.5 might be better if we want most to be 1.0
-            return a + c * (x ** b)
+        # V3: f(x, a=1, b=0.3, c=1.5):  # b=1.5 might be better if we want most to be 1.0
+        #     return a + c * (x ** b)
+        def f(x, a=0.2, b=1.5):  # b=1.5 might be better if we want most to be 1.0
+            return a + b * x
 
         def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
@@ -403,6 +418,35 @@ class DatasetLoader:
         df.to_pickle(df_filename)
 
         return df
+
+    def get_full_article2_dataframe(self):
+        article2_data_folder = 'db/test_db/data_tcrb'
+        article2_data_files = os.listdir(article2_data_folder)
+        article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x and x.endswith('2.csv')]
+        # Open all files and read the contents
+        all_article2_dfs = []
+        for file_name in article2_data_files:
+            # read the file as .csv (include header as well)
+            file_path = os.path.join(article2_data_folder, file_name)
+            df = pd.read_csv(file_path, names=['AASeq', 'col 1', 'col 2', 'cloneFraction'])
+
+            # normalize the cloneFraction column
+            df['cloneFraction'] -= df['cloneFraction'].min()
+            df['cloneFraction'] /= df['cloneFraction'].max()
+
+            # add patient_id as 5th and 6th columns
+            patient_id = file_name.split('_')[0]
+            df['patient_id'] = patient_id
+            df['study_id'] = 'article2'
+
+            # modify AASeq to start with 'C' and end with 'F'
+            df['AASeq'] = 'C' + df['AASeq'] + 'F'
+
+            # add the sequences to the set
+            all_article2_dfs.append(df)
+        article2_df = pd.concat(all_article2_dfs, ignore_index=True)
+        patients_with_samples = [x[0] for x in article2_df.groupby('patient_id')['AASeq'] if len(x[1]) >= 2000]
+        return article2_df[article2_df['patient_id'].isin(patients_with_samples)]
 
     def find_all_common_sequences(self, df, num_of_patients=3):
         # Step 1: Group by 'patient_id' and get unique AASeqs

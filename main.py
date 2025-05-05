@@ -45,7 +45,7 @@ from dataset_loader import DatasetLoader
 # Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = False
+TO_DISPLAY_COMMON_SEQUENCES = True
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
@@ -511,6 +511,13 @@ def combine_to_dataframe(metrics_data, additional_values):
 
 
 def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True):
+    base_plot_save_path = f"plots/common_seqs/{dataset_type}"
+    os.makedirs(base_plot_save_path, exist_ok=True)
+
+    if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
+        print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
+        return
+
     # find max len of uniques patient_id
     if l == None:
         l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
@@ -520,6 +527,8 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
         rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
+    elif 'study_id' in df.columns and df.iloc[0]['study_id'] == 'article2':
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
     elif 'study_id' in df.columns:
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
         rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
@@ -594,9 +603,9 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
     plt.tight_layout()
-    plt.savefig('plot_common_sequences_nolegend.png')
+    plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences_nolegend.png'))
     plt.legend(framealpha=1.0)
-    plt.savefig('plot_common_sequences.png')
+    plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
     plt.show()
 
 
@@ -754,7 +763,7 @@ if __name__ == '__main__':
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
-    dataset_types = ['ms', 'article', 'cmv']
+    dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -821,6 +830,7 @@ if __name__ == '__main__':
     if test_mode_epoch >= 0:
         assert not log_wandb, "Cannot log to wandb in test mode"
     assert not (to_k_fold and to_sweep), "Cannot do k-fold cross-validation and sweep at the same time"
+    assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -931,16 +941,17 @@ if __name__ == '__main__':
     #     df['ratio'] -= df['ratio'].min()
     #     df['ratio'] /= df['ratio'].max()
     #
-    #     # add patient_id as 5th column
+    #     # add patient_id as 5th and 6th columns
     #     patient_id = file_name.split('_')[0]
     #     df['patient_id'] = patient_id
+    #     df['study_id'] = 'article2'
+    #
+    #     # modify AASeq to start with 'C' and end with 'F'
+    #     df['AASeq'] = 'C' + df['AASeq'] + 'F'
     #
     #     # add the sequences to the set
     #     all_article2_data.update(df['AASeq'].tolist())
     #     all_article2_dfs.append(df)
-    #
-    # # Modify the strings in all_article2_data to always start with 'C' and end with 'F'
-    # all_article2_data = {'C' + seq + 'F' for seq in all_article2_data}
     #
     # # Compare between all sequences in the dataset and the article2 data
     # all_dataset_data = set(df_bld['AASeq'].tolist())
@@ -953,6 +964,7 @@ if __name__ == '__main__':
     # article2_df = pd.concat(all_article2_dfs, ignore_index=True)
     # patients_with_samples = [x[0] for x in article2_df.groupby('patient_id')['AASeq'] if len(x[1]) >= 2000]
     # article2_df = article2_df[article2_df['patient_id'].isin(patients_with_samples)]
+    # display_common_sequences_figure(dataset_loader, article2_df, df_hlt, dataset_type, l=8)
 
 
     # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data
@@ -976,18 +988,37 @@ if __name__ == '__main__':
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
-        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=l)
+        try:
+            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=l)
+        except Exception as e:
+            print(f"Error displaying common sequences figure: {e}")
+            print("Skipping the display of common sequences figure.")
         # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
     if TO_DISPLAY_RATIO_FIGURES:
         display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type)
 
+    # TODO: There is a small problem with reloading checkpoints:
+    #  The checkpoint continues from the next sweep id instead of re-running the last crashed sweep id.
     if to_sweep:
         file_version = '' if sweep_version == 0 else f'_v{sweep_version}'
+        sweep_id_path = f'sweep_yaml/sweep_id{file_version}.txt'
+
         with open(f'sweep_yaml/sweep{file_version}.yaml', 'r') as f:
             sweep_config = yaml.safe_load(f)
-        sweep_id = wandb.sweep(sweep_config, project='TCRep')
-        wandb.agent(sweep_id, function=sweep_model, count=50)  # Run sweeps one after the other for count runs
+
+        # Check if a sweep ID already exists
+        if os.path.exists(sweep_id_path):
+            with open(sweep_id_path, 'r') as f:
+                sweep_id = f.read().strip()
+            print(f"Resuming existing sweep: {sweep_id}")
+        else:
+            sweep_id = wandb.sweep(sweep_config, project='TCRep')
+            with open(sweep_id_path, 'w') as f:
+                f.write(sweep_id)
+            print(f"Created new sweep: {sweep_id}")
+
+        wandb.agent(sweep_id, function=sweep_model, count=50, project='TCRep', entity='amir-weinfeld')  # Run sweeps one after the other for count runs
         exit(0)
     else:
         # wandb init

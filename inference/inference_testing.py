@@ -575,3 +575,321 @@ def my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_pat
     }, args, n_bins=n_bins)
 
     return results
+
+
+def t1d_inference_other_dataset(trained_model, dataset_type):
+    if dataset_type.lower() != "t1d":
+        print("Dataset type is not T1D. Skipping T1D inference.")
+        return
+
+    def get_t1d_tcrs():
+        import pandas as pd
+        import re
+        import io
+
+        def extract_t1d_tcr_beta_chains_from_excel(file_path):
+            """
+            Parse an Excel file containing TCR sequences and extract T1D-related TCR beta chains.
+
+            Parameters:
+            file_path (str): Path to the Excel file containing TCR sequences
+
+            Returns:
+            pandas.DataFrame: DataFrame containing T1D-related TCR beta chain information
+            """
+            try:
+                # Check file extension to determine format
+                _, file_extension = os.path.splitext(file_path)
+
+                # Print the file extension for debugging
+                print(f"Detected file extension: {file_extension}")
+
+                # Attempt to read the file with pandas - it will auto-detect xlsx or xls
+                print(f"Attempting to read file: {file_path}")
+
+                if file_extension.lower() in ['.xlsx', '.xls']:
+                    # Read Excel file
+                    print("Reading as Excel file...")
+                    df = pd.read_excel(file_path)
+                else:
+                    # Try reading as CSV, then TSV if CSV fails
+                    try:
+                        print("Trying to read as CSV...")
+                        df = pd.read_csv(file_path)
+                    except Exception as csv_error:
+                        print(f"CSV read failed: {csv_error}")
+                        try:
+                            print("Trying to read as TSV...")
+                            df = pd.read_csv(file_path, sep='\t')
+                        except Exception as tsv_error:
+                            print(f"TSV read failed: {tsv_error}")
+                            # Last resort: try to read with binary mode and detect encoding
+                            try:
+                                import chardet
+                                with open(file_path, 'rb') as rawdata:
+                                    result = chardet.detect(rawdata.read(100000))
+                                print(f"Detected encoding: {result['encoding']} with confidence {result['confidence']}")
+                                df = pd.read_csv(file_path, encoding=result['encoding'])
+                            except Exception as e:
+                                print(f"All reading methods failed: {e}")
+
+                # Print column names to verify we read the file correctly
+                print("Columns in the file:")
+                print(df.columns.tolist())
+
+                # Clean column names (remove any leading/trailing whitespace)
+                df.columns = df.columns.str.strip()
+
+                # Check if 'TCR ID' column exists
+                if 'TCR ID' not in df.columns:
+                    print("'TCR ID' column not found. Available columns:")
+                    print(df.columns.tolist())
+
+                    # Try to find a column that might contain TCR IDs
+                    potential_id_columns = [col for col in df.columns if ('ID' in col or 'id' in col)]
+
+                    if potential_id_columns:
+                        print(f"Found potential ID columns: {potential_id_columns}")
+                        # Check each potential ID column
+                        for col in potential_id_columns:
+                            # Print sample values to debug
+                            print(f"Sample values in '{col}':")
+                            print(df[col].head())
+
+                            # Check if any values start with "T1D-"
+                            if df[col].astype(str).str.startswith('T1D-').any():
+                                print(f"Using '{col}' as TCR ID column")
+                                df = df.rename(columns={col: 'TCR ID'})
+                                break
+
+                    # If still not found, look for any column with T1D- values
+                    if 'TCR ID' not in df.columns:
+                        print("Looking for any column with T1D- values...")
+                        for col in df.columns:
+                            if df[col].astype(str).str.startswith('T1D-').any():
+                                print(f"Found T1D values in column '{col}'")
+                                df = df.rename(columns={col: 'TCR ID'})
+                                break
+
+                # If we still don't have a TCR ID column, return empty DataFrame
+                if 'TCR ID' not in df.columns:
+                    print("Could not find a column containing TCR IDs starting with 'T1D-'")
+                    # Display first few rows to help diagnose
+                    print("First few rows of the data:")
+                    print(df.head())
+                    return pd.DataFrame()
+
+                # Filter for T1D-related TCRs (TCR IDs that start with "T1D-")
+                t1d_df = df[df['TCR ID'].astype(str).str.startswith('T1D-')]
+
+                print(f"Found {len(t1d_df)} rows with TCR IDs starting with 'T1D-'")
+
+                # Identify columns containing beta chain information
+                beta_chain_cols = ['TCR ID']
+
+                # Look for CDR3b column with various possible names
+                cdr3b_col_options = ['CDR3b', 'CDR3β', 'CDR3 beta']
+                for col in cdr3b_col_options:
+                    if col in df.columns:
+                        beta_chain_cols.append(col)
+                        break
+                else:
+                    # If none of the specific names are found, look for any column with 'CDR3' and 'b'
+                    cdr3b_cols = [col for col in df.columns if 'CDR3' in col and ('b' in col.lower() or 'β' in col)]
+                    if cdr3b_cols:
+                        beta_chain_cols.append(cdr3b_cols[0])
+
+                # Look for TRBV column
+                trbv_col_options = ['TRBV', 'V beta', 'V β', 'Vbeta']
+                for col in trbv_col_options:
+                    if col in df.columns:
+                        beta_chain_cols.append(col)
+                        break
+                else:
+                    # If none of the specific names are found, look for any column with 'V' and 'b'
+                    trbv_cols = [col for col in df.columns if 'V' in col and ('b' in col.lower() or 'β' in col)]
+                    if trbv_cols:
+                        beta_chain_cols.append(trbv_cols[0])
+
+                # Look for TRBJ column
+                trbj_col_options = ['TRBJ', 'J beta', 'J β', 'Jbeta']
+                for col in trbj_col_options:
+                    if col in df.columns:
+                        beta_chain_cols.append(col)
+                        break
+                else:
+                    # If none of the specific names are found, look for any column with 'J' and 'b'
+                    trbj_cols = [col for col in df.columns if 'J' in col and ('b' in col.lower() or 'β' in col)]
+                    if trbj_cols:
+                        beta_chain_cols.append(trbj_cols[0])
+
+                # Add additional useful columns if they exist
+                additional_cols = ['Antigen(s), HLA', 'Antigen(s)', 'Antigen', 'HLA',
+                                   'CD4 or CD8', 'T cell type', 'Clone name(s)', 'Source(s)']
+                for col in additional_cols:
+                    if col in df.columns:
+                        beta_chain_cols.append(col)
+
+                # Check which columns actually exist in the DataFrame
+                available_cols = [col for col in beta_chain_cols if col in df.columns]
+
+                print(f"Using columns: {available_cols}")
+
+                if len(available_cols) <= 1:  # Just the TCR ID column
+                    print("No columns with beta chain information found")
+                    # Print all column names to help diagnose
+                    print("Available columns:")
+                    print(df.columns.tolist())
+                    return pd.DataFrame()
+
+                # Select only available columns
+                t1d_tcrs = t1d_df[available_cols].copy()
+
+                # Drop duplicate entries (if any)
+                t1d_tcrs = t1d_tcrs.drop_duplicates().reset_index(drop=True)
+
+                # Fill NaN values with "Not specified" for better readability
+                t1d_tcrs = t1d_tcrs.fillna('Not specified')
+
+                return t1d_tcrs
+
+            except Exception as e:
+                print(f"Error processing file: {e}")
+                import traceback
+                traceback.print_exc()
+                return pd.DataFrame()
+
+
+        def save_t1d_tcrs(t1d_tcrs, output_file='t1d_tcr_beta_chains.csv'):
+            """
+            Save the extracted T1D TCR beta chains to a CSV file.
+
+            Parameters:
+            t1d_tcrs (pandas.DataFrame): DataFrame containing T1D-related TCR beta chain information
+            output_file (str): Path to save the output CSV file
+            """
+            try:
+                t1d_tcrs.to_csv(output_file, index=False)
+                print(f"Successfully saved {len(t1d_tcrs)} T1D-related TCR beta chains to {output_file}")
+            except Exception as e:
+                print(f"Error saving to file: {e}")
+
+
+        def analyze_t1d_tcrs(t1d_tcrs):
+            """
+            Perform basic analysis on the extracted T1D TCR beta chains.
+
+            Parameters:
+            t1d_tcrs (pandas.DataFrame): DataFrame containing T1D-related TCR beta chain information
+            """
+            if t1d_tcrs.empty:
+                print("No T1D-related TCR beta chains found.")
+                return
+
+            # Find CDR3b column
+            cdr3b_col = None
+            for col in t1d_tcrs.columns:
+                if 'CDR3' in col and ('b' in col.lower() or 'β' in col):
+                    cdr3b_col = col
+                    break
+
+            # Find TRBV column
+            trbv_col = None
+            for col in t1d_tcrs.columns:
+                if col == 'TRBV' or ('V' in col and ('b' in col.lower() or 'β' in col)):
+                    trbv_col = col
+                    break
+
+            # Find T cell type column
+            t_cell_col = None
+            for col in t1d_tcrs.columns:
+                if 'CD4 or CD8' in col or 'T cell' in col:
+                    t_cell_col = col
+                    break
+
+            # Find antigen column
+            antigen_col = None
+            for col in t1d_tcrs.columns:
+                if 'Antigen' in col or 'HLA' in col:
+                    antigen_col = col
+                    break
+
+            # Count TCRs by type (CD4 vs CD8)
+            if t_cell_col:
+                t_cell_counts = t1d_tcrs[t_cell_col].value_counts()
+                print("\nT-cell type distribution:")
+                print(t_cell_counts)
+
+            # Count TCRs by antigen
+            if antigen_col:
+                antigen_counts = t1d_tcrs[antigen_col].value_counts().head(10)
+                print("\nTop 10 antigens:")
+                print(antigen_counts)
+
+            # Analyze TRBV usage
+            if trbv_col:
+                # Clean TRBV values for counting (remove version numbers like *01)
+                t1d_tcrs['TRBV_clean'] = t1d_tcrs[trbv_col].apply(
+                    lambda x: re.sub(r'\*\d+', '', str(x)) if pd.notna(x) else 'Not specified'
+                )
+                trbv_counts = t1d_tcrs['TRBV_clean'].value_counts().head(10)
+                print("\nTop 10 TRBV gene usage:")
+                print(trbv_counts)
+
+            # Basic CDR3 length analysis
+            if cdr3b_col:
+                t1d_tcrs['CDR3b_length'] = t1d_tcrs[cdr3b_col].apply(
+                    lambda x: len(str(x)) if pd.notna(x) and str(x) != 'Not specified' else 0
+                )
+                # Filter out zero lengths for average calculation
+                lengths = t1d_tcrs[t1d_tcrs['CDR3b_length'] > 0]['CDR3b_length']
+                if not lengths.empty:
+                    avg_length = lengths.mean()
+                    print(f"\nAverage CDR3b length: {avg_length:.2f} amino acids")
+
+                    length_dist = lengths.value_counts().sort_index()
+                    print("\nCDR3b length distribution:")
+                    print(length_dist.head(10))
+
+
+        file_path = "db/positive_t1d_data/adj6975_Data_file_S1.xlsx"  # Update with your actual file path
+
+        print("Extracting T1D-related TCR beta chains...")
+        t1d_tcrs = extract_t1d_tcr_beta_chains_from_excel(file_path)
+
+        if not t1d_tcrs.empty:
+            print(f"Found {len(t1d_tcrs)} T1D-related TCR beta chains.")
+
+            # Display first few rows
+            print("\nSample of extracted T1D TCR beta chains:")
+            print(t1d_tcrs.head())
+
+            # Save to CSV
+            save_t1d_tcrs(t1d_tcrs)
+
+            # Analyze the data
+            analyze_t1d_tcrs(t1d_tcrs)
+        else:
+            print("No T1D-related TCR beta chains found in the file or could not process the file.")
+        return t1d_tcrs
+
+    t1d_tcrs = get_t1d_tcrs()
+
+    # Get all TCRs in ndarray of strings:
+    t1d_seqs = np.unique(t1d_tcrs['CDR3b'].values)
+
+    # Apply model:
+    trained_model.eval()
+    with torch.no_grad():
+        out_logits = trained_model(t1d_seqs)
+        out_probs = torch.softmax(out_logits, dim=1)[:, 1].cpu().numpy()
+
+    # Display results in histogram
+    plt.hist(out_probs, bins=50)
+    plt.xlabel('Probability of being positive')
+    plt.ylabel('Count')
+    plt.title('Distribution of probabilities for T1D TCRs')
+    plt.show()
+
+    # Print the number of T1D TCRs which got a prediction of 0.5 or higher
+    print(f"Number of T1D TCRs with probability >= 0.5: {np.sum(out_probs >= 0.5)}")

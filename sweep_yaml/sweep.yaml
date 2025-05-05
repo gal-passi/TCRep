@@ -1,7 +1,7 @@
 method: random  # Random search over hyperparameters
 name: my_sweep
 metric:
-  name: val_acc  # Optimize for validation accuracy
+  name: val_auc  # Optimize for validation accuracy
   goal: maximize  # Maximize the accuracy
 #  name: val_loss  # Optimize for validation loss
 #  goal: minimize  # Minimize the loss
@@ -9,7 +9,8 @@ parameters:
   model_type:
     value: 'cvc'  # Fixed default value
   loss_type:
-    value: 'ce_entropy'  # Fixed default value  # NOTE: Can't sweep 'ce'! Fix training code in main!
+    values: ['ce', 'ce_entropy']
+#    value: 'ce_entropy'  # Fixed default value  # NOTE: Can't sweep 'ce'! Fix training code in main!
 #    values: ['ce', 'ce_l2', 'ce_entropy']
   epochs:
     value: 25  # Fixed default value
@@ -21,7 +22,7 @@ parameters:
   pos_weights:
     distribution: uniform
     min: 3.5
-    max: 9.0  # Sweeping different positive weights
+    max: 11.0  # Sweeping different positive weights
   learning_rate:
     value: 0.0025  # Fixed default value
 #    distribution: log_uniform_values
@@ -29,8 +30,8 @@ parameters:
 #    max: 0.01  # Sweeping different learning rates
   embedding_lr:
     distribution: log_uniform_values
-    min: 0.00001
-    max: 0.0001  # Always smaller than learning rate
+    min: 0.000001
+    max: 0.0002  # Always smaller than learning rate
 #    max: 0.0005  # Always smaller than learning rate
   regularization_coefficient:
     value: 0.3  # Fixed default value
@@ -48,11 +49,12 @@ parameters:
   classification_dropout:
     value: 0.0  # Fixed default value
   cvc_layers_to_train:
-    values: [1, 3, 5, 7, 9]  # Sweeping different layers to train
+    values: [1, 3, 5, 7, 9, 11]  # Sweeping different layers to train
   lora:
     value: True  # Always True
   scheduler_type:
-    value: 'ReduceLROnPlateau'  # Fixed default value
+    values: ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR']  # Sweeping different scheduler types
+#    value: 'ReduceLROnPlateau'  # Fixed default value
 #    distribution: uniform
 #    min: 0.1
 #    max: 0.5  # Sweeping different dropout rates

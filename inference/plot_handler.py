@@ -608,9 +608,11 @@ def plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_
     plt.close(fig2)
 
 
-def display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type, dpi=600):
+def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type, dpi=600):
     # Pick 5 random patients
     random_patients = np.random.choice(df_bld['patient_id'].unique(), size=5, replace=False)
+    # Pick random sequences from neg_seqs in the length of positive_seqs
+    neg_seqs = np.random.choice(neg_seqs, size=min(len(neg_seqs), len(positive_seqs)), replace=False)
 
     # Prepare data for both plots
     ratios_before = {}
@@ -625,53 +627,93 @@ def display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type, d
     pos_ratios_before = aaseq_to_ratio(positive_seqs, dont_use_function=True)
     pos_ratios_after = aaseq_to_ratio(positive_seqs, dont_use_function=False)
 
+    # Ratios for negative sequences
+    neg_ratios_before = aaseq_to_ratio(neg_seqs, dont_use_function=True)
+    neg_ratios_after = aaseq_to_ratio(neg_seqs, dont_use_function=False)
+
     # Plotting (high-res)
     fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey='row', dpi=dpi)
 
     # --- Top row: Random patients ---
+    # Normalized KDE for top-left plot
     for pid in random_patients:
-        sns.kdeplot(ratios_before[pid], ax=axes[0, 0], label=f"Patient {pid}")
+        kde = sns.kdeplot(ratios_before[pid], ax=axes[0, 0], label=f"Patient {pid}", common_norm=False)
+        # Get the y data for the last line that was plotted
+        line = axes[0, 0].get_lines()[-1]
+        y_data = line.get_ydata()
+        # Normalize
+        line.set_ydata(y_data / np.max(y_data))
+
     axes[0, 0].set_title("KDE of Ratios for 5 Patients (BEFORE f)")
     axes[0, 0].set_xlabel("Ratios")
-    axes[0, 0].set_ylabel("Density")
+    axes[0, 0].set_ylabel("Normalized Density")
     axes[0, 0].legend()
+    axes[0, 0].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
 
+    # Normalized KDE for top-right plot
     for pid in random_patients:
-        sns.kdeplot(ratios_after[pid], ax=axes[0, 1], label=f"Patient {pid}")
+        kde = sns.kdeplot(ratios_after[pid], ax=axes[0, 1], label=f"Patient {pid}", common_norm=False)
+        # Get the y data for the last line that was plotted
+        line = axes[0, 1].get_lines()[-1]
+        y_data = line.get_ydata()
+        # Normalize
+        line.set_ydata(y_data / np.max(y_data))
+
     axes[0, 1].set_title("KDE of f(Ratios) for 5 Patients (AFTER f)")
     axes[0, 1].set_xlabel("f(Ratios)")
     axes[0, 1].legend()
+    axes[0, 1].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
 
-    # --- Bottom row: Positive sequences ---
-    sns.kdeplot(pos_ratios_before, ax=axes[1, 0], color='tab:green')
+    # --- Bottom row: Positive sequences and negatives ---
+    # Normalized KDE for bottom-left plot
+    kde_pos = sns.kdeplot(pos_ratios_before, ax=axes[1, 0], color='tab:green', label="Positive Sequences",
+                          common_norm=False)
+    line_pos = axes[1, 0].get_lines()[-1]
+    y_data_pos = line_pos.get_ydata()
+    line_pos.set_ydata(y_data_pos / np.max(y_data_pos))
+
+    kde_neg = sns.kdeplot(neg_ratios_before, ax=axes[1, 0], color='tab:blue', linestyle='--',
+                          label="Negative Sequences", common_norm=False)
+    line_neg = axes[1, 0].get_lines()[-1]
+    y_data_neg = line_neg.get_ydata()
+    line_neg.set_ydata(y_data_neg / np.max(y_data_neg))
+
     axes[1, 0].set_title("KDE of Ratios for Positive Sequences (BEFORE f)")
     axes[1, 0].set_xlabel("Ratios")
-    axes[1, 0].set_ylabel("Density")
+    axes[1, 0].set_ylabel("Normalized Density")
+    axes[1, 0].legend()
+    axes[1, 0].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
 
-    sns.kdeplot(pos_ratios_after, ax=axes[1, 1], color='tab:green')
+    # Calculate simple means directly
+    pos_mean = np.mean(pos_ratios_before)
+    neg_mean = np.mean(neg_ratios_before)
+
+    # Add vertical lines at the means
+    axes[1, 0].axvline(x=pos_mean, color='tab:green', linestyle='-', alpha=0.7,
+                       label=f"Pos Mean: {pos_mean:.3f}")
+    axes[1, 0].axvline(x=neg_mean, color='tab:blue', linestyle='-', alpha=0.7,
+                       label=f"Neg Mean: {neg_mean:.3f}")
+    axes[1, 0].legend()
+
+    # Normalized KDE for bottom-right plot
+    kde_pos = sns.kdeplot(pos_ratios_after, ax=axes[1, 1], color='tab:green', label="Positive Sequences",
+                          common_norm=False)
+    line_pos = axes[1, 1].get_lines()[-1]
+    y_data_pos = line_pos.get_ydata()
+    line_pos.set_ydata(y_data_pos / np.max(y_data_pos))
+
+    kde_neg = sns.kdeplot(neg_ratios_after, ax=axes[1, 1], color='tab:blue', linestyle='--', label="Negative Sequences",
+                          common_norm=False)
+    line_neg = axes[1, 1].get_lines()[-1]
+    y_data_neg = line_neg.get_ydata()
+    line_neg.set_ydata(y_data_neg / np.max(y_data_neg))
+
     axes[1, 1].set_title("KDE of f(Ratios) for Positive Sequences (AFTER f)")
     axes[1, 1].set_xlabel("f(Ratios)")
+    axes[1, 1].legend()
+    axes[1, 1].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
 
     plt.tight_layout()
     os.makedirs("plots/ratio_figures", exist_ok=True)
     plt.savefig(f"plots/ratio_figures/ratios_{dataset_type}.png", dpi=dpi)
     plt.show()
-
-
-# def kde_normalizer(kde, max_density=1.0):
-#     """
-#     Normalize KDE plot to a maximum density.
-#     """
-#     # Get current axis limits
-#     x, y = kde.get_lines()[0].get_data()
-#
-#     # Get current maximum y value
-#     current_max = np.max(y)
-#
-#     # Calculate scaling factor
-#     scale_factor = max_density / current_max if current_max > 0 else 1.0
-#
-#     # Update y values with scaling
-#     for line in kde.get_lines():
-#         x, y = line.get_data()
-#         line.set_ydata(y * scale_factor)

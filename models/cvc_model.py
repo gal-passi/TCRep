@@ -17,18 +17,19 @@ warnings.simplefilter("ignore", category=FutureWarning)
 
 
 class CVCModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, dropout_rate: float = 0.0, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
         super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
 
         # TODO: Add option to go do with / without PEFT !!! (And any other options if needed, like lora_dropout, etc.)
+        #  Also: Changed lora_dropout to 0.0 in the original code!
         if lora:
             # Define PEFT configuration
             peft_config_esmc = LoraConfig(
                 r=8,
                 lora_alpha=32,
-                lora_dropout=0.1,
+                lora_dropout=dropout_rate,
                 bias='none',
                 layers_to_transform=list(range(11, 11-cvc_layers_to_train, -1)),
                 task_type=TaskType.FEATURE_EXTRACTION,
@@ -38,6 +39,10 @@ class CVCModel(nn.Module):
             )
             # Load pre-trained model
             self.model = get_peft_model(self.model, peft_config_esmc).to(device)
+
+        for module in self.model.modules():
+            if isinstance(module, torch.nn.Dropout):
+                module.p = dropout_rate
 
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
         self.freeze_bert_layers(freeze_embed_model, cvc_layers_to_train)
@@ -135,7 +140,9 @@ class CVCModel(nn.Module):
 
                 e = torch.cat(e)
                 batch_embeddings.append(e)
+
             embeddings.append(torch.stack(batch_embeddings))  # added
+
         embeddings = torch.cat(embeddings)
         return embeddings
 
@@ -166,14 +173,14 @@ class CVCModel(nn.Module):
 
 
 class CVCClassifierModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.2, device: str = 'cuda',
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.0, device: str = 'cuda',
                  batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
         super().__init__()
         self.device = device
-        self.model = CVCModel(model_dir, method, device, batch_size, freeze_embed_model, cvc_layers_to_train, lora)
+        self.model = CVCModel(model_dir, method, device, batch_size, ch_dropout, freeze_embed_model, cvc_layers_to_train, lora)
         self.batch_size = batch_size
         self.method = method
-        dropout_rate = ch_dropout
+        self.dropout_rate = ch_dropout
 
         # Add linear layers
         # self.linear = nn.Linear(768, 2).to(device)
@@ -181,10 +188,10 @@ class CVCClassifierModel(nn.Module):
         self.linear = nn.Sequential(
             nn.Linear(768, hidden_dim),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),  # Add dropout after first layer
+            # nn.Dropout(self.dropout_rate),  # Add dropout after first layer
             nn.Linear(hidden_dim, hidden_dim // 2),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),  # Add another dropout layer
+            # nn.Dropout(self.dropout_rate),  # Add another dropout layer
             nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
         ).to(device)
 

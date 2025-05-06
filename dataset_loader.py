@@ -71,7 +71,6 @@ class DatasetLoader:
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
             elif dataset_type == 'ms_plus_article2_ms':
                 df_bld_article2 = self.get_full_article2_dataframe()
-                # combine df_bld_article2 with df_bld
                 df_bld = pd.concat([df, df_bld_article2], axis=0, ignore_index=True)
                 df_hlt = df_h
             else:
@@ -91,7 +90,7 @@ class DatasetLoader:
         # exit(0)
 
         # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
-        if dataset_type == 'cmv':
+        if dataset_type == 'cmv' or dataset_type == 'article_sle':
             num_test_patients = 4
         else:
             num_test_patients = 8
@@ -110,16 +109,20 @@ class DatasetLoader:
             name_metadata = f"_fold_{k_fold}"
         else:
             name_metadata = ""
+        if dataset_type == 'article_sle':
+            num_of_patients = 2
+        else:
+            num_of_patients = 3
 
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=3)
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=3)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=3)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -197,12 +200,14 @@ class DatasetLoader:
         if dataset_type not in ['article', 'article_sle']:
             self.build_clone_fraction_df(df_bld, method='max')
 
-        # V1: f(x, a=1, b=0.5, c=0.5)
-        # V2: f(x, a=1, b=0.3, c=1.5)
-        # V3: f(x, a=1, b=0.3, c=1.5):  # b=1.5 might be better if we want most to be 1.0
+        # V1: f(x, a=1, b=0.5, c=0.5)  # b=1.5 might be better if we want most to be 1.0
         #     return a + c * (x ** b)
-        def f(x, a=0.2, b=1.5):  # b=1.5 might be better if we want most to be 1.0
-            return a + b * x
+        # V2: f(x, a=1, b=0.3, c=1.5)
+        #     return a + c * (x ** b)
+        # V3: f(x, a=1, b=0.3, c=1.5):
+        #     return a + b * x
+        def f(x, a=1, b=0.3, c=1.5):
+            return a + c * (x ** b)
 
         def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
@@ -419,6 +424,7 @@ class DatasetLoader:
 
         return df
 
+    # TODO: There is a major problem with loading this dataset. The current way doesn't use information from "file_key" so its unusable now..
     def get_full_article2_dataframe(self):
         article2_data_folder = 'db/test_db/data_tcrb'
         article2_data_files = os.listdir(article2_data_folder)

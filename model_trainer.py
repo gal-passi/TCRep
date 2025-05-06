@@ -185,7 +185,15 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         'val_loss': [],
         'val_acc': [],
         'val_auc': [],
-        'val_prauc': []
+        'val_prauc': [],
+        'val_tp': [],
+        'val_fp': [],
+        'val_tn': [],
+        'val_fn': [],
+        'val_pos_acc': [],
+        'val_neg_acc': [],
+        'val_precision': [],
+        'val_recall': []
     }
 
     # Starting training
@@ -263,27 +271,39 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         train_acc = 100 * correct / total
 
         # Validation phase
-        val_loss, val_acc, val_auc, val_prauc = evaluate_model(model, loss_type, aaseq_to_ratio, valid_pos_seqs, valid_neg_seqs, criterion, device)
+        val_metrics = evaluate_model(model, loss_type, aaseq_to_ratio, valid_pos_seqs, valid_neg_seqs, criterion, device)
+        val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall = val_metrics
+
         if scheduler is not None:
             if scheduler_type == "ReduceLROnPlateau".lower():
                 scheduler.step(val_loss)
             else:
                 scheduler.step()
 
-        # Update history
+        # Update history with all metrics
         history['train_loss'].append(train_loss)
         history['train_acc'].append(train_acc)
         history['val_loss'].append(val_loss)
         history['val_acc'].append(val_acc)
         history['val_auc'].append(val_auc)
         history['val_prauc'].append(val_prauc)
+        history['val_tp'].append(val_tp)
+        history['val_fp'].append(val_fp)
+        history['val_tn'].append(val_tn)
+        history['val_fn'].append(val_fn)
+        history['val_pos_acc'].append(val_pos_acc)
+        history['val_neg_acc'].append(val_neg_acc)
+        history['val_precision'].append(val_precision)
+        history['val_recall'].append(val_recall)
 
         # Calculate epoch time
         epoch_time = time.time() - start_time
 
-        # Print epoch results
+        # Print epoch results with additional metrics
         print(f'Epoch {epoch + 1}/{epochs} - {epoch_time:.2f}s - Loss: {train_loss:.4f} - Acc: {train_acc:.2f}% - '
-              f'Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2f}% - Val AUC: {val_auc:.4f} - Val PRAUC: {val_prauc:.4f}')
+              f'Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2f}% - Val AUC: {val_auc:.4f} - Val PRAUC: {val_prauc:.4f} - '
+              f'Val Precision: {val_precision:.4f} - Val Recall: {val_recall:.4f}')
+
         if log_wandb:
             wandb.log({
                 "epoch": epoch + 1,
@@ -293,7 +313,15 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
                 "val_auc": val_auc,
-                "val_prauc": val_prauc
+                "val_prauc": val_prauc,
+                "val_tp": val_tp,
+                "val_fp": val_fp,
+                "val_tn": val_tn,
+                "val_fn": val_fn,
+                "val_pos_acc": val_pos_acc,
+                "val_neg_acc": val_neg_acc,
+                "val_precision": val_precision,
+                "val_recall": val_recall
             })
 
         # saving the model for this epoch on odd epochs or on last epoch
@@ -310,13 +338,15 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
 
     Args:
         model: The model to evaluate (returns logits)
+        loss_type: Type of loss function
+        aaseq_to_ratio: Function that maps amino acid sequences to ratios
         pos_seqs: numpy array of positive sequences (strings)
         neg_seqs: numpy array of negative sequences (strings)
         criterion: Loss function (optional)
         device: Torch device (optional)
 
     Returns:
-        loss, accuracy, AUC, PR-AUC
+        loss, accuracy, AUC, PR-AUC, TP, FP, TN, FN, pos_acc, neg_acc, precision, recall
     """
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -361,19 +391,38 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
         correct = (predicted == all_labels).sum().item()
         accuracy = 100 * correct / total
 
+        # Calculate confusion matrix metrics
+        true_labels = all_labels.cpu().numpy()
+        predicted_labels = predicted.cpu().numpy()
+
+        # Calculate true positives, false positives, true negatives, false negatives
+        TP = ((predicted_labels == 1) & (true_labels == 1)).sum().item()
+        FP = ((predicted_labels == 1) & (true_labels == 0)).sum().item()
+        TN = ((predicted_labels == 0) & (true_labels == 0)).sum().item()
+        FN = ((predicted_labels == 0) & (true_labels == 1)).sum().item()
+
+        # Calculate accuracy on positives and negatives
+        pos_total = (true_labels == 1).sum()
+        neg_total = (true_labels == 0).sum()
+        pos_acc = 100 * TP / pos_total if pos_total > 0 else 0
+        neg_acc = 100 * TN / neg_total if neg_total > 0 else 0
+
+        # Calculate precision and recall
+        precision = TP / (TP + FP) if (TP + FP) > 0 else 0
+        recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+
         # Calculate AUC and PR-AUC
         pos_probs = probabilities[:, 1].cpu().numpy()
-        true_labels = all_labels.cpu().numpy()
 
         try:
             roc_auc = roc_auc_score(true_labels, pos_probs)
-            precision, recall, _ = precision_recall_curve(true_labels, pos_probs)
-            pr_auc = auc(recall, precision)
+            pr_precision, pr_recall, _ = precision_recall_curve(true_labels, pos_probs)
+            pr_auc = auc(pr_recall, pr_precision)
         except:
-            roc_auc = 0.5
-            pr_auc = 0.5
+            roc_auc = 0
+            pr_auc = 0
 
-    return loss, accuracy, roc_auc, pr_auc
+    return loss, accuracy, roc_auc, pr_auc, TP, FP, TN, FN, pos_acc, neg_acc, precision, recall
 
 
 def display_training_results(history, model_type, figsize=(15, 10)):

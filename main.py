@@ -45,7 +45,7 @@ from dataset_loader import DatasetLoader
 # Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = True
+TO_DISPLAY_COMMON_SEQUENCES = False
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
@@ -58,7 +58,7 @@ dataset_loader = None
 # Best CVC Model params: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
 # Best CVC Model params: --model_type "cvc" --epochs 30 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5.75 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot
 # Best Article Model Pa: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" -scrit --reg_coef 0.3 --pos_weights 5 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -nolog -dont_inference -dont_plot --dataset_type "article" --test_mode_epoch 18
-
+# SLE MODEL: --model_type "cvc" --epochs 22 --loss_type "ce_entropy" --dataset_type "article_sle" -scrit --cvc_layers_to_train 4 --reg_coef 0.3 --pos_weights 5.25 --learning_rate 0.0025 --embedding_lr 0.00005 --scheduler_type "ReduceLROnPlateau" --dropout 0 -dont_inference -lora -nolog --test_mode_epoch 20
 
 def t_sne_display(X_bld, X_hlt, study_name, cell_type, name_opt=''):
     tsne = TSNE(n_components=2, perplexity=5, random_state=42)
@@ -535,7 +535,7 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         rand_patients = list(chain(*rand_patients))
     else:
         # random patients from the df
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 15), replace=False)
     df = df[df['patient_id'].isin(rand_patients)]
 
     # calculate common sequences in disease and healthy samples
@@ -763,6 +763,7 @@ if __name__ == '__main__':
     model_types = ['ff', 'cvc', 'esmc']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
+    # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
     dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
@@ -996,7 +997,7 @@ if __name__ == '__main__':
         # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
     if TO_DISPLAY_RATIO_FIGURES:
-        display_ratio_figures(df_bld, positive_seqs, aaseq_to_ratio, dataset_type)
+        display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type)
 
     # TODO: There is a small problem with reloading checkpoints:
     #  The checkpoint continues from the next sweep id instead of re-running the last crashed sweep id.

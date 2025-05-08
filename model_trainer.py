@@ -182,18 +182,38 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     history = {
         'train_loss': [],
         'train_acc': [],
+        'train_auc': [],
+        'train_prauc': [],
+        # 'train_tp': [],
+        # 'train_fp': [],
+        # 'train_tn': [],
+        # 'train_fn': [],
+        'train_pos_acc': [],
+        'train_neg_acc': [],
+        'train_precision': [],
+        'train_recall': [],
+        'train_tpr': [],  # True Positive Rate (Sensitivity)
+        'train_tnr': [],  # True Negative Rate (Specificity)
+        'train_fpr': [],  # False Positive Rate
+        'train_fnr': [],  # False Negative Rate
+        'train_f1': [],  # F1 Score
         'val_loss': [],
         'val_acc': [],
         'val_auc': [],
         'val_prauc': [],
-        'val_tp': [],
-        'val_fp': [],
-        'val_tn': [],
-        'val_fn': [],
+        # 'val_tp': [],
+        # 'val_fp': [],
+        # 'val_tn': [],
+        # 'val_fn': [],
         'val_pos_acc': [],
         'val_neg_acc': [],
         'val_precision': [],
-        'val_recall': []
+        'val_recall': [],
+        'val_tpr': [],  # True Positive Rate (Sensitivity)
+        'val_tnr': [],  # True Negative Rate (Specificity)
+        'val_fpr': [],  # False Positive Rate
+        'val_fnr': [],  # False Negative Rate
+        'val_f1': []  # F1 Score
     }
 
     # Starting training
@@ -206,8 +226,13 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         # Train phase
         model.train()
         epoch_loss = 0
+        train_total = 0
+        train_correct = 0
         correct = 0
         total = 0
+        train_y_true = []
+        train_y_pred = []
+        train_y_scores = []
 
         # Shuffle positive samples for this epoch
         pos_indices = np.arange(num_pos_samples)
@@ -266,14 +291,58 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             total += batch_labels.size(0)
             correct += (predicted == batch_labels).sum().item()
 
+            # Update statistics
+            epoch_loss += loss.item()
+            train_total += batch_labels.size(0)
+            train_correct += (predicted == batch_labels).sum().item()
+
+            # Collect predictions and true labels for metrics calculation
+            train_y_true.extend(batch_labels.cpu().numpy())
+            train_y_pred.extend(predicted.cpu().numpy())
+            train_y_scores.extend(probabilities[:, 1].detach().cpu().numpy())
+
         # Calculate training statistics
         train_loss = epoch_loss / num_batches
         train_acc = 100 * correct / total
 
+        # Calculate training confusion matrix metrics
+        train_y_true = np.array(train_y_true)
+        train_y_pred = np.array(train_y_pred)
+        train_y_scores = np.array(train_y_scores)
+
+        train_tp = ((train_y_pred == 1) & (train_y_true == 1)).sum()
+        train_fp = ((train_y_pred == 1) & (train_y_true == 0)).sum()
+        train_tn = ((train_y_pred == 0) & (train_y_true == 0)).sum()
+        train_fn = ((train_y_pred == 0) & (train_y_true == 1)).sum()
+
+        # Calculate training rates
+        train_pos_total = (train_y_true == 1).sum()
+        train_neg_total = (train_y_true == 0).sum()
+
+        train_pos_acc = 100 * train_tp / train_pos_total if train_pos_total > 0 else 0
+        train_neg_acc = 100 * train_tn / train_neg_total if train_neg_total > 0 else 0
+
+        train_precision = train_tp / (train_tp + train_fp) if (train_tp + train_fp) > 0 else 0
+        train_recall = train_tp / (train_tp + train_fn) if (train_tp + train_fn) > 0 else 0
+        train_f1 = 2 * train_precision * train_recall / (train_precision + train_recall) if (train_precision + train_recall) > 0 else 0
+        # Same as recall
+        train_tpr = train_recall
+        train_tnr = train_tn / train_neg_total if train_neg_total > 0 else 0  # Specificity
+        train_fpr = train_fp / train_neg_total if train_neg_total > 0 else 0  # Fall-out
+        train_fnr = train_fn / train_pos_total if train_pos_total > 0 else 0  # Miss rate
+
         # Validation phase
         val_metrics = evaluate_model(model, loss_type, aaseq_to_ratio, valid_pos_seqs, valid_neg_seqs, criterion, device)
-        val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall = val_metrics
+        val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
 
+        # Calculate training AUC and PR-AUC
+        try:
+            train_auc = roc_auc_score(train_y_true, train_y_scores)
+            train_pr_precision, train_pr_recall, _ = precision_recall_curve(train_y_true, train_y_scores)
+            train_prauc = auc(train_pr_recall, train_pr_precision)
+        except:
+            train_auc = 0
+            train_prauc = 0
         if scheduler is not None:
             if scheduler_type == "ReduceLROnPlateau".lower():
                 scheduler.step(val_loss)
@@ -283,26 +352,53 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         # Update history with all metrics
         history['train_loss'].append(train_loss)
         history['train_acc'].append(train_acc)
+        history['train_auc'].append(train_auc)
+        history['train_prauc'].append(train_prauc)
+        # history['train_tp'].append(train_tp)
+        # history['train_fp'].append(train_fp)
+        # history['train_tn'].append(train_tn)
+        # history['train_fn'].append(train_fn)
+        history['train_pos_acc'].append(train_pos_acc)
+        history['train_neg_acc'].append(train_neg_acc)
+        history['train_precision'].append(train_precision)
+        history['train_recall'].append(train_recall)
+        history['train_tpr'].append(train_tpr)
+        history['train_tnr'].append(train_tnr)
+        history['train_fpr'].append(train_fpr)
+        history['train_fnr'].append(train_fnr)
+        history['train_f1'].append(train_f1)
+
         history['val_loss'].append(val_loss)
         history['val_acc'].append(val_acc)
         history['val_auc'].append(val_auc)
         history['val_prauc'].append(val_prauc)
-        history['val_tp'].append(val_tp)
-        history['val_fp'].append(val_fp)
-        history['val_tn'].append(val_tn)
-        history['val_fn'].append(val_fn)
+        # history['val_tp'].append(val_tp)
+        # history['val_fp'].append(val_fp)
+        # history['val_tn'].append(val_tn)
+        # history['val_fn'].append(val_fn)
         history['val_pos_acc'].append(val_pos_acc)
         history['val_neg_acc'].append(val_neg_acc)
         history['val_precision'].append(val_precision)
         history['val_recall'].append(val_recall)
+        history['val_tpr'].append(val_tpr)
+        history['val_tnr'].append(val_tnr)
+        history['val_fpr'].append(val_fpr)
+        history['val_fnr'].append(val_fnr)
+        history['val_f1'].append(val_f1)
 
         # Calculate epoch time
         epoch_time = time.time() - start_time
 
-        # Print epoch results with additional metrics
-        print(f'Epoch {epoch + 1}/{epochs} - {epoch_time:.2f}s - Loss: {train_loss:.4f} - Acc: {train_acc:.2f}% - '
-              f'Val Loss: {val_loss:.4f} - Val Acc: {val_acc:.2f}% - Val AUC: {val_auc:.4f} - Val PRAUC: {val_prauc:.4f} - '
-              f'Val Precision: {val_precision:.4f} - Val Recall: {val_recall:.4f}')
+        # Print epoch results with expanded metrics
+        print(f'Epoch {epoch + 1}/{epochs} - {epoch_time:.2f}s')
+        print(
+            f'  Train: Loss: {train_loss:.4f} - Acc: {train_acc:.2f}% - AUC: {train_auc:.4f} - PRAUC: {train_prauc:.4f}')
+        print(f'         TP: {train_tp} - FP: {train_fp} - TN: {train_tn} - FN: {train_fn}')
+        print(
+            f'         TPR: {train_tpr:.4f} - TNR: {train_tnr:.4f} - Precision: {train_precision:.4f} - F1: {train_f1:.4f}')
+        print(f'  Val:   Loss: {val_loss:.4f} - Acc: {val_acc:.2f}% - AUC: {val_auc:.4f} - PRAUC: {val_prauc:.4f}')
+        print(f'         TP: {val_tp} - FP: {val_fp} - TN: {val_tn} - FN: {val_fn}')
+        print(f'         TPR: {val_tpr:.4f} - TNR: {val_tnr:.4f} - Precision: {val_precision:.4f} - F1: {val_f1:.4f}')
 
         if log_wandb:
             wandb.log({
@@ -310,6 +406,21 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "epoch_time": epoch_time,
                 "train_loss": train_loss,
                 "train_acc": train_acc,
+                "train_auc": train_auc,
+                "train_prauc": train_prauc,
+                "train_tp": train_tp,
+                "train_fp": train_fp,
+                "train_tn": train_tn,
+                "train_fn": train_fn,
+                "train_pos_acc": train_pos_acc,
+                "train_neg_acc": train_neg_acc,
+                "train_precision": train_precision,
+                "train_recall": train_recall,
+                "train_tpr": train_tpr,
+                "train_tnr": train_tnr,
+                "train_fpr": train_fpr,
+                "train_fnr": train_fnr,
+                "train_f1": train_f1,
                 "val_loss": val_loss,
                 "val_acc": val_acc,
                 "val_auc": val_auc,
@@ -321,7 +432,12 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_pos_acc": val_pos_acc,
                 "val_neg_acc": val_neg_acc,
                 "val_precision": val_precision,
-                "val_recall": val_recall
+                "val_recall": val_recall,
+                "val_tpr": val_tpr,
+                "val_tnr": val_tnr,
+                "val_fpr": val_fpr,
+                "val_fnr": val_fnr,
+                "val_f1": val_f1
             })
 
         # saving the model for this epoch on odd epochs or on last epoch
@@ -411,6 +527,15 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
 
+        # Calculate additional rates
+        tpr = recall  # Same as recall
+        tnr = TN / neg_total if neg_total > 0 else 0  # Specificity
+        fpr = FP / neg_total if neg_total > 0 else 0  # Fall-out
+        fnr = FN / pos_total if pos_total > 0 else 0  # Miss rate
+
+        # Calculate F1 score
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+
         # Calculate AUC and PR-AUC
         pos_probs = probabilities[:, 1].cpu().numpy()
 
@@ -422,7 +547,8 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
             roc_auc = 0
             pr_auc = 0
 
-    return loss, accuracy, roc_auc, pr_auc, TP, FP, TN, FN, pos_acc, neg_acc, precision, recall
+    return (loss, accuracy, roc_auc, pr_auc, TP, FP, TN, FN, pos_acc, neg_acc,
+            precision, recall, tpr, tnr, fpr, fnr, f1)
 
 
 def display_training_results(history, model_type, figsize=(15, 10)):

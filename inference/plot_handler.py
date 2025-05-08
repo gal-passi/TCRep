@@ -608,7 +608,187 @@ def plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_
     plt.close(fig2)
 
 
-def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type, dpi=600):
+def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type, dpi=600, bin_num=200, threshold_steps=1000):
+    # Pick 5 random patients
+    random_patients = np.random.choice(df_bld['patient_id'].unique(), size=5, replace=False)
+    # Pick random sequences from neg_seqs in the length of positive_seqs
+    neg_seqs = np.random.choice(neg_seqs, size=min(len(neg_seqs), len(positive_seqs)), replace=False)
+
+    # Prepare data for both plots
+    ratios_before = {}
+    ratios_after = {}
+
+    for patient_id in random_patients:
+        aaseqs = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
+        ratios_before[patient_id] = aaseq_to_ratio(aaseqs, dont_use_function=True)  # before applying f
+        ratios_after[patient_id] = aaseq_to_ratio(aaseqs, dont_use_function=False)  # after applying f
+
+    # Ratios for positive sequences
+    pos_ratios_before = aaseq_to_ratio(positive_seqs, dont_use_function=True)
+    pos_ratios_after = aaseq_to_ratio(positive_seqs, dont_use_function=False)
+
+    # Ratios for negative sequences
+    neg_ratios_before = aaseq_to_ratio(neg_seqs, dont_use_function=True)
+    neg_ratios_after = aaseq_to_ratio(neg_seqs, dont_use_function=False)
+
+    # Plotting (high-res)
+    fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey='row', dpi=dpi)
+
+    # --- Top row: Random patients ---
+    # Normalized KDE for top-left plot
+    for pid in random_patients:
+        kde = sns.kdeplot(ratios_before[pid], ax=axes[0, 0], label=f"Patient {pid}", common_norm=False)
+        # Get the y data for the last line that was plotted
+        line = axes[0, 0].get_lines()[-1]
+        y_data = line.get_ydata()
+        # Normalize
+        line.set_ydata(y_data / np.max(y_data))
+
+    axes[0, 0].set_title("KDE of Ratios for 5 Patients (BEFORE f)")
+    axes[0, 0].set_xlabel("Ratios")
+    axes[0, 0].set_ylabel("Normalized Density")
+    axes[0, 0].legend()
+    axes[0, 0].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
+
+    # Normalized KDE for top-right plot
+    for pid in random_patients:
+        kde = sns.kdeplot(ratios_after[pid], ax=axes[0, 1], label=f"Patient {pid}", common_norm=False)
+        # Get the y data for the last line that was plotted
+        line = axes[0, 1].get_lines()[-1]
+        y_data = line.get_ydata()
+        # Normalize
+        line.set_ydata(y_data / np.max(y_data))
+
+    axes[0, 1].set_title("KDE of f(Ratios) for 5 Patients (AFTER f)")
+    axes[0, 1].set_xlabel("f(Ratios)")
+    axes[0, 1].legend()
+    axes[0, 1].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
+
+    # --- Bottom row: Histograms for Positive and negative sequences ---
+    # Histogram for bottom-left plot (BEFORE f)
+    # Calculate simple means directly
+    pos_mean = np.mean(pos_ratios_before)
+    neg_mean = np.mean(neg_ratios_before)
+
+    # Add vertical lines at the means
+    axes[1, 0].axvline(x=pos_mean, color='tab:red', linestyle='-', alpha=0.9,
+                       label=f"Pos Mean: {pos_mean:.3f}")
+    axes[1, 0].axvline(x=neg_mean, color='tab:blue', linestyle='-', alpha=0.9,
+                       label=f"Neg Mean: {neg_mean:.3f}")
+    axes[1, 0].legend()
+
+    # Calculate bins based on the range of data
+    all_data_before = np.concatenate([pos_ratios_before, neg_ratios_before])
+    bins = np.linspace(min(all_data_before), max(all_data_before), bin_num)
+
+    # Plot histograms with transparency for overlap visibility
+    axes[1, 0].hist(pos_ratios_before, bins=bins, color='tab:red', alpha=0.5, label="Positive Sequences", density=True)
+    axes[1, 0].hist(neg_ratios_before, bins=bins, color='tab:blue', alpha=0.5, label="Negative Sequences", density=True)
+
+    axes[1, 0].set_title("Histogram of Ratios for Positive vs Negative Sequences (BEFORE f)")
+    axes[1, 0].set_xlabel("Ratios")
+    axes[1, 0].set_ylabel("Normalized Frequency")
+    axes[1, 0].legend()
+
+    # Histogram for bottom-right plot (AFTER f)
+    # Calculate means for after f
+    pos_mean_after = torch.mean(pos_ratios_after)
+    neg_mean_after = torch.mean(neg_ratios_after)
+
+    # Add vertical lines at the means
+    axes[1, 1].axvline(x=pos_mean_after, color='tab:green', linestyle='-', alpha=0.9,
+                       label=f"Pos Mean: {pos_mean_after:.3f}")
+    axes[1, 1].axvline(x=neg_mean_after, color='tab:blue', linestyle='-', alpha=0.9,
+                       label=f"Neg Mean: {neg_mean_after:.3f}")
+    axes[1, 1].legend()
+
+    # Calculate bins based on the range of data
+    all_data_after = np.concatenate([pos_ratios_after, neg_ratios_after])
+    bins = np.linspace(min(all_data_after), max(all_data_after), bin_num)
+
+    # Plot histograms with transparency for overlap visibility
+    axes[1, 1].hist(pos_ratios_after, bins=bins, color='tab:green', alpha=0.5, label="Positive Sequences", density=True)
+    axes[1, 1].hist(neg_ratios_after, bins=bins, color='tab:blue', alpha=0.5, label="Negative Sequences", density=True)
+
+    axes[1, 1].set_title("Histogram of f(Ratios) for Positive vs Negative Sequences (AFTER f)")
+    axes[1, 1].set_xlabel("f(Ratios)")
+    axes[1, 1].legend()
+
+    # Set ticks of x-axis for the bottom-left plot
+    ticks_range = np.arange(0, 1.01, 0.01)
+    axes[1, 0].set_xticks(ticks_range)
+    ticks_labels = [f"{tick:.2f}" if i % 2 == 0 else "" for i, tick in enumerate(ticks_range)]
+    axes[1, 0].set_xticklabels(ticks_labels, rotation=90)
+
+    plt.tight_layout()
+    os.makedirs("plots/ratio_figures", exist_ok=True)
+    plt.savefig(f"plots/ratio_figures/ratios_{dataset_type}.png", dpi=dpi)
+    plt.show()
+
+
+    # --- Threshold of Ratio Figure ---
+    # Create a new figure for threshold analysis
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(20, 8), dpi=dpi)
+
+    # Sort the data to create thresholds
+    sorted_data = np.sort(np.concatenate([pos_ratios_before, neg_ratios_before]))
+    # Create threshold values from min to max with configurable steps
+    thresholds = np.linspace(min(sorted_data), max(sorted_data), threshold_steps)
+
+    # Calculate counts above threshold for each value
+    pos_above_threshold = [np.sum(pos_ratios_before >= t) for t in thresholds]
+    neg_above_threshold = [np.sum(neg_ratios_before >= t) for t in thresholds]
+
+    # Calculate percentages
+    pos_percent = [count / len(pos_ratios_before) * 100 for count in pos_above_threshold]
+    neg_percent = [count / len(neg_ratios_before) * 100 for count in neg_above_threshold]
+
+    # Plot counts above threshold
+    ax1.plot(thresholds, pos_above_threshold, 'g-', label='Positive Sequences', linewidth=2)
+    ax1.plot(thresholds, neg_above_threshold, 'b-', label='Negative Sequences', linewidth=2)
+    ax1.set_title('Number of Sequences Above Threshold')
+    ax1.set_xlabel('Threshold Value')
+    ax1.set_ylabel('Count')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    # Plot percentage above threshold
+    ax2.plot(thresholds, pos_percent, 'g-', label='Positive Sequences (%)', linewidth=2)
+    ax2.plot(thresholds, neg_percent, 'b-', label='Negative Sequences (%)', linewidth=2)
+    ax2.set_title('Percentage of Sequences Above Threshold')
+    ax2.set_xlabel('Threshold Value')
+    ax2.set_ylabel('Percentage (%)')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+
+    # Calculate and plot the difference between positive and negative percentages
+    diff_percent = [p - n for p, n in zip(pos_percent, neg_percent)]
+    ax3 = ax2.twinx()
+    ax3.plot(thresholds, diff_percent, 'r-', label='Difference (Pos% - Neg%)', linewidth=1.5)
+    ax3.set_ylabel('Percentage Difference (%)', color='r')
+    ax3.tick_params(axis='y', labelcolor='r')
+    ax3.legend(loc='lower right')
+
+    # Find the threshold where the difference is maximum
+    max_diff_idx = np.argmax(diff_percent)
+    max_diff_threshold = thresholds[max_diff_idx]
+    max_diff = diff_percent[max_diff_idx]
+
+    # Mark the maximum difference point
+    ax3.scatter([max_diff_threshold], [max_diff], color='r', s=100, zorder=5)
+    ax3.annotate(f'Max Diff: {max_diff:.2f}%\nThreshold: {max_diff_threshold:.4f}',
+                 xy=(max_diff_threshold, max_diff),
+                 xytext=(max_diff_threshold + (max(thresholds) - min(thresholds)) * 0.05,
+                         max_diff - 5),
+                 arrowprops=dict(arrowstyle="->", color='r'))
+
+    plt.tight_layout()
+    plt.savefig(f"plots/ratio_figures/threshold_analysis_{dataset_type}.png", dpi=dpi)
+    plt.show()
+    pass
+
+
+def display_ratio_figures_kde(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type, dpi=600):
     # Pick 5 random patients
     random_patients = np.random.choice(df_bld['patient_id'].unique(), size=5, replace=False)
     # Pick random sequences from neg_seqs in the length of positive_seqs

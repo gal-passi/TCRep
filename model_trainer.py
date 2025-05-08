@@ -124,7 +124,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, args, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, args, masking=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -184,10 +184,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         'train_acc': [],
         'train_auc': [],
         'train_prauc': [],
-        # 'train_tp': [],
-        # 'train_fp': [],
-        # 'train_tn': [],
-        # 'train_fn': [],
         'train_pos_acc': [],
         'train_neg_acc': [],
         'train_precision': [],
@@ -201,10 +197,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         'val_acc': [],
         'val_auc': [],
         'val_prauc': [],
-        # 'val_tp': [],
-        # 'val_fp': [],
-        # 'val_tn': [],
-        # 'val_fn': [],
         'val_pos_acc': [],
         'val_neg_acc': [],
         'val_precision': [],
@@ -261,8 +253,14 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             batch_samples = batch_samples[indices.numpy()]
             batch_labels = batch_labels[indices].to(device)
 
+            if masking and model_type == "cvc":
+                model.set_mask_on()
+
             # Forward pass - get logits
             logits = model(batch_samples)
+
+            if masking and model_type == "cvc":
+                model.set_mask_off()
 
             # Calculate loss using raw logits (CrossEntropyLoss applies softmax internally)
             if loss_type == "ce":  # TODO: For now, making use of ratio is possible only when using ce loss!!! Change this later!
@@ -354,10 +352,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         history['train_acc'].append(train_acc)
         history['train_auc'].append(train_auc)
         history['train_prauc'].append(train_prauc)
-        # history['train_tp'].append(train_tp)
-        # history['train_fp'].append(train_fp)
-        # history['train_tn'].append(train_tn)
-        # history['train_fn'].append(train_fn)
         history['train_pos_acc'].append(train_pos_acc)
         history['train_neg_acc'].append(train_neg_acc)
         history['train_precision'].append(train_precision)
@@ -372,10 +366,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         history['val_acc'].append(val_acc)
         history['val_auc'].append(val_auc)
         history['val_prauc'].append(val_prauc)
-        # history['val_tp'].append(val_tp)
-        # history['val_fp'].append(val_fp)
-        # history['val_tn'].append(val_tn)
-        # history['val_fn'].append(val_fn)
         history['val_pos_acc'].append(val_pos_acc)
         history['val_neg_acc'].append(val_neg_acc)
         history['val_precision'].append(val_precision)

@@ -645,7 +645,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -670,6 +670,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "cvc_layers_to_train": cvc_layers_to_train,
             "k_fold": k_fold,
             "lora": lora,
+            "masking": masking,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -696,6 +697,8 @@ def sweep_model():
     log_wandb = not wandb.config.no_wandb_log
     scheduler_type = wandb.config.scheduler_type.lower()
     cvc_layers_to_train = wandb.config.cvc_layers_to_train
+    lora = wandb.config.lora
+    masking = wandb.config.masking
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the dataset
@@ -717,7 +720,7 @@ def sweep_model():
         model = FeedForwardClassifier(max_seq_len).to(device)
     elif model_type == 'cvc':
         model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, freeze_embed_model=freeze_embed_model,
-                                   cvc_layers_to_train=cvc_layers_to_train, device=device)
+                                   cvc_layers_to_train=cvc_layers_to_train, lora=lora, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
     else:
@@ -739,6 +742,7 @@ def sweep_model():
                                          pos_weights=pos_weights,
                                          scheduler_type=scheduler_type,
                                          aaseq_to_ratio=aaseq_to_ratio,
+                                         masking=masking,
                                          args=args,
                                          )
 
@@ -791,6 +795,7 @@ if __name__ == '__main__':
     parser.add_argument('--k_fold', type=int, default=0, help='K-Fold Index (0 for no k-fold)')
     parser.add_argument('--lora', '-lora', action='store_true', help='Use LoRA')
     parser.add_argument('--sweep_version', type=int, default=0, help='Version of the sweep file to use')
+    parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
 
     args = parser.parse_args()
 
@@ -820,6 +825,7 @@ if __name__ == '__main__':
     to_k_fold = k_fold > 0
     lora = args.lora if model_type == 'cvc' else False  # LoRA is only applicable for CVC model
     sweep_version = args.sweep_version
+    masking = args.masking if model_type == 'cvc' else False  # Masking is only applicable for CVC model
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -852,6 +858,7 @@ if __name__ == '__main__':
     print(f"\tCVC model layers to train: {args.cvc_layers_to_train}")
     print(f"\tDo K-Fold Cross-Validation: {args.k_fold}")
     print(f"\tUse LoRA: {args.lora}")
+    print(f"\tMasking: {args.masking}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -996,7 +1003,7 @@ if __name__ == '__main__':
             print("Skipping the display of common sequences figure.")
         # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
-    if TO_DISPLAY_RATIO_FIGURES:
+    if TO_DISPLAY_RATIO_FIGURES or loss_type == 'ce':  # TODO: REMOVE THIS ADDED LOSS TYPE SCENARIO!!!!
         display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type)
 
     # TODO: There is a small problem with reloading checkpoints:
@@ -1042,6 +1049,7 @@ if __name__ == '__main__':
                 cvc_layers_to_train=cvc_layers_to_train,
                 k_fold=k_fold,
                 lora=lora,
+                masking=masking,
                 device=device,
             )
 
@@ -1083,6 +1091,7 @@ if __name__ == '__main__':
                                                  pos_weights=pos_weights,
                                                  scheduler_type=scheduler_type,
                                                  aaseq_to_ratio=aaseq_to_ratio,
+                                                 masking=masking,
                                                  args=args,
                                                  )
             # display_training_results(history, model_type)
@@ -1126,52 +1135,3 @@ if __name__ == '__main__':
             background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
 
     exit(0)
-
-    """
-    # Calculating embeddings (or loading if it is available)
-    embed_type = ['esmc', 'esmc_finetuning', 'cvc'][2]
-    embed_bld = get_cached_embeddings(positive_seqs, disease, name=f'{disease}_{cell_type}_{embed_type}_bld' + name_opt, embed_type=embed_type)
-    embed_hlt = get_cached_embeddings(negative_seqs, "healthy", name=f'{cell_type}_{embed_type}_h' + name_opt, embed_type=embed_type)
-
-    # Displaying the results hyperparameters
-    n_neighbors = 9
-    neg_to_pos_ratio = 3
-
-    # Display histogram of lengths:
-    if TO_DISPLAY_LENGTHS_HIST:
-        print("Displaying Histograms of Lengths")
-        plot_length_histogram(df_cd4_bld["AASeq"], df_cd4_syn["AASeq"],
-                              labels=["Blood", "Synovial"],
-                              title_text="CD4 Sequences")
-        plot_length_histogram(df_cd8_bld["AASeq"], df_cd8_syn["AASeq"],
-                              labels=["Blood", "Synovial"],
-                              title_text="CD8 Sequences")
-
-        plot_length_histogram(np.array(list(sr_cd4_bld_vld)), np.array(sr_cd4_syn_vld),
-                              labels=["Blood", "Synovial"],
-                              title_text="CD4 Filtered Sequences")
-        plot_length_histogram(np.array(list(sr_cd8_bld_vld)), np.array(sr_cd8_syn_vld),
-                              labels=["Blood", "Synovial"],
-                              title_text="CD8 Filtered Sequences")
-
-    # Display success figure per patient
-    if TO_DISPLAY_ACCURACY_BIN_BY_DIST:
-        display_accuracy_bin_by_dist_figure(cd4_syn, cd4_h, cd4_bld, cd4_syn_patient_id_masks, cd4_bld_patient_id_masks,
-                                           sr_cd4_syn_vld, sr_cd4_bld_vld, valid_seqs_cd4_h,
-                                           k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                           cd_type='4', name_opt=name_opt)
-        display_accuracy_bin_by_dist_figure(cd8_syn, cd8_h, cd8_bld, cd8_syn_patient_id_masks, cd8_bld_patient_id_masks,
-                                           sr_cd8_syn_vld, sr_cd8_bld_vld, valid_seqs_cd8_h,
-                                           k_fold_type, study.name, ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                           cd_type='8', name_opt=name_opt)
-
-    # Displaying the results
-    if TO_DISPLAY_RESULTS:
-        print(f"Samples {cell_type} Disease: {len(embed_bld)}, Healthy: {len(embed_hlt)}")
-        mean_acc, std_acc = process_and_evaluate(embed_bld, embed_hlt,
-                                                 patient_id_masks, k_fold_type,
-                                                 cell_type=cell_type, name_opt=name_opt,
-                                                 ratio=neg_to_pos_ratio, n_neighbors=n_neighbors,
-                                                 study_name=disease)
-        print(f"{cell_type} - KNN {n_neighbors} neighbours ({len(patient_id_masks)}-Fold): Accuracy: {mean_acc:.3f} ± {std_acc:.3f}")
-    """

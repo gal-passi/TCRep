@@ -632,7 +632,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     neg_ratios_after = aaseq_to_ratio(neg_seqs, dont_use_function=False)
 
     # Plotting (high-res)
-    fig, axes = plt.subplots(2, 2, figsize=(18, 12), sharey='row', dpi=dpi)
+    fig, axes = plt.subplots(3, 2, figsize=(18, 18), sharey='row', dpi=dpi)
 
     # --- Top row: Random patients ---
     # Normalized KDE for top-left plot
@@ -690,6 +690,12 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     axes[1, 0].set_ylabel("Normalized Frequency")
     axes[1, 0].legend()
 
+    # Set ticks of x-axis for the bottom-left plot
+    ticks_range = np.arange(0, 1.01, 0.01)
+    axes[1, 0].set_xticks(ticks_range)
+    ticks_labels = [f"{tick:.2f}" if i % 2 == 0 else "" for i, tick in enumerate(ticks_range)]
+    axes[1, 0].set_xticklabels(ticks_labels, rotation=90)
+
     # Histogram for bottom-right plot (AFTER f)
     # Calculate means for after f
     pos_mean_after = torch.mean(pos_ratios_after)
@@ -714,17 +720,59 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     axes[1, 1].set_xlabel("f(Ratios)")
     axes[1, 1].legend()
 
-    # Set ticks of x-axis for the bottom-left plot
-    ticks_range = np.arange(0, 1.01, 0.01)
-    axes[1, 0].set_xticks(ticks_range)
-    ticks_labels = [f"{tick:.2f}" if i % 2 == 0 else "" for i, tick in enumerate(ticks_range)]
-    axes[1, 0].set_xticklabels(ticks_labels, rotation=90)
+    # --- Bottomest row: Positive sequences and negatives ---
+    # Normalized KDE for bottom-left plot
+    kde_pos = sns.kdeplot(pos_ratios_before, ax=axes[2, 0], color='tab:green', label="Positive Sequences",
+                          common_norm=False)
+    line_pos = axes[2, 0].get_lines()[-1]
+    y_data_pos = line_pos.get_ydata()
+    line_pos.set_ydata(y_data_pos / np.max(y_data_pos))
+
+    kde_neg = sns.kdeplot(neg_ratios_before, ax=axes[2, 0], color='tab:blue', linestyle='--',
+                          label="Negative Sequences", common_norm=False)
+    line_neg = axes[2, 0].get_lines()[-1]
+    y_data_neg = line_neg.get_ydata()
+    line_neg.set_ydata(y_data_neg / np.max(y_data_neg))
+
+    axes[2, 0].set_title("KDE of Ratios for Positive Sequences (BEFORE f)")
+    axes[2, 0].set_xlabel("Ratios")
+    axes[2, 0].set_ylabel("Normalized Density")
+    axes[2, 0].legend()
+    axes[2, 0].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
+
+    # Calculate simple means directly
+    pos_mean = np.mean(pos_ratios_before)
+    neg_mean = np.mean(neg_ratios_before)
+
+    # Add vertical lines at the means
+    axes[2, 0].axvline(x=pos_mean, color='tab:green', linestyle='-', alpha=0.7,
+                       label=f"Pos Mean: {pos_mean:.3f}")
+    axes[2, 0].axvline(x=neg_mean, color='tab:blue', linestyle='-', alpha=0.7,
+                       label=f"Neg Mean: {neg_mean:.3f}")
+    axes[2, 0].legend()
+
+    # Normalized KDE for bottom-right plot
+    kde_pos = sns.kdeplot(pos_ratios_after, ax=axes[2, 1], color='tab:green', label="Positive Sequences",
+                          common_norm=False)
+    line_pos = axes[2, 1].get_lines()[-1]
+    y_data_pos = line_pos.get_ydata()
+    line_pos.set_ydata(y_data_pos / np.max(y_data_pos))
+
+    kde_neg = sns.kdeplot(neg_ratios_after, ax=axes[2, 1], color='tab:blue', linestyle='--', label="Negative Sequences",
+                          common_norm=False)
+    line_neg = axes[2, 1].get_lines()[-1]
+    y_data_neg = line_neg.get_ydata()
+    line_neg.set_ydata(y_data_neg / np.max(y_data_neg))
+
+    axes[2, 1].set_title("KDE of f(Ratios) for Positive Sequences (AFTER f)")
+    axes[2, 1].set_xlabel("f(Ratios)")
+    axes[2, 1].legend()
+    axes[2, 1].set_ylim(0, 1.05)  # Set y-limit to ensure max is 1
 
     plt.tight_layout()
     os.makedirs("plots/ratio_figures", exist_ok=True)
     plt.savefig(f"plots/ratio_figures/ratios_{dataset_type}.png", dpi=dpi)
     plt.show()
-
 
     # --- Threshold of Ratio Figure ---
     # Create a new figure for threshold analysis

@@ -3,6 +3,7 @@ sys.path.append('other_models/CVC')
 import numpy as np
 import torch
 import torch.nn as nn
+import random
 from tqdm import tqdm
 from itertools import zip_longest
 from typing import *
@@ -48,6 +49,7 @@ class CVCModel(nn.Module):
         self.freeze_bert_layers(freeze_embed_model, cvc_layers_to_train)
         self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool"
         self.batch_size = batch_size
+        self.mask_tokens = False  # Set to True if you want to mask tokens during training
 
     def get_transformer_embeddings(
             self,
@@ -78,17 +80,64 @@ class CVCModel(nn.Module):
         tok = self.tok
         method = self.method
         device = next(model.parameters()).device  # Get device from model
-        seqs = [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seqs]
+
+        # Apply masking at the string level if in training mode and mask_tokens is True
+        if model.training and self.mask_tokens:
+            masked_seqs = []
+            for seq in seqs:
+                # First make sure the sequence has whitespace
+                if not ft.is_whitespaced(seq):
+                    seq = ft.insert_whitespace(seq)
+
+                # Split the sequence into tokens
+                tokens = seq.split()
+
+                # Randomly select 15% of the tokens for potential masking
+                num_tokens = len(tokens)
+                num_to_mask = max(1, int(0.15 * num_tokens))  # Ensure at least one token is considered
+                mask_indices = random.sample(range(num_tokens), num_to_mask)
+
+                # For 80% of those tokens, replace with the mask token
+                for idx in mask_indices:
+                    if random.random() < 0.8:  # 80% chance to mask
+                        tokens[idx] = ft.MASK
+
+                # Rejoin the tokens
+                masked_seqs.append(' '.join(tokens))
+
+            seqs = masked_seqs
+
+            # If there's a second sequence, apply the same masking logic
+            if seq_pair is not None:
+                masked_seq_pair = []
+                for seq in seq_pair:
+                    if not ft.is_whitespaced(seq):
+                        seq = ft.insert_whitespace(seq)
+
+                    tokens = seq.split()
+                    num_tokens = len(tokens)
+                    num_to_mask = max(1, int(0.15 * num_tokens))
+                    mask_indices = random.sample(range(num_tokens), num_to_mask)
+
+                    for idx in mask_indices:
+                        if random.random() < 0.8:
+                            tokens[idx] = ft.MASK
+
+                    masked_seq_pair.append(' '.join(tokens))
+
+                seq_pair = masked_seq_pair
+        else:
+            # If no masking, just ensure whitespace
+            seqs = [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seqs]
+            if seq_pair is not None:
+                seq_pair = [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seq_pair]
 
         chunks = dl.chunkify(seqs, batch_size)
         chunks_pair = [None]
 
         if seq_pair is not None:
             assert len(seq_pair) == len(seqs)
-            chunks_pair = dl.chunkify(
-                [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seq_pair],
-                batch_size,
-            )
+            chunks_pair = dl.chunkify(seq_pair, batch_size)
 
         chunks_zipped = list(zip_longest(chunks, chunks_pair))
         embeddings = []
@@ -141,7 +190,7 @@ class CVCModel(nn.Module):
                 e = torch.cat(e)
                 batch_embeddings.append(e)
 
-            embeddings.append(torch.stack(batch_embeddings))  # added
+            embeddings.append(torch.stack(batch_embeddings))
 
         embeddings = torch.cat(embeddings)
         return embeddings
@@ -231,3 +280,9 @@ class CVCClassifierModel(nn.Module):
         probs = torch.nn.functional.softmax(logits, dim=-1)  # Convert to probabilities
         preds = torch.argmax(probs, dim=-1)  # Get class predictions
         return preds
+
+    def set_mask_on(self):
+        self.model.mask_tokens = True
+
+    def set_mask_off(self):
+        self.model.mask_tokens = False

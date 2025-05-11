@@ -36,7 +36,7 @@ def custom_loss_entropy(logits, labels, R=0.1, n_classes=2):
 
 
 class CustomLossCriterion(nn.Module):
-    def __init__(self, loss_type='ce', class_weights=None, R=0.1, n_classes=2):
+    def __init__(self, device, loss_type='ce', class_weights=None, R=0.1, n_classes=2, ratio=False, aaseq_to_ratio=None):
         """
         Flexible loss criterion that supports different loss types and class weights.
 
@@ -52,8 +52,11 @@ class CustomLossCriterion(nn.Module):
         self.class_weights = class_weights
         self.R = R
         self.n_classes = n_classes
+        self.ratio = ratio
+        self.aaseq_to_ratio = aaseq_to_ratio
+        self.device = device
 
-    def forward(self, logits, labels):
+    def forward(self, logits, labels, batch_samples):
         """
         Compute loss based on specified loss type.
 
@@ -67,15 +70,24 @@ class CustomLossCriterion(nn.Module):
         # Apply class weights if provided
         if self.class_weights is not None:
             # Ensure class_weights is on the same device as labels
-            class_weights = self.class_weights.to(labels.device)
+            self.class_weights.to(self.device)
+
+        if self.ratio:
+            batch_sample_ratios = self.aaseq_to_ratio(batch_samples).to(self.device)
+            per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+            sample_weights = torch.ones_like(per_sample_losses)
+            positive_indices = labels == 1
+            sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
+            weighted_losses = per_sample_losses * sample_weights
+            ce_loss = weighted_losses.mean()
+        else:
+            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
 
         if self.loss_type == 'ce':
-            # Standard Cross Entropy with optional class weights
-            return F.cross_entropy(logits, labels, weight=self.class_weights)
+            return ce_loss
 
         elif self.loss_type == 'ce_l2':
             # Custom L2 regularized loss
-            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
             probs = F.softmax(logits, dim=1)
             l2_norm = torch.norm(probs, p=2, dim=1).mean()
             reg_term = (1 - l2_norm)
@@ -83,7 +95,6 @@ class CustomLossCriterion(nn.Module):
 
         elif self.loss_type == 'ce_entropy':
             # Custom entropy regularized loss
-            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
             probs = F.softmax(logits, dim=1)
             entropy = -torch.sum(probs * torch.log(probs + 1e-8), dim=1).mean()
             max_entropy = torch.log(torch.tensor(self.n_classes, dtype=torch.float32))
@@ -124,7 +135,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, args, masking=False, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, args, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -155,10 +166,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
     class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
 
-    if loss_type == "ce":
-        criterion = nn.CrossEntropyLoss(weight=class_weights, reduction='none')  # TODO: Changing this for ratio tests!
-    else:
-        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef)
+    criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, device=device)
 
     if model_type == "cvc" and not freeze_embed_model and special_criterion:
         encoder_lr = embedding_lr  # this is the default learning rate for BERT
@@ -263,17 +271,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 model.set_mask_off()
 
             # Calculate loss using raw logits (CrossEntropyLoss applies softmax internally)
-            if loss_type == "ce":  # TODO: For now, making use of ratio is possible only when using ce loss!!! Change this later!
-                batch_sample_ratios = aaseq_to_ratio(batch_samples).to(device)
-                per_sample_losses = criterion(logits, batch_labels)
-                sample_weights = torch.ones_like(per_sample_losses)
-                positive_indices = batch_labels == 1
-                sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
-                weighted_losses = per_sample_losses * sample_weights
-                loss = weighted_losses.mean()
-            else:
-                loss = criterion(logits, batch_labels)
-
+            loss = criterion(logits, batch_labels, batch_samples)
 
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -330,7 +328,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         train_fnr = train_fn / train_pos_total if train_pos_total > 0 else 0  # Miss rate
 
         # Validation phase
-        val_metrics = evaluate_model(model, loss_type, aaseq_to_ratio, valid_pos_seqs, valid_neg_seqs, criterion, device)
+        val_metrics = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
         val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
 
         # Calculate training AUC and PR-AUC
@@ -438,7 +436,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     return model, history
 
 
-def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criterion=None, device=None):
+def evaluate_model(model, pos_seqs, neg_seqs, criterion=None, device=None):
     """
     Evaluate the model on positive and negative sequences.
 
@@ -477,16 +475,7 @@ def evaluate_model(model, loss_type, aaseq_to_ratio, pos_seqs, neg_seqs, criteri
         logits = model(all_samples)
 
         # Calculate loss using raw logits
-        if loss_type == "ce":  # TODO: For now, making use of ratio is possible only when using ce loss!!! Change this later!
-            batch_sample_ratios = aaseq_to_ratio(all_samples).to(device)
-            per_sample_losses = criterion(logits, all_labels)
-            sample_weights = torch.ones_like(per_sample_losses)
-            positive_indices = all_labels == 1
-            sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
-            weighted_losses = per_sample_losses * sample_weights
-            loss = weighted_losses.mean()
-        else:
-            loss = criterion(logits, all_labels).item()
+        loss = criterion(logits, all_labels, all_samples).item()
 
         # Apply softmax to get probabilities
         probabilities = torch.softmax(logits, dim=1)

@@ -219,6 +219,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         wandb.log({"output_distributions_per_patient": wandb.Image(plt)})
     else:
         plt.show()
+    pass
 
 
 def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
@@ -671,7 +672,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     neg_mean = np.mean(neg_ratios_before)
 
     # Add vertical lines at the means
-    axes[1, 0].axvline(x=pos_mean, color='tab:red', linestyle='-', alpha=0.9,
+    axes[1, 0].axvline(x=pos_mean, color='tab:orange', linestyle='-', alpha=0.9,
                        label=f"Pos Mean: {pos_mean:.3f}")
     axes[1, 0].axvline(x=neg_mean, color='tab:blue', linestyle='-', alpha=0.9,
                        label=f"Neg Mean: {neg_mean:.3f}")
@@ -682,7 +683,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     bins = np.linspace(min(all_data_before), max(all_data_before), bin_num)
 
     # Plot histograms with transparency for overlap visibility
-    axes[1, 0].hist(pos_ratios_before, bins=bins, color='tab:red', alpha=0.5, label="Positive Sequences", density=True)
+    axes[1, 0].hist(pos_ratios_before, bins=bins, color='tab:orange', alpha=0.5, label="Positive Sequences", density=True)
     axes[1, 0].hist(neg_ratios_before, bins=bins, color='tab:blue', alpha=0.5, label="Negative Sequences", density=True)
 
     axes[1, 0].set_title("Histogram of Ratios for Positive vs Negative Sequences (BEFORE f)")
@@ -693,8 +694,10 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     # Set ticks of x-axis for the bottom-left plot
     ticks_range = np.arange(0, 1.01, 0.01)
     axes[1, 0].set_xticks(ticks_range)
-    ticks_labels = [f"{tick:.2f}" if i % 2 == 0 else "" for i, tick in enumerate(ticks_range)]
+    ticks_labels = [f"{tick:.2f}" for i, tick in enumerate(ticks_range)]
+    # ticks_labels = [f"{tick:.2f}" if i % 2 == 0 else "" for i, tick in enumerate(ticks_range)]
     axes[1, 0].set_xticklabels(ticks_labels, rotation=90)
+    axes[1, 0].set_xlim(0, 0.2)
 
     # Histogram for bottom-right plot (AFTER f)
     # Calculate means for after f
@@ -702,7 +705,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     neg_mean_after = torch.mean(neg_ratios_after)
 
     # Add vertical lines at the means
-    axes[1, 1].axvline(x=pos_mean_after, color='tab:green', linestyle='-', alpha=0.9,
+    axes[1, 1].axvline(x=pos_mean_after, color='tab:orange', linestyle='-', alpha=0.9,
                        label=f"Pos Mean: {pos_mean_after:.3f}")
     axes[1, 1].axvline(x=neg_mean_after, color='tab:blue', linestyle='-', alpha=0.9,
                        label=f"Neg Mean: {neg_mean_after:.3f}")
@@ -713,7 +716,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     bins = np.linspace(min(all_data_after), max(all_data_after), bin_num)
 
     # Plot histograms with transparency for overlap visibility
-    axes[1, 1].hist(pos_ratios_after, bins=bins, color='tab:green', alpha=0.5, label="Positive Sequences", density=True)
+    axes[1, 1].hist(pos_ratios_after, bins=bins, color='tab:orange', alpha=0.5, label="Positive Sequences", density=True)
     axes[1, 1].hist(neg_ratios_after, bins=bins, color='tab:blue', alpha=0.5, label="Negative Sequences", density=True)
 
     axes[1, 1].set_title("Histogram of f(Ratios) for Positive vs Negative Sequences (AFTER f)")
@@ -722,7 +725,7 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
 
     # --- Bottomest row: Positive sequences and negatives ---
     # Normalized KDE for bottom-left plot
-    kde_pos = sns.kdeplot(pos_ratios_before, ax=axes[2, 0], color='tab:green', label="Positive Sequences",
+    kde_pos = sns.kdeplot(pos_ratios_before, ax=axes[2, 0], color='tab:orange', label="Positive Sequences",
                           common_norm=False)
     line_pos = axes[2, 0].get_lines()[-1]
     y_data_pos = line_pos.get_ydata()
@@ -745,14 +748,15 @@ def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, datas
     neg_mean = np.mean(neg_ratios_before)
 
     # Add vertical lines at the means
-    axes[2, 0].axvline(x=pos_mean, color='tab:green', linestyle='-', alpha=0.7,
+    axes[2, 0].axvline(x=pos_mean, color='tab:orange', linestyle='-', alpha=0.7,
                        label=f"Pos Mean: {pos_mean:.3f}")
     axes[2, 0].axvline(x=neg_mean, color='tab:blue', linestyle='-', alpha=0.7,
                        label=f"Neg Mean: {neg_mean:.3f}")
     axes[2, 0].legend()
+    axes[2, 0].set_xlim(0, 0.2)
 
     # Normalized KDE for bottom-right plot
-    kde_pos = sns.kdeplot(pos_ratios_after, ax=axes[2, 1], color='tab:green', label="Positive Sequences",
+    kde_pos = sns.kdeplot(pos_ratios_after, ax=axes[2, 1], color='tab:orange', label="Positive Sequences",
                           common_norm=False)
     line_pos = axes[2, 1].get_lines()[-1]
     y_data_pos = line_pos.get_ydata()

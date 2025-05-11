@@ -56,6 +56,8 @@ parameters:
     values: ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR']  # Sweeping different scheduler types
   masking:
     value: False  # Always False
+  ratio:
+    value: False  # Always False
 #    value: 'ReduceLROnPlateau'  # Fixed default value
 #    distribution: uniform
 #    min: 0.1

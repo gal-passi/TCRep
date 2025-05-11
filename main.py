@@ -645,7 +645,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -671,6 +671,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "k_fold": k_fold,
             "lora": lora,
             "masking": masking,
+            "ratio": ratio,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -699,6 +700,7 @@ def sweep_model():
     cvc_layers_to_train = wandb.config.cvc_layers_to_train
     lora = wandb.config.lora
     masking = wandb.config.masking
+    ratio = wandb.config.ratio
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the dataset
@@ -743,6 +745,7 @@ def sweep_model():
                                          scheduler_type=scheduler_type,
                                          aaseq_to_ratio=aaseq_to_ratio,
                                          masking=masking,
+                                         ratio=ratio,
                                          args=args,
                                          )
 
@@ -789,13 +792,15 @@ if __name__ == '__main__':
     parser.add_argument('--to_sweep', '--sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
     parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
     parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
-    parser.add_argument('-dont_inference', action='store_true', help='Do not inference')  # TODO: REMOVE!
-    parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')  # TODO: REMOVE!
+    parser.add_argument('-dont_inference', action='store_true', help='Do not inference')
+    parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')
     parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
     parser.add_argument('--k_fold', type=int, default=0, help='K-Fold Index (0 for no k-fold)')
     parser.add_argument('--lora', '-lora', action='store_true', help='Use LoRA')
     parser.add_argument('--sweep_version', type=int, default=0, help='Version of the sweep file to use')
     parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
+    parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
+
 
     args = parser.parse_args()
 
@@ -826,6 +831,7 @@ if __name__ == '__main__':
     lora = args.lora if model_type == 'cvc' else False  # LoRA is only applicable for CVC model
     sweep_version = args.sweep_version
     masking = args.masking if model_type == 'cvc' else False  # Masking is only applicable for CVC model
+    ratio = args.ratio
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -859,6 +865,7 @@ if __name__ == '__main__':
     print(f"\tDo K-Fold Cross-Validation: {args.k_fold}")
     print(f"\tUse LoRA: {args.lora}")
     print(f"\tMasking: {args.masking}")
+    print(f"\tUsing Ratio: {args.ratio}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -1050,6 +1057,7 @@ if __name__ == '__main__':
                 k_fold=k_fold,
                 lora=lora,
                 masking=masking,
+                ratio=ratio,
                 device=device,
             )
 
@@ -1092,6 +1100,7 @@ if __name__ == '__main__':
                                                  scheduler_type=scheduler_type,
                                                  aaseq_to_ratio=aaseq_to_ratio,
                                                  masking=masking,
+                                                 ratio=ratio,
                                                  args=args,
                                                  )
             # display_training_results(history, model_type)

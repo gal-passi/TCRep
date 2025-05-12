@@ -801,7 +801,6 @@ if __name__ == '__main__':
     parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
     parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
 
-
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -1010,7 +1009,7 @@ if __name__ == '__main__':
             print("Skipping the display of common sequences figure.")
         # display_common_sequences_figure_healthy(dataset_loader, df_hlt, l=l)
 
-    if TO_DISPLAY_RATIO_FIGURES or loss_type == 'ce':  # TODO: REMOVE THIS ADDED LOSS TYPE SCENARIO!!!!
+    if TO_DISPLAY_RATIO_FIGURES or ratio == True:  # TODO: REMOVE THIS ADDED LOSS TYPE SCENARIO!!!!
         display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type)
 
     # TODO: There is a small problem with reloading checkpoints:
@@ -1103,7 +1102,6 @@ if __name__ == '__main__':
                                                  ratio=ratio,
                                                  args=args,
                                                  )
-            # display_training_results(history, model_type)
 
     if not dont_plot:
         # New distribution plot
@@ -1135,12 +1133,14 @@ if __name__ == '__main__':
     if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")
         if not v2_inference:
-            from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
+            from inference.inference_testing import inference_ratio_distance
+            inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
+                                     test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader)
+
+            # from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
             # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
             # background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-            my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)
+            # my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)
         else:
             from inference.inference_testing_v2 import background_dist_inference
             background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-
-    exit(0)

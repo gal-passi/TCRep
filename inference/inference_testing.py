@@ -9,6 +9,10 @@ from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance, ks_2samp
 from sklearn.preprocessing import KBinsDiscretizer
 from cache_handler import get_model_config_str
+import pandas as pd
+from tqdm import tqdm
+from utils import pairwise_scores, levenshtein_dist_non_bin
+import seaborn as sns
 
 
 def calculate_probas(df, trained_model, patient_ids, to_print=True):
@@ -893,3 +897,355 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
 
     # Print the number of T1D TCRs which got a prediction of 0.5 or higher
     print(f"Number of T1D TCRs with probability >= 0.5: {np.sum(out_probs >= 0.5)}")
+
+
+
+def calculate_lev_distance(seqs, pred, train_pos_seqs):
+    seqs_filtered = [(len(seq), seq) for seq, pred in zip(seqs, pred) if pred > 0.5]
+    possible_lens = set([x[0] for x in seqs_filtered])
+    all_distances = []
+    corresponding_seqs = []
+    for possible_len in tqdm(possible_lens):
+        seqs_in_this_len = [x[1] for x in seqs_filtered if x[0] == possible_len]
+        # keeping only the sequences that are of similar length
+        # train_pos_seqs_important = [x for x in train_pos_seqs if abs(len(x) - possible_len) <= 2]
+        # calculate the Levenshtein distance
+        pwc_mat = pairwise_scores(seqs_in_this_len, train_pos_seqs, score=levenshtein_dist_non_bin)
+        # get the minimum distance
+        min_dist = np.min(pwc_mat, axis=1)
+        all_distances.append(min_dist)
+        corresponding_seqs.append(seqs_in_this_len)
+    combined_distances = np.concatenate(all_distances)
+    combined_seqs = np.concatenate(corresponding_seqs)
+    return combined_distances, combined_seqs
+
+
+def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
+                             test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader):
+    base_save_path = f'cache/ratio_distance/'
+    os.makedirs(base_save_path, exist_ok=True)
+    base_valid_test_df_path = os.path.join(base_save_path, 'base_valid_test_df.csv')
+    distance_valid_test_df_path = os.path.join(base_save_path, 'distance_valid_test_df.csv')
+    distance_healthy_df_path = os.path.join(base_save_path, 'distance_healthy_df.csv')
+    print("Inference on base validation and test set")
+    if os.path.exists(base_valid_test_df_path):
+        df_valid_test = pd.read_csv(base_valid_test_df_path)
+    else:
+        # Creating a dataframe with columns: AASeq, ratio_max, ratio_min, ratio_avg, model_prediction, set_origin (train/valid/test/healthy), label
+        valid_test_seqs = [valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]
+
+        ratios_max = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        dataset_loader.build_clone_fraction_df(df_bld, method='min')
+        ratios_min = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        dataset_loader.build_clone_fraction_df(df_bld, method='avg')
+        ratios_avg = [aaseq_to_ratio(x) for x in valid_test_seqs]
+
+        trained_model.eval()
+        with torch.no_grad():
+            predictions = [torch.softmax(trained_model(x), dim=1)[:, 1].cpu().numpy() for x in valid_test_seqs]
+
+        # Create a dataframe with the results
+        valid_test_set_origins = [['valid'] * len(valid_pos_seqs), ['valid'] * len(valid_neg_seqs),
+                                  ['test'] * len(test_pos_seqs), ['test'] * len(test_neg_seqs)]
+        valid_test_labels = [np.ones(len(valid_pos_seqs)), np.zeros(len(valid_neg_seqs)),
+                             np.ones(len(test_pos_seqs)), np.zeros(len(test_neg_seqs))]
+
+        all_dfs = []
+        for i in range(len(valid_test_seqs)):
+            df = pd.DataFrame({
+                'AASeq': valid_test_seqs[i],
+                'ratio_max': ratios_max[i],
+                'ratio_min': ratios_min[i],
+                'ratio_avg': ratios_avg[i],
+                'model_prediction': predictions[i],
+                'set_origin': valid_test_set_origins[i],
+                'label': valid_test_labels[i]
+            })
+            all_dfs.append(df)
+        df_valid_test = pd.concat(all_dfs, ignore_index=True)
+
+        # save to csv into base folder
+        df_valid_test.to_csv(base_valid_test_df_path, index=False)
+
+    print("Inference on distances of the validation and test set")
+    if os.path.exists(distance_valid_test_df_path):
+        df_valid_test = pd.read_csv(distance_valid_test_df_path)
+    else:
+        # calculate the minimum Levenshtein distance between the sequences with model_prediction > 0.5 in df_valid_test
+        # from the set of all positives in the train set (train_pos_seqs).
+        combined_distances, combined_seqs = calculate_lev_distance(df_valid_test['AASeq'], df_valid_test['model_prediction'], train_pos_seqs)
+
+        distances = []
+        for seq in df_valid_test['AASeq']:
+            if seq in combined_seqs:
+                # get the index of the sequence in the combined_seqs
+                index = np.where(combined_seqs == seq)[0][0]
+                distances.append(combined_distances[index])
+            else:
+                distances.append(0)
+
+        # create a new column in df_valid_test with the distances and save as distance_valid_test_df
+        df_valid_test['distances'] = distances
+        df_valid_test.to_csv(distance_valid_test_df_path, index=False)
+
+    print("Inference on healthy set")
+    if os.path.exists(distance_healthy_df_path):
+        df_healthy = pd.read_csv(distance_healthy_df_path)
+    else:
+        healthy_patients = df_hlt["patient_id"].unique()
+        np.random.shuffle(healthy_patients)
+        chosen_patients = healthy_patients[:5]
+        chosen_df_hlt = df_hlt[df_hlt["patient_id"].isin(chosen_patients)]
+        chosen_seqs = np.unique(df_hlt[df_hlt["patient_id"].isin(chosen_patients)]["AASeq"])
+
+        # predict on healthy patients
+        trained_model.eval()
+        with torch.no_grad():
+            patient_prediction = torch.softmax(trained_model(chosen_seqs), dim=1)[:, 1].cpu().numpy()
+
+        # calculate levenshtein distance for the healthy patients
+        combined_distances, combined_seqs = calculate_lev_distance(chosen_seqs, patient_prediction, train_pos_seqs)
+
+        distances = []
+        for seq in chosen_seqs:
+            if seq in combined_seqs:
+                # get the index of the sequence in the combined_seqs
+                index = np.where(combined_seqs == seq)[0][0]
+                distances.append(combined_distances[index])
+            else:
+                distances.append(0)
+
+        # calculate the ratios for the healthy patients
+        dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='min')
+        ratios_max = aaseq_to_ratio(chosen_seqs)
+        dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='min')
+        ratios_min = aaseq_to_ratio(chosen_seqs)
+        dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='avg')
+        ratios_avg = aaseq_to_ratio(chosen_seqs)
+
+        # create a new dataframe with the distances and save as distance_healthy_df
+        df_healthy = pd.DataFrame({
+            'AASeq': chosen_seqs,
+            'ratio_max': ratios_max,
+            'ratio_min': ratios_min,
+            'ratio_avg': ratios_avg,
+            'model_prediction': patient_prediction,
+            'set_origin': ['healthy'] * len(chosen_seqs),
+            'distances': distances
+        })
+
+        # save the dataframe to csv
+        df_healthy.to_csv(distance_healthy_df_path, index=False)
+
+    print("Done with ratio-distance csv files!")
+
+    # display statistics about the distances in relation to the ratio and to the model prediction
+    # Perform comprehensive analysis
+    analysis_results = perform_comprehensive_analysis(df_valid_test, df_healthy)
+
+    # Display analysis results
+    display_analysis_results(analysis_results)
+
+    print('Done with ratio-distance inference!')
+
+
+def perform_comprehensive_analysis(df_valid_test, df_healthy, ratio_threshold=0.5):
+    """
+    Perform comprehensive analysis of model predictions, ratios, and distances
+
+    Parameters:
+    - df_valid_test: DataFrame containing validation and test sequences
+    - df_healthy: DataFrame containing healthy sequences
+    - ratio_threshold: Threshold for defining high/low ratio (default: 0.5)
+
+    Returns:
+    - Dictionary of analysis results
+    """
+    # Combine validation and test datasets
+    analysis_results = {}
+
+    # 1. Negative Sequences Analysis
+    neg_seqs = df_valid_test[df_valid_test['label'] == 0]
+
+    # High vs Low Ratio for Negative Sequences
+    neg_high_ratio = neg_seqs[neg_seqs['ratio_avg'] >= ratio_threshold]
+    neg_low_ratio = neg_seqs[neg_seqs['ratio_avg'] < ratio_threshold]
+
+    analysis_results['negative_sequences'] = {
+        'total_negative_sequences': len(neg_seqs),
+        'high_ratio_sequences': len(neg_high_ratio),
+        'low_ratio_sequences': len(neg_low_ratio),
+        'high_ratio_pred_above_threshold': len(neg_high_ratio[neg_high_ratio['model_prediction'] > 0.5]),
+        'low_ratio_pred_above_threshold': len(neg_low_ratio[neg_low_ratio['model_prediction'] > 0.5])
+    }
+
+    # 2. Correlation Analysis
+    correlation_results = {
+        'prediction_ratio_corr': {
+            'max_ratio': stats.pearsonr(df_valid_test['model_prediction'], df_valid_test['ratio_max']),
+            'min_ratio': stats.pearsonr(df_valid_test['model_prediction'], df_valid_test['ratio_min']),
+            'avg_ratio': stats.pearsonr(df_valid_test['model_prediction'], df_valid_test['ratio_avg'])
+        },
+        'prediction_distance_corr': stats.pearsonr(df_valid_test['model_prediction'], df_valid_test['distances'])
+    }
+    analysis_results['correlations'] = correlation_results
+
+    # 3. Visualization Functions
+    def create_distribution_plots(df_valid_test, df_healthy):
+        """Create distribution plots for various metrics"""
+        plt.figure(figsize=(20, 12))
+
+        # Prediction Distribution
+        plt.subplot(2, 3, 1)
+        sns.histplot(data=df_valid_test, x='model_prediction', hue='label', multiple='stack', bins=20)
+        plt.title('Validation & Test Set: Model Prediction Distribution')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Count')
+
+        # Ratio Distributions (Violin Plot)
+        plt.subplot(2, 3, 2)
+        sns.violinplot(data=df_valid_test, x='label', y='ratio_max')
+        plt.title('Validation & Test Set: Max Ratio by Label')
+        plt.xlabel('Label (0: Negative, 1: Positive)')
+        plt.ylabel('Max Ratio')
+
+        # Distance Distribution (Violin Plot)
+        plt.subplot(2, 3, 3)
+        sns.violinplot(data=df_valid_test, x='label', y='distances')
+        plt.title('Validation & Test Set: Levenshtein Distance by Label')
+        plt.xlabel('Label (0: Negative, 1: Positive)')
+        plt.ylabel('Levenshtein Distance')
+
+        # Scatter Plot: Prediction vs Ratio
+        plt.subplot(2, 3, 4)
+        scatter = plt.scatter(df_valid_test['model_prediction'], df_valid_test['ratio_max'],
+                              c=df_valid_test['label'], cmap='viridis', alpha=0.6)
+        plt.title('Validation & Test Set: Model Prediction vs Max Ratio')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Max Ratio')
+        plt.colorbar(scatter, label='Label')
+
+        # Scatter Plot: Prediction vs Distance
+        plt.subplot(2, 3, 5)
+        plt.scatter(df_valid_test['model_prediction'], df_valid_test['distances'],
+                    c=df_valid_test['label'], cmap='viridis', alpha=0.6)
+        plt.title('Validation & Test Set: Model Prediction vs Levenshtein Distance')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Levenshtein Distance')
+        plt.colorbar(label='Label')
+
+        plt.tight_layout()
+        plt.savefig('model_analysis_plots_valid_test.png')
+        plt.close()
+
+        # Healthy Dataset Analysis
+        plt.figure(figsize=(15, 5))
+
+        # Healthy Set: Prediction Distribution
+        plt.subplot(1, 3, 1)
+        sns.histplot(data=df_healthy, x='model_prediction')
+        plt.title('Healthy Set: Model Prediction Distribution')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Count')
+
+        # Healthy Set: Ratio Distribution
+        plt.subplot(1, 3, 2)
+        sns.violinplot(data=df_healthy, x='model_prediction', y='ratio_max')
+        plt.title('Healthy Set: Max Ratio vs Prediction')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Max Ratio')
+
+        # Healthy Set: Prediction vs Distance
+        plt.subplot(1, 3, 3)
+        plt.scatter(df_healthy['model_prediction'], df_healthy['distances'],
+                    alpha=0.6, c='blue')
+        plt.title('Healthy Set: Prediction vs Levenshtein Distance')
+        plt.xlabel('Model Prediction Probability')
+        plt.ylabel('Levenshtein Distance')
+
+        plt.tight_layout()
+        plt.savefig('model_analysis_plots_healthy.png')
+        plt.close()
+
+    # 4. Threshold Sensitivity Analysis
+    def threshold_sensitivity_analysis(df_valid_test):
+        """Analyze model performance across different prediction thresholds"""
+        thresholds = np.linspace(0, 1, 21)
+        sensitivity_results = []
+
+        for threshold in thresholds:
+            # Positive predictions at this threshold
+            pos_preds = df_valid_test[df_valid_test['model_prediction'] >= threshold]
+
+            # High ratio analysis
+            high_ratio_pos = pos_preds[pos_preds['ratio_avg'] >= ratio_threshold]
+
+            sensitivity_results.append({
+                'threshold': threshold,
+                'total_predictions': len(pos_preds),
+                'high_ratio_percentage': len(high_ratio_pos) / len(pos_preds) * 100 if len(pos_preds) > 0 else 0
+            })
+
+        return pd.DataFrame(sensitivity_results)
+
+    # Execute visualizations and additional analyses
+    create_distribution_plots(df_valid_test, df_healthy)
+    threshold_sensitivity_df = threshold_sensitivity_analysis(df_valid_test)
+
+    # Save threshold sensitivity results
+    threshold_sensitivity_df.to_csv('threshold_sensitivity_analysis.csv', index=False)
+
+    # Update analysis results with threshold sensitivity
+    analysis_results['threshold_sensitivity'] = threshold_sensitivity_df.to_dict('records')
+
+    return analysis_results
+
+
+def display_analysis_results(analysis_results):
+    """
+    Display the comprehensive analysis results in a readable format
+    """
+    print("\n--- Negative Sequences Analysis ---")
+    neg_analysis = analysis_results['negative_sequences']
+    print(f"Total Negative Sequences: {neg_analysis['total_negative_sequences']}")
+    print(f"Negative Sequences with High Ratio: {neg_analysis['high_ratio_sequences']}")
+    print(f"Negative Sequences with Low Ratio: {neg_analysis['low_ratio_sequences']}")
+    print(f"High Ratio Sequences with Prediction > 0.5: {neg_analysis['high_ratio_pred_above_threshold']}")
+    print(f"Low Ratio Sequences with Prediction > 0.5: {neg_analysis['low_ratio_pred_above_threshold']}")
+
+    print("\n--- Correlation Analysis ---")
+    corr_analysis = analysis_results['correlations']
+    print("Correlation between Model Prediction and:")
+    print(
+        f"Max Ratio: {corr_analysis['prediction_ratio_corr']['max_ratio'][0]:.4f} (p-value: {corr_analysis['prediction_ratio_corr']['max_ratio'][1]:.4f})")
+    print(
+        f"Min Ratio: {corr_analysis['prediction_ratio_corr']['min_ratio'][0]:.4f} (p-value: {corr_analysis['prediction_ratio_corr']['min_ratio'][1]:.4f})")
+    print(
+        f"Avg Ratio: {corr_analysis['prediction_ratio_corr']['avg_ratio'][0]:.4f} (p-value: {corr_analysis['prediction_ratio_corr']['avg_ratio'][1]:.4f})")
+    print(
+        f"Levenshtein Distance: {corr_analysis['prediction_distance_corr'][0]:.4f} (p-value: {corr_analysis['prediction_distance_corr'][1]:.4f})")
+
+    print("\n--- Threshold Sensitivity Analysis ---")
+    print("Saved detailed results in 'threshold_sensitivity_analysis.csv'")
+
+    # Plotting threshold sensitivity
+    plt.figure(figsize=(10, 5))
+    thresholds = [entry['threshold'] for entry in analysis_results['threshold_sensitivity']]
+    high_ratio_percentages = [entry['high_ratio_percentage'] for entry in analysis_results['threshold_sensitivity']]
+    total_predictions = [entry['total_predictions'] for entry in analysis_results['threshold_sensitivity']]
+
+    plt.subplot(1, 2, 1)
+    plt.plot(thresholds, high_ratio_percentages, marker='o')
+    plt.title('High Ratio Percentage vs Prediction Threshold')
+    plt.xlabel('Prediction Threshold')
+    plt.ylabel('High Ratio Percentage')
+
+    plt.subplot(1, 2, 2)
+    plt.plot(thresholds, total_predictions, marker='o')
+    plt.title('Total Predictions vs Prediction Threshold')
+    plt.xlabel('Prediction Threshold')
+    plt.ylabel('Number of Predictions')
+
+    plt.tight_layout()
+    plt.savefig('threshold_sensitivity_plot.png')
+    plt.close()

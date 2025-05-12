@@ -206,10 +206,13 @@ class DatasetLoader:
         #     return a + c * (x ** b)
         # V3: f(x, a=0.2, b=1.5):  # Bad
         #     return a + b * x
-        def f(x, a=1.01, b=160, c=0.03):
-            h = lambda y: a / (1 + torch.e ** (-b * (y - c)))
-            base = 1.0 - h(0)
-            return base + h(x)
+        # V4:
+        # def f(x, a=1.01, b=160, c=0.03):
+        #     h = lambda y: a / (1 + torch.e ** (-b * (y - c)))
+        #     base = 1.0 - h(0)
+        #     return base + h(x)
+        def f(x):
+            return x
 
         def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']

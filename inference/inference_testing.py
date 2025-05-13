@@ -934,13 +934,13 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
         # Creating a dataframe with columns: AASeq, ratio_max, ratio_min, ratio_avg, model_prediction, set_origin (train/valid/test/healthy), label
         valid_test_seqs = [valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]
 
-        ratios_max = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        ratios_max = [aaseq_to_ratio(x, dont_use_function=True) for x in valid_test_seqs]
         dataset_loader.build_clone_fraction_df(df_bld, method='min')
-        ratios_min = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        ratios_min = [aaseq_to_ratio(x, dont_use_function=True) for x in valid_test_seqs]
         dataset_loader.build_clone_fraction_df(df_bld, method='avg')
-        ratios_avg = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        ratios_avg = [aaseq_to_ratio(x, dont_use_function=True) for x in valid_test_seqs]
         dataset_loader.build_clone_fraction_df(df_bld, method='med')
-        ratios_med = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        ratios_med = [aaseq_to_ratio(x, dont_use_function=True) for x in valid_test_seqs]
 
         trained_model.eval()
         with torch.no_grad():
@@ -1023,13 +1023,13 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
 
         # calculate the ratios for the healthy patients
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='min')
-        ratios_max = aaseq_to_ratio(chosen_seqs)
+        ratios_max = aaseq_to_ratio(chosen_seqs, dont_use_function=True)
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='min')
-        ratios_min = aaseq_to_ratio(chosen_seqs)
+        ratios_min = aaseq_to_ratio(chosen_seqs, dont_use_function=True)
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='avg')
-        ratios_avg = aaseq_to_ratio(chosen_seqs)
+        ratios_avg = aaseq_to_ratio(chosen_seqs, dont_use_function=True)
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='med')
-        ratios_med = aaseq_to_ratio(chosen_seqs)
+        ratios_med = aaseq_to_ratio(chosen_seqs, dont_use_function=True)
 
         # create a new dataframe with the distances and save as distance_healthy_df
         df_healthy = pd.DataFrame({
@@ -1543,170 +1543,3 @@ def create_scatter_plot_healthy(df, title, ax):
     ax.legend(fontsize=12)
     ax.grid(True, alpha=0.3)
     ax.tick_params(axis='both', which='major', labelsize=12)
-
-# def display_kde_plots_ratio_distance(df_valid_test, df_healthy, base_save_path, bw_adjust=.2, ratio_threshold=0.00):
-#     """
-#     Display KDE plots and ratio vs model prediction plots for positive, negative and healthy samples.
-#     Shows max ratio vs model prediction only for samples with max ratio >= ratio_threshold, and adds a normalized KDE above it.
-#
-#     Args:
-#         df_valid_test (pd.DataFrame): DataFrame containing validation and test data
-#         df_healthy (pd.DataFrame): DataFrame containing healthy data
-#         base_save_path (str): Path to save the output plots
-#     """
-#     # Create a figure with 3 rows (for positive, negative, and healthy sets)
-#     fig, axes = plt.subplots(3, 2, figsize=(14, 18))
-#
-#     # Split the data into positive, negative sets from validation and test
-#     pos_data = df_valid_test[(df_valid_test['label'] == 1)]
-#     neg_data = df_valid_test[(df_valid_test['label'] == 0)]
-#     healthy_data = df_healthy
-#
-#     # Plot 1: Positive set KDE and ratio vs predictions
-#     # First subplot: KDE of model predictions
-#     sns.kdeplot(pos_data['model_prediction'], ax=axes[0, 0], fill=True, common_norm=False,
-#                 color='green', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
-#     axes[0, 0].set_title('KDE of Model Predictions - Positive Samples')
-#     axes[0, 0].set_xlabel('Model Prediction')
-#     axes[0, 0].set_ylabel('Density')
-#     axes[0, 0].set_xlim(0, 1)
-#
-#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
-#     # Create a twin axis for the KDE plot
-#     ax_kde = axes[0, 1].twinx()
-#
-#     # Plot the KDE on the twin axis
-#     sns.kdeplot(pos_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
-#     ax_kde.set_ylabel('Density')
-#     ax_kde.set_ylim(0, None)  # Only set the lower limit
-#
-#     # Filter and sort data for ratio plot
-#     filtered_pos = pos_data[pos_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
-#
-#     # Plot filtered data
-#     if not filtered_pos.empty:
-#         axes[0, 1].plot(filtered_pos['model_prediction'], filtered_pos['ratio_max'], 'o',
-#                         markersize=3, color='green', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
-#     else:
-#         print(f"No positive samples with ratio_max >= {ratio_threshold:.2f}")
-#
-#     axes[0, 1].set_title('Max Ratio vs Model Prediction - Positive Samples')
-#     axes[0, 1].set_xlabel('Model Prediction (sorted)')
-#     axes[0, 1].set_ylabel('Max Ratio')
-#     axes[0, 1].set_xlim(0, 1)
-#     axes[0, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
-#
-#     # Add legends for both axes
-#     lines, labels = axes[0, 1].get_legend_handles_labels()
-#     lines2, labels2 = ax_kde.get_legend_handles_labels()
-#     axes[0, 1].legend(lines + lines2, labels + labels2, loc='upper left')
-#
-#     # Plot 2: Negative set KDE and ratio vs predictions
-#     # First subplot: KDE of model predictions
-#     sns.kdeplot(neg_data['model_prediction'], ax=axes[1, 0], fill=True, common_norm=False,
-#                 color='red', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
-#     axes[1, 0].set_title('KDE of Model Predictions - Negative Samples')
-#     axes[1, 0].set_xlabel('Model Prediction')
-#     axes[1, 0].set_ylabel('Density')
-#     axes[1, 0].set_xlim(0, 1)
-#
-#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
-#     # Create a twin axis for the KDE plot
-#     ax_kde = axes[1, 1].twinx()
-#
-#     # Plot the KDE on the twin axis
-#     sns.kdeplot(neg_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
-#     ax_kde.set_ylabel('Density')
-#     ax_kde.set_ylim(0, None)  # Only set the lower limit
-#
-#     # Filter and sort data for ratio plot
-#     filtered_neg = neg_data[neg_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
-#
-#     # Plot filtered data
-#     if not filtered_neg.empty:
-#         axes[1, 1].plot(filtered_neg['model_prediction'], filtered_neg['ratio_max'], 'o',
-#                         markersize=3, color='red', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
-#     else:
-#         print(f"No negative samples with ratio_max >= {ratio_threshold:.2f}")
-#
-#     axes[1, 1].set_title('Max Ratio vs Model Prediction - Negative Samples')
-#     axes[1, 1].set_xlabel('Model Prediction (sorted)')
-#     axes[1, 1].set_ylabel('Max Ratio')
-#     axes[1, 1].set_xlim(0, 1)
-#     axes[1, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
-#
-#     # Add legends for both axes
-#     lines, labels = axes[1, 1].get_legend_handles_labels()
-#     lines2, labels2 = ax_kde.get_legend_handles_labels()
-#     axes[1, 1].legend(lines + lines2, labels + labels2, loc='upper left')
-#
-#     # Plot 3: Healthy set KDE and ratio vs predictions
-#     # First subplot: KDE of model predictions
-#     sns.kdeplot(healthy_data['model_prediction'], ax=axes[2, 0], fill=True, common_norm=False,
-#                 color='blue', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
-#     axes[2, 0].set_title('KDE of Model Predictions - Healthy Samples')
-#     axes[2, 0].set_xlabel('Model Prediction')
-#     axes[2, 0].set_ylabel('Density')
-#     axes[2, 0].set_xlim(0, 1)
-#
-#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
-#     # Create a twin axis for the KDE plot
-#     ax_kde = axes[2, 1].twinx()
-#
-#     # Plot the KDE on the twin axis
-#     sns.kdeplot(healthy_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
-#     ax_kde.set_ylabel('Density')
-#     ax_kde.set_ylim(0, None)  # Only set the lower limit
-#
-#     # Filter and sort data for ratio plot
-#     filtered_healthy = healthy_data[healthy_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
-#
-#     # Plot filtered data
-#     if not filtered_healthy.empty:
-#         axes[2, 1].plot(filtered_healthy['model_prediction'], filtered_healthy['ratio_max'], 'o',
-#                         markersize=3, color='blue', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
-#     else:
-#         print(f"No healthy samples with ratio_max >= {ratio_threshold:.2f}")
-#
-#     axes[2, 1].set_title('Max Ratio vs Model Prediction - Healthy Samples')
-#     axes[2, 1].set_xlabel('Model Prediction (sorted)')
-#     axes[2, 1].set_ylabel('Max Ratio')
-#     axes[2, 1].set_xlim(0, 1)
-#     axes[2, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
-#
-#     # Add legends for both axes
-#     lines, labels = axes[2, 1].get_legend_handles_labels()
-#     lines2, labels2 = ax_kde.get_legend_handles_labels()
-#     axes[2, 1].legend(lines + lines2, labels + labels2, loc='upper left')
-#
-#     # Adjust layout and save figure
-#     plt.tight_layout()
-#     plt.savefig(os.path.join(base_save_path, 'model_prediction_ratio_kde.png'), dpi=300)
-#     plt.show()
-#
-#     # Calculate and display summary statistics
-#     print("\nSummary Statistics for Positive Samples:")
-#     print(f"Mean model prediction: {pos_data['model_prediction'].mean():.4f}")
-#     print(f"Mean max ratio: {pos_data['ratio_max'].mean():.4f}")
-#     print(
-#         f"Correlation between model prediction and max ratio: {pos_data['model_prediction'].corr(pos_data['ratio_max']):.4f}")
-#     print(
-#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_pos)}/{len(pos_data)} ({len(filtered_pos) / len(pos_data) * 100:.2f}%)")
-#
-#     print("\nSummary Statistics for Negative Samples:")
-#     print(f"Mean model prediction: {neg_data['model_prediction'].mean():.4f}")
-#     print(f"Mean max ratio: {neg_data['ratio_max'].mean():.4f}")
-#     print(
-#         f"Correlation between model prediction and max ratio: {neg_data['model_prediction'].corr(neg_data['ratio_max']):.4f}")
-#     print(
-#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_neg)}/{len(neg_data)} ({len(filtered_neg) / len(neg_data) * 100:.2f}%)")
-#
-#     print("\nSummary Statistics for Healthy Samples:")
-#     print(f"Mean model prediction: {healthy_data['model_prediction'].mean():.4f}")
-#     print(f"Mean max ratio: {healthy_data['ratio_max'].mean():.4f}")
-#     print(
-#         f"Correlation between model prediction and max ratio: {healthy_data['model_prediction'].corr(healthy_data['ratio_max']):.4f}")
-#     print(
-#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_healthy)}/{len(healthy_data)} ({len(filtered_healthy) / len(healthy_data) * 100:.2f}%)")
-#
-#     print('Done with KDE and ratio visualization!')

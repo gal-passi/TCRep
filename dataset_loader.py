@@ -30,7 +30,7 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 
 
 class DatasetLoader:
-    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0):
+    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none'):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -207,17 +207,27 @@ class DatasetLoader:
         # V3: f(x, a=0.2, b=1.5):  # Bad
         #     return a + b * x
         # V4:
-        # def f(x, a=1.01, b=160, c=0.03):
-        #     h = lambda y: a / (1 + torch.e ** (-b * (y - c)))
-        #     base = 1.0 - h(0)
-        #     return base + h(x)
-        def f(x):
-            return x
+        def f(x, a=1.01, b=160, c=0.03):
+            h = lambda y: a / (1 + torch.e ** (-b * (y - c)))
+            base = 1.0 - h(0)
+            return base + h(x)
 
         def aaseq_to_ratio(aaseq_array, default_value=0.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_ratio.set_index('AASeq')['cloneFraction']
             result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
             return result if dont_use_function else f(torch.tensor(result))
+
+        self.build_distance_df(df_bld, train_pos_seqs, dataset_type)
+
+        def distance_func(x, a=2.0, k=3.5, x_0=2.0, b=1.0):
+            sig = 1 - 1 / (1 + torch.exp(-k * (x - x_0)))
+            return a * sig + b
+
+        self._dist_a = {"none" : 0, "v1" : 1, "v2" : 2, "v3" : 4, "v4" : 6}[dist_loss_type.lower()]
+        def aaseq_to_distance(aaseq_array, default_value=1.0, dont_use_function=False):
+            lookup_series = self.df_aaseq_to_distance.set_index('AASeq')['distance']
+            result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
+            return result if dont_use_function else distance_func(torch.tensor(result), a=self._dist_a)
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -247,6 +257,60 @@ class DatasetLoader:
         self.df_bld = df_bld
         self.df_hlt = df_hlt
         self.aaseq_to_ratio = aaseq_to_ratio
+        self.aaseq_to_distance = aaseq_to_distance
+
+    def build_distance_df(self, df_bld, train_pos_seqs, dataset_type='ms', batch_size=1000):
+        sorted_seqs = sorted(list(df_bld["AASeq"].unique()))
+        # create hash of the df_dist in order to save or load it
+
+        hash_str = "_".join(sorted_seqs)
+        hash_of_df = hash(hash_str)
+
+        # check if the df_dist already exists
+        df_dist_filename = f"cache/{dataset_type}/df_dist_{hash_of_df}.pkl"
+        if os.path.exists(df_dist_filename):
+            # load the df_dist from the file
+            df_dist = pd.read_pickle(df_dist_filename)
+            self.df_aaseq_to_distance = df_dist
+            return
+
+        seqs = [(len(seq), seq) for seq in df_bld["AASeq"].unique()]
+        possible_lens = set([x[0] for x in seqs])
+        all_distances = []
+        corresponding_seqs = []
+        for possible_len in tqdm(possible_lens):
+            seqs_in_this_len = [x[1] for x in seqs if x[0] == possible_len]
+            num_seqs = len(seqs_in_this_len)
+            # Process in batches if the number of sequences is large
+            if num_seqs > batch_size:
+                batched_min_dists = []
+                for i in range(0, num_seqs, batch_size):
+                    batch_end = min(i + batch_size, num_seqs)
+                    batch_seqs = seqs_in_this_len[i:batch_end]
+
+                    # Calculate pairwise distance for this batch
+                    batch_pwc_mat = pairwise_scores(batch_seqs, train_pos_seqs, score=levenshtein_dist_non_bin)
+
+                    # Get minimum distance for each sequence in the batch
+                    batch_min_dist = np.min(batch_pwc_mat, axis=1)
+                    batched_min_dists.append(batch_min_dist)
+
+                min_dist = np.concatenate(batched_min_dists)
+            else:
+                # Original calculation for small sequence sets
+                pwc_mat = pairwise_scores(seqs_in_this_len, train_pos_seqs, score=levenshtein_dist_non_bin)
+                min_dist = np.min(pwc_mat, axis=1)
+            all_distances.append(min_dist)
+            corresponding_seqs.append(seqs_in_this_len)
+        combined_distances = np.concatenate(all_distances)
+        combined_seqs = np.concatenate(corresponding_seqs)
+        # create a df that will be used to map the sequences to the distances
+        df_dist = pd.DataFrame({'AASeq': combined_seqs, 'distance': combined_distances})
+        self.df_aaseq_to_distance = df_dist
+
+        # save the df_dist to the file
+        os.makedirs(os.path.dirname(df_dist_filename), exist_ok=True)
+        df_dist.to_pickle(df_dist_filename)
 
     def build_clone_fraction_df(self, df_bld, method='max'):
         """
@@ -286,6 +350,9 @@ class DatasetLoader:
 
     def get_aaseq_to_ratio_func(self):
         return self.aaseq_to_ratio
+
+    def get_aaseq_to_distance_func(self):
+        return self.aaseq_to_distance
 
     def get_seqs(self):
         return self.train_pos_seqs, self.train_neg_seqs, self.valid_pos_seqs, self.valid_neg_seqs, self.test_pos_seqs, self.test_neg_seqs
@@ -673,370 +740,3 @@ class DatasetLoader:
 
         return mean_results, std_percent_of_total
 
-    # # Claude implementation!
-    # def __init__(self, dataset_type='ms', random_seed=42, cell_type='ALL', num_test_patients=8):
-    #     """
-    #     Initialize the DatasetLoader with dataset type and options.
-    #
-    #     Args:
-    #         dataset_type (str): Type of dataset ('ms' or 'article')
-    #         random_seed (int): Random seed for reproducibility
-    #         cell_type (str): Cell type to filter by ('CD8', 'CD4', or 'ALL')
-    #         num_test_patients (int): Number of patients to use for test and validation
-    #     """
-    #     self.dataset_type = dataset_type
-    #     self.random_seed = random_seed
-    #     self.cell_type = cell_type
-    #     self.num_test_patients = num_test_patients
-    #
-    #     # Initialize datasets and split data
-    #     self.setup_datasets()
-    #     self.prepare_data(cell_type, num_test_patients)
-    #
-    # def setup_datasets(self):
-    #     """Set up the disease and healthy datasets based on dataset_type."""
-    #     disease = 'Multiple sclerosis'
-    #
-    #     if self.dataset_type == 'ms':
-    #         self.df_bld = self.get_all_usable_disease_data(disease=disease)
-    #         self.df_hlt = self.get_all_usable_healthy_data()
-    #     elif self.dataset_type == 'article':
-    #         df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-    #         self.df_bld = df_article[df_article["condition"] == "T1D"]
-    #         self.df_hlt = df_article[df_article["condition"] == "Healthy"]
-    #     else:
-    #         raise ValueError(f"Invalid dataset type: {self.dataset_type}")
-    #
-    # def get_dfs(self):
-    #     """Return the disease and healthy dataframes."""
-    #     return self.df_bld, self.df_hlt
-    #
-    # def get_seqs(self):
-    #     """Return sequence sets (train positive, negative, validation positive, validation negative,
-    #     test positive, test negative)."""
-    #     return (
-    #         self.train_pos_seqs,
-    #         self.train_neg_seqs,
-    #         self.valid_pos_seqs,
-    #         self.valid_neg_seqs,
-    #         self.test_pos_seqs,
-    #         self.test_neg_seqs
-    #     )
-    #
-    # def get_patient_ids(self):
-    #     """Return patient IDs for each split."""
-    #     return self.train_patient_ids, self.valid_patient_ids, self.test_patient_ids
-    #
-    # def get_patient_inds(self):
-    #     """Return patient indices for each split."""
-    #     return self.train_patient_inds, self.valid_patient_inds, self.test_patient_inds
-    #
-    # def get_masks(self):
-    #     """Return masks for each split."""
-    #     return self.train_masks, self.valid_masks, self.test_masks
-    #
-    # def filter_by_cell_type(self, cell_type='ALL'):
-    #     """
-    #     Filter datasets by cell type if applicable.
-    #
-    #     Args:
-    #         cell_type (str): Cell type to filter by ('CD8', 'CD4', or 'ALL')
-    #
-    #     Returns:
-    #         tuple: Filtered disease and healthy dataframes
-    #     """
-    #     if cell_type != 'ALL' and self.dataset_type == 'ms':
-    #         df_bld = self.df_bld[self.df_bld['cell_type'] == cell_type]
-    #         df_hlt = self.df_hlt[self.df_hlt['cell_type'] == cell_type]
-    #     else:
-    #         df_bld, df_hlt = self.df_bld, self.df_hlt
-    #
-    #     return df_bld, df_hlt
-    #
-    # def split_datasets(self, cell_type='ALL', num_test_patients=8):
-    #     """
-    #     Split datasets into train, validation, and test sets.
-    #
-    #     Args:
-    #         cell_type (str): Cell type to filter by ('CD8', 'CD4', or 'ALL')
-    #         num_test_patients (int): Number of patients to use for test+validation
-    #
-    #     Returns:
-    #         dict: Dictionary containing all split datasets and metadata
-    #     """
-    #     # Reset random seed for reproducibility
-    #     np.random.seed(self.random_seed)
-    #
-    #     # Get filtered dataframes
-    #     df_bld, df_hlt = self.filter_by_cell_type(cell_type)
-    #
-    #     # Step 1: Split patients into train, validation, and test sets
-    #     patient_splits = self._split_patients(df_bld, num_test_patients)
-    #
-    #     # Step 2: Process positive sequences for each split
-    #     positive_data = self._process_positive_sequences(df_bld, df_hlt, patient_splits, cell_type)
-    #
-    #     # Step 3: Process negative sequences for each split without intersections
-    #     negative_data = self._process_negative_sequences(df_bld, patient_splits, positive_data)
-    #
-    #     # Step 4: Collect all metadata and results
-    #     results = {
-    #         # Original dataframes
-    #         'df_bld': df_bld,
-    #         'df_hlt': df_hlt,
-    #
-    #         # Patient IDs and indexes
-    #         'unique_patient_ids': patient_splits['unique_patient_ids'],
-    #         'train_patient_ids': patient_splits['train_patient_ids'],
-    #         'valid_patient_ids': patient_splits['valid_patient_ids'],
-    #         'test_patient_ids': patient_splits['test_patient_ids'],
-    #         'train_patient_inds': patient_splits['train_patient_inds'],
-    #         'valid_patient_inds': patient_splits['valid_patient_inds'],
-    #         'test_patient_inds': patient_splits['test_patient_inds'],
-    #
-    #         # Patient masks
-    #         'patient_id_masks': patient_splits['patient_id_masks'],
-    #         'train_masks': patient_splits['train_masks'],
-    #         'valid_masks': patient_splits['valid_masks'],
-    #         'test_masks': patient_splits['test_masks'],
-    #         'train_inds': positive_data['train_inds'],
-    #
-    #         # Positive sequences
-    #         'positive_seqs': positive_data['positive_seqs'],
-    #         'train_pos_seqs': positive_data['train_pos_seqs'],
-    #         'valid_pos_seqs': positive_data['valid_pos_seqs'],
-    #         'test_pos_seqs': positive_data['test_pos_seqs'],
-    #
-    #         # Negative sequences - maintain original attribute name 'neg_seqs' for backwards compatibility
-    #         'neg_seqs': negative_data['train_neg_seqs'],  # For backwards compatibility
-    #         'train_neg_seqs': negative_data['train_neg_seqs'],
-    #         'valid_neg_seqs': negative_data['valid_neg_seqs'],
-    #         'test_neg_seqs': negative_data['test_neg_seqs']
-    #     }
-    #
-    #     return results
-    #
-    # def _split_patients(self, df_bld, num_test_patients):
-    #     """
-    #     Split patients into train, validation, and test sets.
-    #
-    #     Args:
-    #         df_bld (DataFrame): Disease dataset
-    #         num_test_patients (int): Number of patients for test+validation
-    #
-    #     Returns:
-    #         dict: Dictionary with patient splits and masks
-    #     """
-    #     # Get unique patient IDs and shuffle them
-    #     unique_patient_ids = df_bld["patient_id"].unique()
-    #     unique_patient_ids = np.random.permutation(unique_patient_ids)
-    #
-    #     # Split patients into test, validation, and train
-    #     test_patient_ids = unique_patient_ids[:num_test_patients]
-    #     test_patient_ids, valid_patient_ids = (
-    #         test_patient_ids[:num_test_patients // 2],
-    #         test_patient_ids[num_test_patients // 2:]
-    #     )
-    #     train_patient_ids = unique_patient_ids[num_test_patients:]
-    #
-    #     # Get indices for each patient group
-    #     test_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in test_patient_ids])
-    #     valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
-    #     train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
-    #
-    #     return {
-    #         'unique_patient_ids': unique_patient_ids,
-    #         'test_patient_ids': test_patient_ids,
-    #         'valid_patient_ids': valid_patient_ids,
-    #         'train_patient_ids': train_patient_ids,
-    #         'test_patient_inds': test_patient_inds,
-    #         'valid_patient_inds': valid_patient_inds,
-    #         'train_patient_inds': train_patient_inds,
-    #         'patient_id_masks': None,  # Will be filled later
-    #         'train_masks': None,  # Will be filled later
-    #         'valid_masks': None,  # Will be filled later
-    #         'test_masks': None  # Will be filled later
-    #     }
-    #
-    # def _process_positive_sequences(self, df_bld, df_hlt, patient_splits, cell_type):
-    #     """
-    #     Process positive sequences for each split.
-    #
-    #     Args:
-    #         df_bld (DataFrame): Disease dataset
-    #         df_hlt (DataFrame): Healthy dataset
-    #         patient_splits (dict): Patient split information
-    #         cell_type (str): Cell type being used
-    #
-    #     Returns:
-    #         dict: Positive sequences for each split
-    #     """
-    #     # Step 1: Get initial positive and negative sets
-    #     train_df = df_bld[df_bld['patient_id'].isin(patient_splits['train_patient_ids'])]
-    #     valid_df = df_bld[df_bld['patient_id'].isin(patient_splits['valid_patient_ids'])]
-    #     test_df = df_bld[df_bld['patient_id'].isin(patient_splits['test_patient_ids'])]
-    #
-    #     # Step 2: Calculate common sequences separately for each set
-    #     # For train set
-    #     train_positive_seqs, _ = self.get_positive_negative(
-    #         train_df, df_hlt, self.dataset_type, cell_type, num_of_patients=3
-    #     )
-    #     train_common_seqs = self.find_all_common_sequences(train_df, num_of_patients=3)
-    #     valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
-    #     train_common_seqs = train_common_seqs - valid_seqs_healthy
-    #     train_positive_seqs.update(train_common_seqs)
-    #
-    #     # For validation set (ensuring no overlap with train)
-    #     valid_positive_seqs, _ = self.get_positive_negative(
-    #         valid_df, df_hlt, self.dataset_type, cell_type, num_of_patients=3
-    #     )
-    #     valid_common_seqs = self.find_all_common_sequences(valid_df, num_of_patients=3)
-    #     valid_common_seqs = valid_common_seqs - valid_seqs_healthy
-    #     valid_positive_seqs.update(valid_common_seqs)
-    #     # Remove any sequences that are in train set
-    #     valid_positive_seqs = valid_positive_seqs - train_positive_seqs
-    #
-    #     # For test set (ensuring no overlap with train or validation)
-    #     test_positive_seqs, _ = self.get_positive_negative(
-    #         test_df, df_hlt, self.dataset_type, cell_type, num_of_patients=3
-    #     )
-    #     test_common_seqs = self.find_all_common_sequences(test_df, num_of_patients=3)
-    #     test_common_seqs = test_common_seqs - valid_seqs_healthy
-    #     test_positive_seqs.update(test_common_seqs)
-    #     # Remove any sequences that are in train or validation sets
-    #     test_positive_seqs = test_positive_seqs - train_positive_seqs - valid_positive_seqs
-    #
-    #     # Combine all positive sequences and create masks
-    #     all_positive_seqs = list(train_positive_seqs | valid_positive_seqs | test_positive_seqs)
-    #     all_positive_seqs.sort()
-    #     np.random.shuffle(all_positive_seqs)
-    #
-    #     # Create patient masks for the positive sequences
-    #     masks = []
-    #     for patient in patient_splits['unique_patient_ids']:
-    #         patient_seqs = set(df_bld.loc[df_bld["patient_id"] == patient, "AASeq"])
-    #         mask = np.array([1 if seq in patient_seqs else 0 for seq in all_positive_seqs])
-    #         if 1 in mask:
-    #             masks.append(mask)
-    #
-    #     patient_id_masks = np.array(masks)
-    #
-    #     # Update patient_splits with the masks
-    #     patient_splits['patient_id_masks'] = patient_id_masks
-    #     patient_splits['test_masks'] = patient_id_masks[patient_splits['test_patient_inds']]
-    #     patient_splits['valid_masks'] = patient_id_masks[patient_splits['valid_patient_inds']]
-    #     patient_splits['train_masks'] = patient_id_masks[patient_splits['train_patient_inds']]
-    #
-    #     # Create index masks for each split
-    #     test_inds = patient_splits['test_masks'].any(axis=0)
-    #     valid_inds = patient_splits['valid_masks'].any(axis=0)
-    #
-    #     # Handle any potential overlap
-    #     valid_test_inds = test_inds & valid_inds
-    #     if sum(valid_inds) > sum(test_inds):
-    #         test_inds = test_inds | valid_test_inds
-    #         valid_inds = valid_inds & ~valid_test_inds
-    #     else:
-    #         valid_inds = valid_inds | valid_test_inds
-    #         test_inds = test_inds & ~valid_test_inds
-    #
-    #     train_inds = (~test_inds) & (~valid_inds)
-    #
-    #     # Get positive sequences for each split
-    #     train_pos_seqs = np.array(all_positive_seqs)[train_inds]
-    #     valid_pos_seqs = np.array(all_positive_seqs)[valid_inds]
-    #     test_pos_seqs = np.array(all_positive_seqs)[test_inds]
-    #
-    #     # Print statistics
-    #     print(f"Number of Positive Sequences in General: {len(all_positive_seqs)}")
-    #     print(f"Number of Positive Sequences in Test: {sum(test_inds)}, "
-    #           f"Percentage: {sum(test_inds) / len(all_positive_seqs) * 100:.2f}%")
-    #     print(f"Number of Positive Sequences in Valid: {sum(valid_inds)}, "
-    #           f"Percentage: {sum(valid_inds) / len(all_positive_seqs) * 100:.2f}%")
-    #     print(f"Number of Positive Sequences in Train: {sum(train_inds)}, "
-    #           f"Percentage: {sum(train_inds) / len(all_positive_seqs) * 100:.2f}%\n")
-    #
-    #     print(f"Number of patients in General: {df_bld['patient_id'].nunique() + df_hlt['patient_id'].nunique()}")
-    #     print(f"Number of Disease patients: {df_bld['patient_id'].nunique()}")
-    #     print(f"Number of Healthy patients: {df_hlt['patient_id'].nunique()}")
-    #
-    #     return {
-    #         'positive_seqs': all_positive_seqs,
-    #         'train_pos_seqs': train_pos_seqs,
-    #         'valid_pos_seqs': valid_pos_seqs,
-    #         'test_pos_seqs': test_pos_seqs,
-    #         'train_inds': train_inds
-    #     }
-    #
-    # def _process_negative_sequences(self, df_bld, patient_splits, positive_data):
-    #     """
-    #     Process negative sequences ensuring no intersections with positive sets.
-    #
-    #     Args:
-    #         df_bld (DataFrame): Disease dataset
-    #         patient_splits (dict): Patient split information
-    #         positive_data (dict): Positive sequence information
-    #
-    #     Returns:
-    #         dict: Negative sequences for each split
-    #     """
-    #     # Get negative sequences from each patient split
-    #     train_neg_seqs = set(df_bld[df_bld['patient_id'].isin(patient_splits['train_patient_ids'])]['AASeq'].unique())
-    #     valid_neg_seqs = set(df_bld[df_bld['patient_id'].isin(patient_splits['valid_patient_ids'])]['AASeq'].unique())
-    #     test_neg_seqs = set(df_bld[df_bld['patient_id'].isin(patient_splits['test_patient_ids'])]['AASeq'].unique())
-    #
-    #     # Remove any sequences that are in positive sets
-    #     train_pos_set = set(positive_data['train_pos_seqs'])
-    #     valid_pos_set = set(positive_data['valid_pos_seqs'])
-    #     test_pos_set = set(positive_data['test_pos_seqs'])
-    #
-    #     # Ensure no intersection between negative and positive sets
-    #     train_neg_seqs = train_neg_seqs - train_pos_set - valid_pos_set - test_pos_set
-    #     valid_neg_seqs = valid_neg_seqs - valid_pos_set - train_pos_set - test_pos_set
-    #     test_neg_seqs = test_neg_seqs - test_pos_set - train_pos_set - valid_pos_set
-    #
-    #     # Ensure no intersection between negative sets
-    #     valid_test_neg_seqs = valid_neg_seqs & test_neg_seqs
-    #     if len(test_neg_seqs) < len(valid_neg_seqs):
-    #         valid_neg_seqs = valid_neg_seqs - valid_test_neg_seqs
-    #     else:
-    #         test_neg_seqs = test_neg_seqs - valid_test_neg_seqs
-    #
-    #     train_valid_neg_seqs = train_neg_seqs & valid_neg_seqs
-    #     train_neg_seqs = train_neg_seqs - train_valid_neg_seqs
-    #
-    #     train_test_neg_seqs = train_neg_seqs & test_neg_seqs
-    #     train_neg_seqs = train_neg_seqs - train_test_neg_seqs
-    #
-    #     return {
-    #         'train_neg_seqs': np.array(list(train_neg_seqs)),
-    #         'valid_neg_seqs': np.array(list(valid_neg_seqs)),
-    #         'test_neg_seqs': np.array(list(test_neg_seqs))
-    #     }
-    #
-    # def prepare_data(self, cell_type='ALL', num_test_patients=8):
-    #     """
-    #     Main method to prepare all data and set as class attributes.
-    #
-    #     Args:
-    #         cell_type (str): Cell type to filter by ('CD8', 'CD4', or 'ALL')
-    #         num_test_patients (int): Number of patients to use for test+validation
-    #     """
-    #     # Get all split data
-    #     results = self.split_datasets(cell_type, num_test_patients)
-    #
-    #     # Set all class attributes
-    #     for key, value in results.items():
-    #         setattr(self, key, value)
-    #
-    #     return results
-    #
-    # def prepare_with_different_test_count(self, num_test_patients):
-    #     """
-    #     Update data with a different number of test patients.
-    #
-    #     Args:
-    #         num_test_patients (int): New number of patients for test+validation
-    #     """
-    #     self.num_test_patients = num_test_patients
-    #     return self.prepare_data(self.cell_type, num_test_patients)

@@ -645,7 +645,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -672,6 +672,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "lora": lora,
             "masking": masking,
             "ratio": ratio,
+            "dist_loss_type": dist_loss_type,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -701,6 +702,7 @@ def sweep_model():
     lora = wandb.config.lora
     masking = wandb.config.masking
     ratio = wandb.config.ratio
+    dist_loss_type = wandb.config.dist_loss_type
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the dataset
@@ -708,13 +710,13 @@ def sweep_model():
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
-    # train_patient_ids, valid_patient_ids, test_patient_ids = dataset_loader.get_patient_ids()
     train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
     train_masks, valid_masks, test_masks = dataset_loader.get_masks()
     train_inds = dataset_loader.train_inds
     unique_patient_ids = dataset_loader.unique_patient_ids
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
+    aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
 
     # Initialize Weights & Biases
     if model_type == 'ff':
@@ -744,6 +746,7 @@ def sweep_model():
                                          pos_weights=pos_weights,
                                          scheduler_type=scheduler_type,
                                          aaseq_to_ratio=aaseq_to_ratio,
+                                         aaseq_to_dist=aaseq_to_dist,
                                          masking=masking,
                                          ratio=ratio,
                                          args=args,
@@ -772,6 +775,7 @@ if __name__ == '__main__':
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
     dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
+    dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -800,6 +804,7 @@ if __name__ == '__main__':
     parser.add_argument('--sweep_version', type=int, default=0, help='Version of the sweep file to use')
     parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
     parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
+    parser.add_argument('--dist_loss_type', type=str, choices=dist_loss_types, default='none', help='Type of distribution loss to use')
 
     args = parser.parse_args()
 
@@ -831,6 +836,7 @@ if __name__ == '__main__':
     sweep_version = args.sweep_version
     masking = args.masking if model_type == 'cvc' else False  # Masking is only applicable for CVC model
     ratio = args.ratio
+    dist_loss_type = args.dist_loss_type
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -843,6 +849,7 @@ if __name__ == '__main__':
         assert not log_wandb, "Cannot log to wandb in test mode"
     assert not (to_k_fold and to_sweep), "Cannot do k-fold cross-validation and sweep at the same time"
     assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
+    assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -865,6 +872,7 @@ if __name__ == '__main__':
     print(f"\tUse LoRA: {args.lora}")
     print(f"\tMasking: {args.masking}")
     print(f"\tUsing Ratio: {args.ratio}")
+    print(f"\tDist Loss Type: {args.dist_loss_type}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -922,7 +930,7 @@ if __name__ == '__main__':
         altered_lists = generate_shifted_lists(list(unique_patient_ids))
         unique_patient_ids = altered_lists[k_fold]
 
-    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids, k_fold=k_fold)
+    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids, k_fold=k_fold, dist_loss_type=dist_loss_type)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -933,6 +941,7 @@ if __name__ == '__main__':
     unique_patient_ids = dataset_loader.unique_patient_ids
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
+    aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
 
     # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
     for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
@@ -1057,6 +1066,7 @@ if __name__ == '__main__':
                 lora=lora,
                 masking=masking,
                 ratio=ratio,
+                dist_loss_type=dist_loss_type,
                 device=device,
             )
 
@@ -1098,6 +1108,7 @@ if __name__ == '__main__':
                                                  pos_weights=pos_weights,
                                                  scheduler_type=scheduler_type,
                                                  aaseq_to_ratio=aaseq_to_ratio,
+                                                 aaseq_to_dist=aaseq_to_dist,
                                                  masking=masking,
                                                  ratio=ratio,
                                                  args=args,

@@ -36,6 +36,7 @@ def calculate_probas(df, trained_model, patient_ids, to_print=True):
         probas.append(proba)
     return probas
 
+
 def dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids):
     probas_disease = calculate_probas(df_bld, trained_model, valid_patient_ids)
 
@@ -436,7 +437,8 @@ def my_plot_distributions(dists_dict, args, n_bins=50):
 
     last_hist = None
     for label, data in dists_dict.items():
-        last_hist = plt.hist(data, bins=n_bins, range=(0, 1), alpha=0.3, density=True, label=label, histtype='stepfilled')
+        last_hist = plt.hist(data, bins=n_bins, range=(0, 1), alpha=0.3, density=True, label=label,
+                             histtype='stepfilled')
 
     plt.title("Probability Distribution Comparison")
     plt.xlabel("Probability (model output)")
@@ -445,7 +447,8 @@ def my_plot_distributions(dists_dict, args, n_bins=50):
     plt.grid(True)
     plt.tight_layout()
     plt.ylim(0, last_hist[0][1] + 1)
-    plt.savefig(f"plots/inference_plots/inference_histogram_{get_model_config_str(args)}.png", dpi=600, bbox_inches='tight')
+    plt.savefig(f"plots/inference_plots/inference_histogram_{get_model_config_str(args)}.png", dpi=600,
+                bbox_inches='tight')
     plt.show()
 
 
@@ -763,7 +766,6 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
                 traceback.print_exc()
                 return pd.DataFrame()
 
-
         def save_t1d_tcrs(t1d_tcrs, output_file='t1d_tcr_beta_chains.csv'):
             """
             Save the extracted T1D TCR beta chains to a CSV file.
@@ -777,7 +779,6 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
                 print(f"Successfully saved {len(t1d_tcrs)} T1D-related TCR beta chains to {output_file}")
             except Exception as e:
                 print(f"Error saving to file: {e}")
-
 
         def analyze_t1d_tcrs(t1d_tcrs):
             """
@@ -855,7 +856,6 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
                     print("\nCDR3b length distribution:")
                     print(length_dist.head(10))
 
-
         file_path = "db/positive_t1d_data/adj6975_Data_file_S1.xlsx"  # Update with your actual file path
 
         print("Extracting T1D-related TCR beta chains...")
@@ -899,9 +899,8 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
     print(f"Number of T1D TCRs with probability >= 0.5: {np.sum(out_probs >= 0.5)}")
 
 
-
-def calculate_lev_distance(seqs, pred, train_pos_seqs):
-    seqs_filtered = [(len(seq), seq) for seq, pred in zip(seqs, pred) if pred > 0.5]
+def calculate_lev_distance(seqs, pred, train_pos_seqs, min_prediction_threshold=0.5):
+    seqs_filtered = [(len(seq), seq) for seq, pred in zip(seqs, pred) if pred >= min_prediction_threshold]
     possible_lens = set([x[0] for x in seqs_filtered])
     all_distances = []
     corresponding_seqs = []
@@ -922,6 +921,7 @@ def calculate_lev_distance(seqs, pred, train_pos_seqs):
 
 def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
                              test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader):
+    min_prediction_threshold = 0.0
     base_save_path = f'cache/ratio_distance/'
     os.makedirs(base_save_path, exist_ok=True)
     base_valid_test_df_path = os.path.join(base_save_path, 'base_valid_test_df.csv')
@@ -939,6 +939,8 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
         ratios_min = [aaseq_to_ratio(x) for x in valid_test_seqs]
         dataset_loader.build_clone_fraction_df(df_bld, method='avg')
         ratios_avg = [aaseq_to_ratio(x) for x in valid_test_seqs]
+        dataset_loader.build_clone_fraction_df(df_bld, method='med')
+        ratios_med = [aaseq_to_ratio(x) for x in valid_test_seqs]
 
         trained_model.eval()
         with torch.no_grad():
@@ -957,6 +959,7 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
                 'ratio_max': ratios_max[i],
                 'ratio_min': ratios_min[i],
                 'ratio_avg': ratios_avg[i],
+                'ratio_med': ratios_med[i],
                 'model_prediction': predictions[i],
                 'set_origin': valid_test_set_origins[i],
                 'label': valid_test_labels[i]
@@ -973,7 +976,9 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
     else:
         # calculate the minimum Levenshtein distance between the sequences with model_prediction > 0.5 in df_valid_test
         # from the set of all positives in the train set (train_pos_seqs).
-        combined_distances, combined_seqs = calculate_lev_distance(df_valid_test['AASeq'], df_valid_test['model_prediction'], train_pos_seqs)
+        combined_distances, combined_seqs = calculate_lev_distance(df_valid_test['AASeq'],
+                                                                   df_valid_test['model_prediction'], train_pos_seqs,
+                                                                   min_prediction_threshold)
 
         distances = []
         for seq in df_valid_test['AASeq']:
@@ -982,7 +987,7 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
                 index = np.where(combined_seqs == seq)[0][0]
                 distances.append(combined_distances[index])
             else:
-                distances.append(0)
+                distances.append(-1)
 
         # create a new column in df_valid_test with the distances and save as distance_valid_test_df
         df_valid_test['distances'] = distances
@@ -1004,7 +1009,8 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
             patient_prediction = torch.softmax(trained_model(chosen_seqs), dim=1)[:, 1].cpu().numpy()
 
         # calculate levenshtein distance for the healthy patients
-        combined_distances, combined_seqs = calculate_lev_distance(chosen_seqs, patient_prediction, train_pos_seqs)
+        combined_distances, combined_seqs = calculate_lev_distance(chosen_seqs, patient_prediction, train_pos_seqs,
+                                                                   min_prediction_threshold)
 
         distances = []
         for seq in chosen_seqs:
@@ -1013,7 +1019,7 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
                 index = np.where(combined_seqs == seq)[0][0]
                 distances.append(combined_distances[index])
             else:
-                distances.append(0)
+                distances.append(-1)
 
         # calculate the ratios for the healthy patients
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='min')
@@ -1022,6 +1028,8 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
         ratios_min = aaseq_to_ratio(chosen_seqs)
         dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='avg')
         ratios_avg = aaseq_to_ratio(chosen_seqs)
+        dataset_loader.build_clone_fraction_df(chosen_df_hlt, method='med')
+        ratios_med = aaseq_to_ratio(chosen_seqs)
 
         # create a new dataframe with the distances and save as distance_healthy_df
         df_healthy = pd.DataFrame({
@@ -1029,6 +1037,7 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
             'ratio_max': ratios_max,
             'ratio_min': ratios_min,
             'ratio_avg': ratios_avg,
+            'ratio_med': ratios_med,
             'model_prediction': patient_prediction,
             'set_origin': ['healthy'] * len(chosen_seqs),
             'distances': distances
@@ -1039,12 +1048,18 @@ def inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, vali
 
     print("Done with ratio-distance csv files!")
 
+    # Display KDE of model predictions on positive valid\test sets
+    display_kde_plots_ratio_distance(df_valid_test, df_healthy, base_save_path)
+
+    # Display distribution of distances
+    create_visualizations(base_save_path)
+
     # display statistics about the distances in relation to the ratio and to the model prediction
     # Perform comprehensive analysis
-    analysis_results = perform_comprehensive_analysis(df_valid_test, df_healthy)
+    # analysis_results = perform_comprehensive_analysis(df_valid_test, df_healthy)
 
     # Display analysis results
-    display_analysis_results(analysis_results)
+    # display_analysis_results(analysis_results)
 
     print('Done with ratio-distance inference!')
 
@@ -1135,7 +1150,7 @@ def perform_comprehensive_analysis(df_valid_test, df_healthy, ratio_threshold=0.
         plt.colorbar(label='Label')
 
         plt.tight_layout()
-        plt.savefig('model_analysis_plots_valid_test.png')
+        plt.savefig('cache/ratio_distance/model_analysis_plots_valid_test.png')
         plt.close()
 
         # Healthy Dataset Analysis
@@ -1164,7 +1179,7 @@ def perform_comprehensive_analysis(df_valid_test, df_healthy, ratio_threshold=0.
         plt.ylabel('Levenshtein Distance')
 
         plt.tight_layout()
-        plt.savefig('model_analysis_plots_healthy.png')
+        plt.savefig('cache/ratio_distance/model_analysis_plots_healthy.png')
         plt.close()
 
     # 4. Threshold Sensitivity Analysis
@@ -1193,7 +1208,7 @@ def perform_comprehensive_analysis(df_valid_test, df_healthy, ratio_threshold=0.
     threshold_sensitivity_df = threshold_sensitivity_analysis(df_valid_test)
 
     # Save threshold sensitivity results
-    threshold_sensitivity_df.to_csv('threshold_sensitivity_analysis.csv', index=False)
+    threshold_sensitivity_df.to_csv('cache/ratio_distance/threshold_sensitivity_analysis.csv', index=False)
 
     # Update analysis results with threshold sensitivity
     analysis_results['threshold_sensitivity'] = threshold_sensitivity_df.to_dict('records')
@@ -1226,7 +1241,7 @@ def display_analysis_results(analysis_results):
         f"Levenshtein Distance: {corr_analysis['prediction_distance_corr'][0]:.4f} (p-value: {corr_analysis['prediction_distance_corr'][1]:.4f})")
 
     print("\n--- Threshold Sensitivity Analysis ---")
-    print("Saved detailed results in 'threshold_sensitivity_analysis.csv'")
+    print("Saved detailed results in 'cache/ratio_distance/threshold_sensitivity_analysis.csv'")
 
     # Plotting threshold sensitivity
     plt.figure(figsize=(10, 5))
@@ -1247,5 +1262,451 @@ def display_analysis_results(analysis_results):
     plt.ylabel('Number of Predictions')
 
     plt.tight_layout()
-    plt.savefig('threshold_sensitivity_plot.png')
+    plt.savefig('cache/ratio_distance/threshold_sensitivity_plot.png')
     plt.close()
+
+
+def display_kde_plots_ratio_distance(df_valid_test, df_healthy, base_save_path, bw_adjust=.2, ratio_threshold=0.00,
+                                     num_bins=10):
+    """
+    Display KDE plots and binned violin plots for positive, negative and healthy samples.
+    Shows KDE of model predictions on the left and violin plots of median ratio binned by model prediction on the right.
+
+    Args:
+        df_valid_test (pd.DataFrame): DataFrame containing validation and test data
+        df_healthy (pd.DataFrame): DataFrame containing healthy data
+        base_save_path (str): Path to save the output plots
+        bw_adjust (float): Bandwidth adjustment for KDE plots
+        ratio_threshold (float): Threshold for ratio_med statistics reporting
+        num_bins (int): Number of bins to use for the violin plots
+    """
+    # Create a figure with 3 rows (for positive, negative, and healthy sets)
+    fig, axes = plt.subplots(3, 2, figsize=(14, 18))
+
+    # Split the data into positive, negative sets from validation and test
+    pos_data = df_valid_test[(df_valid_test['label'] == 1)]
+    neg_data = df_valid_test[(df_valid_test['label'] == 0)]
+    healthy_data = df_healthy
+
+    # Function to create binned data for violin plots
+    def create_binned_data(df, num_bins=10):
+        # Create bins based on model prediction
+        df = df.copy()  # Create a copy to avoid SettingWithCopyWarning
+        df['pred_bin'] = pd.cut(df['model_prediction'], bins=num_bins, labels=False)
+        df['bin_center'] = pd.cut(df['model_prediction'], bins=num_bins).apply(lambda x: x.mid)
+        return df
+
+    # Bin the data
+    pos_data_binned = create_binned_data(pos_data, num_bins)
+    neg_data_binned = create_binned_data(neg_data, num_bins)
+    healthy_data_binned = create_binned_data(healthy_data, num_bins)
+
+    # Plot 1: Positive set KDE and binned violin plots
+    # First subplot: KDE of model predictions
+    sns.kdeplot(pos_data['model_prediction'], ax=axes[0, 0], fill=True, common_norm=False,
+                color='green', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+    axes[0, 0].set_title('KDE of Model Predictions - Positive Samples')
+    axes[0, 0].set_xlabel('Model Prediction')
+    axes[0, 0].set_ylabel('Density')
+    axes[0, 0].set_xlim(0, 1)
+
+    # Second subplot: Violin plot of ratio_med binned by model prediction
+    sns.violinplot(x='bin_center', y='ratio_med', data=pos_data_binned, ax=axes[0, 1],
+                   color='green', alpha=0.6, cut=0)
+    axes[0, 1].set_title('Median Ratio Distribution by Model Prediction Bins - Positive Samples')
+    axes[0, 1].set_xlabel('Model Prediction (bin center)')
+    axes[0, 1].set_ylabel('Median Ratio')
+    axes[0, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+    xticks_labels = [f"{float(x._text):.2f}" for x in axes[0, 1].get_xticklabels()]
+    axes[0, 1].set_xticklabels(xticks_labels, rotation=45, ha='right')
+
+    # Plot 2: Negative set KDE and binned violin plots
+    # First subplot: KDE of model predictions
+    sns.kdeplot(neg_data['model_prediction'], ax=axes[1, 0], fill=True, common_norm=False,
+                color='red', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+    axes[1, 0].set_title('KDE of Model Predictions - Negative Samples')
+    axes[1, 0].set_xlabel('Model Prediction')
+    axes[1, 0].set_ylabel('Density')
+    axes[1, 0].set_xlim(0, 1)
+
+    # Second subplot: Violin plot of ratio_med binned by model prediction
+    sns.violinplot(x='bin_center', y='ratio_med', data=neg_data_binned, ax=axes[1, 1],
+                   color='red', alpha=0.6, cut=0)
+    axes[1, 1].set_title('Median Ratio Distribution by Model Prediction Bins - Negative Samples')
+    axes[1, 1].set_xlabel('Model Prediction (bin center)')
+    axes[1, 1].set_ylabel('Median Ratio')
+    axes[1, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+    xticks_labels = [f"{float(x._text):.2f}" for x in axes[1, 1].get_xticklabels()]
+    axes[1, 1].set_xticklabels(xticks_labels, rotation=45, ha='right')
+
+    # Plot 3: Healthy set KDE and binned violin plots
+    # First subplot: KDE of model predictions
+    sns.kdeplot(healthy_data['model_prediction'], ax=axes[2, 0], fill=True, common_norm=False,
+                color='blue', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+    axes[2, 0].set_title('KDE of Model Predictions - Healthy Samples')
+    axes[2, 0].set_xlabel('Model Prediction')
+    axes[2, 0].set_ylabel('Density')
+    axes[2, 0].set_xlim(0, 1)
+
+    # Second subplot: Violin plot of ratio_med binned by model prediction
+    sns.violinplot(x='bin_center', y='ratio_med', data=healthy_data_binned, ax=axes[2, 1],
+                   color='blue', alpha=0.6, cut=0)
+    axes[2, 1].set_title('Median Ratio Distribution by Model Prediction Bins - Healthy Samples')
+    axes[2, 1].set_xlabel('Model Prediction (bin center)')
+    axes[2, 1].set_ylabel('Median Ratio')
+    axes[2, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+    xticks_labels = [f"{float(x._text):.2f}" for x in axes[2, 1].get_xticklabels()]
+    axes[2, 1].set_xticklabels(xticks_labels, rotation=45, ha='right')
+
+    # Adjust layout and save figure
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_save_path, 'model_prediction_ratio_kde_violin.png'), dpi=300)
+    plt.show()
+
+    # Calculate and display summary statistics
+    # Filter data for ratio statistics
+    filtered_pos = pos_data[pos_data['ratio_med'] >= ratio_threshold]
+    filtered_neg = neg_data[neg_data['ratio_med'] >= ratio_threshold]
+    filtered_healthy = healthy_data[healthy_data['ratio_med'] >= ratio_threshold]
+
+    print("\nSummary Statistics for Positive Samples:")
+    print(f"Mean model prediction: {pos_data['model_prediction'].mean():.4f}")
+    print(f"Mean median ratio: {pos_data['ratio_med'].mean():.4f}")
+    print(
+        f"Correlation between model prediction and median ratio: {pos_data['model_prediction'].corr(pos_data['ratio_med']):.4f}")
+    print(
+        f"Number of samples with ratio_med >= {ratio_threshold:.2f}: {len(filtered_pos)}/{len(pos_data)} ({len(filtered_pos) / len(pos_data) * 100:.2f}%)")
+
+    print("\nSummary Statistics for Negative Samples:")
+    print(f"Mean model prediction: {neg_data['model_prediction'].mean():.4f}")
+    print(f"Mean median ratio: {neg_data['ratio_med'].mean():.4f}")
+    print(
+        f"Correlation between model prediction and median ratio: {neg_data['model_prediction'].corr(neg_data['ratio_med']):.4f}")
+    print(
+        f"Number of samples with ratio_med >= {ratio_threshold:.2f}: {len(filtered_neg)}/{len(neg_data)} ({len(filtered_neg) / len(neg_data) * 100:.2f}%)")
+
+    print("\nSummary Statistics for Healthy Samples:")
+    print(f"Mean model prediction: {healthy_data['model_prediction'].mean():.4f}")
+    print(f"Mean median ratio: {healthy_data['ratio_med'].mean():.4f}")
+    print(
+        f"Correlation between model prediction and median ratio: {healthy_data['model_prediction'].corr(healthy_data['ratio_med']):.4f}")
+    print(
+        f"Number of samples with ratio_med >= {ratio_threshold:.2f}: {len(filtered_healthy)}/{len(healthy_data)} ({len(filtered_healthy) / len(healthy_data) * 100:.2f}%)")
+
+    print('Done with KDE and ratio visualization!')
+
+
+def create_visualizations(base_save_path):
+    """
+    Create visualization figures for the ratio-distance analysis as a single combined figure.
+    """
+    # Load the data
+    distance_valid_test_df_path = os.path.join(base_save_path, 'distance_valid_test_df.csv')
+    distance_healthy_df_path = os.path.join(base_save_path, 'distance_healthy_df.csv')
+
+    df_valid_test = pd.read_csv(distance_valid_test_df_path)
+    df_healthy = pd.read_csv(distance_healthy_df_path)
+
+    # Filter out invalid distances (-1)
+    df_valid_test_filtered = df_valid_test[df_valid_test['distances'] >= 0]
+    df_healthy_filtered = df_healthy[df_healthy['distances'] >= 0]
+
+    # Create output directory if it doesn't exist
+    os.makedirs(base_save_path, exist_ok=True)
+
+    # Create a single figure with 4 subplots
+    fig = plt.figure(figsize=(20, 16))
+
+    # Add GridSpec to have better control over the figure layout
+    gs = fig.add_gridspec(2, 2, hspace=0.3, wspace=0.3)
+
+    # Create the four subplots
+    ax1 = fig.add_subplot(gs[0, 0])  # Violin plot (Valid + Test)
+    ax2 = fig.add_subplot(gs[0, 1])  # Violin plot (Healthy)
+    ax3 = fig.add_subplot(gs[1, 0])  # Scatter with labels (Valid + Test)
+    ax4 = fig.add_subplot(gs[1, 1])  # Scatter (Healthy)
+
+    # Plot 1: Violin plot of model predictions by Levenshtein distance (Validation + Test)
+    df_valid_test_filtered = df_valid_test_filtered[df_valid_test_filtered['label'] == 0]
+    df_valid_test_filtered = df_valid_test_filtered[df_valid_test_filtered['model_prediction'] >= 0.5]
+    # print how many samples in each group by levenshtein distance
+    print("Number of samples in each group by Levenshtein distance (Validation + Test):")
+    print(df_valid_test_filtered['distances'].value_counts())
+    create_violin_plot(df_valid_test_filtered, 'Model Predictions by Levenshtein Distance (Only Negatives!)\n(Validation + Test)', ax1)
+
+    # Plot 2: Violin plot of model predictions by Levenshtein distance (Healthy)
+    create_violin_plot(df_healthy_filtered, 'Model Predictions by Levenshtein Distance\n(Healthy)', ax2)
+
+    # Plot 3: Scatter plot of Median Ratio by model prediction with labels (Validation + Test)
+    create_scatter_plot_with_labels(df_valid_test_filtered, 'Median Ratio by Model Prediction\n(Validation + Test)', ax3)
+
+    # Plot 4: Scatter plot of Median Ratio by model prediction (Healthy)
+    create_scatter_plot_healthy(df_healthy_filtered, 'Median Ratio by Model Prediction\n(Healthy)', ax4)
+
+    # Add a main title for the entire figure
+    fig.suptitle('Levenshtein Distance and Median Ratio and Model Prediction Analysis', fontsize=20, y=0.98)
+
+    # Save the combined figure
+    save_path = os.path.join(base_save_path, 'combined_visualization.png')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Combined figure saved to {save_path}")
+
+
+def create_violin_plot(df, title, ax):
+    """
+    Create a violin plot of model predictions by Levenshtein distance.
+    """
+    # Round distances to integers for better grouping
+    df['distances_rounded'] = df['distances'].round().astype(int)
+
+    # Get unique distances and sort
+    unique_distances = sorted(df['distances_rounded'].unique())
+
+    # Only include distances with sufficient data points
+    valid_distances = []
+    for dist in unique_distances:
+        if len(df[df['distances_rounded'] == dist]) >= 5:  # Minimum number for a meaningful violin
+            valid_distances.append(dist)
+
+    # Create violin plot
+    sns.violinplot(x='distances_rounded', y='model_prediction',
+                   data=df[df['distances_rounded'].isin(valid_distances)],
+                   palette='viridis', inner='quartile', cut=0, ax=ax)
+
+    # Add mean points
+    sns.pointplot(x='distances_rounded', y='model_prediction',
+                  data=df[df['distances_rounded'].isin(valid_distances)],
+                  color='red', markers='o', scale=0.7, ax=ax)
+
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Levenshtein Distance', fontsize=14)
+    ax.set_ylabel('Model Prediction', fontsize=14)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+
+def create_scatter_plot_with_labels(df, title, ax):
+    """
+    Create a scatter plot of Median Ratio by model prediction with labels.
+    """
+    # Plot negative samples (label=0)
+    neg_data = df[df['label'] == 0]
+    ax.scatter(neg_data['model_prediction'], neg_data['ratio_med'],
+               color='blue', alpha=0.5, label='Negative (label=0)')
+
+    # Plot positive samples (label=1)
+    pos_data = df[df['label'] == 1]
+    ax.scatter(pos_data['model_prediction'], pos_data['ratio_med'],
+               color='orange', alpha=0.5, label='Positive (label=1)')
+
+    # Fit lines for positive and negative classes
+    if len(pos_data) > 1:
+        pos_slope, pos_intercept, _, _, _ = stats.linregress(pos_data['model_prediction'], pos_data['ratio_med'])
+        x_pos = np.linspace(pos_data['model_prediction'].min(), pos_data['model_prediction'].max(), 100)
+        y_pos = pos_slope * x_pos + pos_intercept
+        ax.plot(x_pos, y_pos, 'orange', linewidth=2,
+                label=f'Fit (Positive): y = {pos_slope:.2f}x + {pos_intercept:.2f}')
+
+    if len(neg_data) > 1:
+        neg_slope, neg_intercept, _, _, _ = stats.linregress(neg_data['model_prediction'], neg_data['ratio_med'])
+        x_neg = np.linspace(neg_data['model_prediction'].min(), neg_data['model_prediction'].max(), 100)
+        y_neg = neg_slope * x_neg + neg_intercept
+        ax.plot(x_neg, y_neg, 'blue', linewidth=2, label=f'Fit (Negative): y = {neg_slope:.2f}x + {neg_intercept:.2f}')
+
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Model Prediction', fontsize=14)
+    ax.set_ylabel('Median Ratio Distance', fontsize=14)
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+
+def create_scatter_plot_healthy(df, title, ax):
+    """
+    Create a scatter plot of Median Ratio by model prediction for healthy samples.
+    """
+    # Plot healthy samples
+    ax.scatter(df['model_prediction'], df['ratio_med'],
+               color='green', alpha=0.5, label='Healthy samples')
+
+    # Fit a line
+    if len(df) > 1:
+        slope, intercept, _, _, _ = stats.linregress(df['model_prediction'], df['ratio_med'])
+        x = np.linspace(df['model_prediction'].min(), df['model_prediction'].max(), 100)
+        y = slope * x + intercept
+        ax.plot(x, y, 'green', linewidth=2, label=f'Fit: y = {slope:.2f}x + {intercept:.2f}')
+
+    ax.set_title(title, fontsize=16)
+    ax.set_xlabel('Model Prediction', fontsize=14)
+    ax.set_ylabel('Median Ratio Distance', fontsize=14)
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
+    ax.tick_params(axis='both', which='major', labelsize=12)
+
+# def display_kde_plots_ratio_distance(df_valid_test, df_healthy, base_save_path, bw_adjust=.2, ratio_threshold=0.00):
+#     """
+#     Display KDE plots and ratio vs model prediction plots for positive, negative and healthy samples.
+#     Shows max ratio vs model prediction only for samples with max ratio >= ratio_threshold, and adds a normalized KDE above it.
+#
+#     Args:
+#         df_valid_test (pd.DataFrame): DataFrame containing validation and test data
+#         df_healthy (pd.DataFrame): DataFrame containing healthy data
+#         base_save_path (str): Path to save the output plots
+#     """
+#     # Create a figure with 3 rows (for positive, negative, and healthy sets)
+#     fig, axes = plt.subplots(3, 2, figsize=(14, 18))
+#
+#     # Split the data into positive, negative sets from validation and test
+#     pos_data = df_valid_test[(df_valid_test['label'] == 1)]
+#     neg_data = df_valid_test[(df_valid_test['label'] == 0)]
+#     healthy_data = df_healthy
+#
+#     # Plot 1: Positive set KDE and ratio vs predictions
+#     # First subplot: KDE of model predictions
+#     sns.kdeplot(pos_data['model_prediction'], ax=axes[0, 0], fill=True, common_norm=False,
+#                 color='green', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+#     axes[0, 0].set_title('KDE of Model Predictions - Positive Samples')
+#     axes[0, 0].set_xlabel('Model Prediction')
+#     axes[0, 0].set_ylabel('Density')
+#     axes[0, 0].set_xlim(0, 1)
+#
+#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
+#     # Create a twin axis for the KDE plot
+#     ax_kde = axes[0, 1].twinx()
+#
+#     # Plot the KDE on the twin axis
+#     sns.kdeplot(pos_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
+#     ax_kde.set_ylabel('Density')
+#     ax_kde.set_ylim(0, None)  # Only set the lower limit
+#
+#     # Filter and sort data for ratio plot
+#     filtered_pos = pos_data[pos_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
+#
+#     # Plot filtered data
+#     if not filtered_pos.empty:
+#         axes[0, 1].plot(filtered_pos['model_prediction'], filtered_pos['ratio_max'], 'o',
+#                         markersize=3, color='green', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
+#     else:
+#         print(f"No positive samples with ratio_max >= {ratio_threshold:.2f}")
+#
+#     axes[0, 1].set_title('Max Ratio vs Model Prediction - Positive Samples')
+#     axes[0, 1].set_xlabel('Model Prediction (sorted)')
+#     axes[0, 1].set_ylabel('Max Ratio')
+#     axes[0, 1].set_xlim(0, 1)
+#     axes[0, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+#
+#     # Add legends for both axes
+#     lines, labels = axes[0, 1].get_legend_handles_labels()
+#     lines2, labels2 = ax_kde.get_legend_handles_labels()
+#     axes[0, 1].legend(lines + lines2, labels + labels2, loc='upper left')
+#
+#     # Plot 2: Negative set KDE and ratio vs predictions
+#     # First subplot: KDE of model predictions
+#     sns.kdeplot(neg_data['model_prediction'], ax=axes[1, 0], fill=True, common_norm=False,
+#                 color='red', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+#     axes[1, 0].set_title('KDE of Model Predictions - Negative Samples')
+#     axes[1, 0].set_xlabel('Model Prediction')
+#     axes[1, 0].set_ylabel('Density')
+#     axes[1, 0].set_xlim(0, 1)
+#
+#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
+#     # Create a twin axis for the KDE plot
+#     ax_kde = axes[1, 1].twinx()
+#
+#     # Plot the KDE on the twin axis
+#     sns.kdeplot(neg_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
+#     ax_kde.set_ylabel('Density')
+#     ax_kde.set_ylim(0, None)  # Only set the lower limit
+#
+#     # Filter and sort data for ratio plot
+#     filtered_neg = neg_data[neg_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
+#
+#     # Plot filtered data
+#     if not filtered_neg.empty:
+#         axes[1, 1].plot(filtered_neg['model_prediction'], filtered_neg['ratio_max'], 'o',
+#                         markersize=3, color='red', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
+#     else:
+#         print(f"No negative samples with ratio_max >= {ratio_threshold:.2f}")
+#
+#     axes[1, 1].set_title('Max Ratio vs Model Prediction - Negative Samples')
+#     axes[1, 1].set_xlabel('Model Prediction (sorted)')
+#     axes[1, 1].set_ylabel('Max Ratio')
+#     axes[1, 1].set_xlim(0, 1)
+#     axes[1, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+#
+#     # Add legends for both axes
+#     lines, labels = axes[1, 1].get_legend_handles_labels()
+#     lines2, labels2 = ax_kde.get_legend_handles_labels()
+#     axes[1, 1].legend(lines + lines2, labels + labels2, loc='upper left')
+#
+#     # Plot 3: Healthy set KDE and ratio vs predictions
+#     # First subplot: KDE of model predictions
+#     sns.kdeplot(healthy_data['model_prediction'], ax=axes[2, 0], fill=True, common_norm=False,
+#                 color='blue', alpha=0.6, label='Model Prediction Density', bw_adjust=bw_adjust)
+#     axes[2, 0].set_title('KDE of Model Predictions - Healthy Samples')
+#     axes[2, 0].set_xlabel('Model Prediction')
+#     axes[2, 0].set_ylabel('Density')
+#     axes[2, 0].set_xlim(0, 1)
+#
+#     # Second subplot: Ratio vs model prediction for samples with ratio >= ratio_threshold and KDE above
+#     # Create a twin axis for the KDE plot
+#     ax_kde = axes[2, 1].twinx()
+#
+#     # Plot the KDE on the twin axis
+#     sns.kdeplot(healthy_data['model_prediction'], ax=ax_kde, color='purple', alpha=0.6, label='KDE', bw_adjust=bw_adjust)
+#     ax_kde.set_ylabel('Density')
+#     ax_kde.set_ylim(0, None)  # Only set the lower limit
+#
+#     # Filter and sort data for ratio plot
+#     filtered_healthy = healthy_data[healthy_data['ratio_max'] >= ratio_threshold].sort_values('model_prediction')
+#
+#     # Plot filtered data
+#     if not filtered_healthy.empty:
+#         axes[2, 1].plot(filtered_healthy['model_prediction'], filtered_healthy['ratio_max'], 'o',
+#                         markersize=3, color='blue', label=f'Max Ratio ≥ {ratio_threshold:.2f}', alpha=.6)
+#     else:
+#         print(f"No healthy samples with ratio_max >= {ratio_threshold:.2f}")
+#
+#     axes[2, 1].set_title('Max Ratio vs Model Prediction - Healthy Samples')
+#     axes[2, 1].set_xlabel('Model Prediction (sorted)')
+#     axes[2, 1].set_ylabel('Max Ratio')
+#     axes[2, 1].set_xlim(0, 1)
+#     axes[2, 1].axhline(y=ratio_threshold, color='gray', linestyle='--', alpha=0.5)
+#
+#     # Add legends for both axes
+#     lines, labels = axes[2, 1].get_legend_handles_labels()
+#     lines2, labels2 = ax_kde.get_legend_handles_labels()
+#     axes[2, 1].legend(lines + lines2, labels + labels2, loc='upper left')
+#
+#     # Adjust layout and save figure
+#     plt.tight_layout()
+#     plt.savefig(os.path.join(base_save_path, 'model_prediction_ratio_kde.png'), dpi=300)
+#     plt.show()
+#
+#     # Calculate and display summary statistics
+#     print("\nSummary Statistics for Positive Samples:")
+#     print(f"Mean model prediction: {pos_data['model_prediction'].mean():.4f}")
+#     print(f"Mean max ratio: {pos_data['ratio_max'].mean():.4f}")
+#     print(
+#         f"Correlation between model prediction and max ratio: {pos_data['model_prediction'].corr(pos_data['ratio_max']):.4f}")
+#     print(
+#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_pos)}/{len(pos_data)} ({len(filtered_pos) / len(pos_data) * 100:.2f}%)")
+#
+#     print("\nSummary Statistics for Negative Samples:")
+#     print(f"Mean model prediction: {neg_data['model_prediction'].mean():.4f}")
+#     print(f"Mean max ratio: {neg_data['ratio_max'].mean():.4f}")
+#     print(
+#         f"Correlation between model prediction and max ratio: {neg_data['model_prediction'].corr(neg_data['ratio_max']):.4f}")
+#     print(
+#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_neg)}/{len(neg_data)} ({len(filtered_neg) / len(neg_data) * 100:.2f}%)")
+#
+#     print("\nSummary Statistics for Healthy Samples:")
+#     print(f"Mean model prediction: {healthy_data['model_prediction'].mean():.4f}")
+#     print(f"Mean max ratio: {healthy_data['ratio_max'].mean():.4f}")
+#     print(
+#         f"Correlation between model prediction and max ratio: {healthy_data['model_prediction'].corr(healthy_data['ratio_max']):.4f}")
+#     print(
+#         f"Number of samples with ratio_max >= {ratio_threshold:.2f}: {len(filtered_healthy)}/{len(healthy_data)} ({len(filtered_healthy) / len(healthy_data) * 100:.2f}%)")
+#
+#     print('Done with KDE and ratio visualization!')

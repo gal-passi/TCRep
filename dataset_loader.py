@@ -262,7 +262,8 @@ class DatasetLoader:
         method_map = {
             'max': 'max',
             'min': 'min',
-            'avg': 'mean'
+            'avg': 'mean',
+            'med': 'median',
         }
         if method not in method_map:
             raise ValueError("method must be one of 'max', 'min', or 'avg'")

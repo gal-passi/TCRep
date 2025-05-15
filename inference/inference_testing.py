@@ -13,6 +13,8 @@ import pandas as pd
 from tqdm import tqdm
 from utils import pairwise_scores, levenshtein_dist_non_bin
 import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, accuracy_score
 
 
 def calculate_probas(df, trained_model, patient_ids, to_print=True):
@@ -1543,3 +1545,188 @@ def create_scatter_plot_healthy(df, title, ax):
     ax.legend(fontsize=12)
     ax.grid(True, alpha=0.3)
     ax.tick_params(axis='both', which='major', labelsize=12)
+
+
+def display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
+                                            unique_patient_ids, test_patient_inds, valid_patient_inds,
+                                            df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device):
+    healthy_patients = df_hlt["patient_id"].unique()
+    np.random.shuffle(healthy_patients)
+
+    healthy_patients_other = df_hlt_other["patient_id"].unique()
+    np.random.shuffle(healthy_patients_other)
+
+    disease_patients_other = df_bld_other["patient_id"].unique()
+    np.random.shuffle(disease_patients_other)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+    test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
+    for i, patient_ind in enumerate(test_inds):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        disease_seqs = np.unique(disease_seqs)
+        healthy_seqs_other = df_hlt_other.loc[df_hlt_other["patient_id"] == healthy_patients_other[i], "AASeq"].values
+        healthy_seqs_other = np.unique(healthy_seqs_other)
+        disease_seqs_other = df_bld_other.loc[df_bld_other["patient_id"] == disease_patients_other[i], "AASeq"].values
+        disease_seqs_other = np.unique(disease_seqs_other)
+
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+            disease_logits = trained_model(disease_seqs)
+            healthy_logits_other = trained_model(healthy_seqs_other)
+            disease_logits_other = trained_model(disease_seqs_other)
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+        healthy_probs_other = torch.softmax(healthy_logits_other, dim=1)[:, 1].cpu().numpy()
+        disease_probs_other = torch.softmax(disease_logits_other, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for healthy patient samples
+        kde = sns.kdeplot(healthy_probs, ax=ax, color='orange', label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(disease_probs, ax=ax, color='purple', label=f'Ill Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(healthy_probs_other, ax=ax, color='blue', label=f'Healthy Set {other_dataset_type} {i}',
+                          common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(disease_probs_other, ax=ax, color='red', label=f'Ill Set {other_dataset_type} {i}',
+                          common_norm=True)
+        kde_normalizer(kde)
+    ax.set_xlabel("Predicted Probability")
+    ax.set_ylabel("Density")
+    ax.legend()
+    ax.set_title(f"Distribution of model outputs for {dataset_type} and {other_dataset_type} datasets")
+    os.makedirs("plots/inference_plots", exist_ok=True)
+    plt.savefig(f"plots/inference_plots/distribution_{dataset_type}_{other_dataset_type}.png")
+    plt.show()
+
+
+def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                      test_pos_seqs, test_neg_seqs, x=10, random_state=42):
+    """
+    Train a Random Forest classifier on embeddings from positive and negative sequences.
+
+    Parameters:
+    - model: The model that outputs embeddings
+    - train_pos_seqs: Positive training sequences
+    - neg_seqs: All negative sequences
+    - valid_pos_seqs: Positive validation sequences
+    - valid_neg_seqs: Negative validation sequences
+    - test_pos_seqs: Positive test sequences
+    - test_neg_seqs: Negative test sequences
+    - x: Multiplier for negative examples (neg:pos ratio = x:1)
+    - random_state: Random seed for reproducibility
+
+    Returns:
+    - Dictionary containing performance metrics
+    """
+    print("Creating embeddings...")
+
+    # Calculate the number of negative examples to use
+    n_pos = len(train_pos_seqs)
+    n_neg_desired = n_pos * x
+    n_neg_available = len(neg_seqs)
+    n_neg_to_use = min(n_neg_desired, n_neg_available)
+
+    # If we need to sample from negatives
+    if n_neg_to_use < n_neg_available:
+        np.random.seed(random_state)
+        neg_indices = np.random.choice(n_neg_available, n_neg_to_use, replace=False)
+        neg_seqs_sampled = neg_seqs[neg_indices]
+    else:
+        neg_seqs_sampled = neg_seqs
+
+    print(f"Using {n_pos} positive training examples and {n_neg_to_use} negative training examples")
+
+    # Get embeddings for training data
+    model.eval()
+    with torch.no_grad():
+        # Convert sequences to embeddings
+        train_pos_embeddings = model.model(train_pos_seqs).cpu().numpy()
+        train_neg_embeddings = model.model(neg_seqs_sampled).cpu().numpy()
+
+        # For evaluation
+        valid_pos_embeddings = model.model(valid_pos_seqs).cpu().numpy()
+        valid_neg_embeddings = model.model(valid_neg_seqs).cpu().numpy()
+        test_pos_embeddings = model.model(test_pos_seqs).cpu().numpy()
+        test_neg_embeddings = model.model(test_neg_seqs).cpu().numpy()
+
+    # Prepare training data
+    X_train = np.vstack((train_pos_embeddings, train_neg_embeddings))
+    y_train = np.concatenate([np.ones(len(train_pos_embeddings)),
+                              np.zeros(len(train_neg_embeddings))])
+
+    # Prepare evaluation data (concatenate validation and test sets)
+    X_eval = np.vstack((valid_pos_embeddings, valid_neg_embeddings,
+                        test_pos_embeddings, test_neg_embeddings))
+    y_eval = np.concatenate([np.ones(len(valid_pos_embeddings)),
+                             np.zeros(len(valid_neg_embeddings)),
+                             np.ones(len(test_pos_embeddings)),
+                             np.zeros(len(test_neg_embeddings))])
+
+    # Train Random Forest
+    class_weights = {0: 1, 1: 25}  # or use 'balanced' to automatically adjust weights
+    print(f"Training Random Forest classifier (class weights = {class_weights})...")
+    rf_classifier = RandomForestClassifier(n_estimators=100, class_weight=class_weights, random_state=random_state)
+    rf_classifier.fit(X_train, y_train)
+
+    # Predict on evaluation set
+    y_pred = rf_classifier.predict(X_eval)
+
+    # Calculate metrics
+    tn, fp, fn, tp = confusion_matrix(y_eval, y_pred).ravel()
+
+    tpr = tp / (tp + fn)  # True Positive Rate (Sensitivity/Recall)
+    tnr = tn / (tn + fp)  # True Negative Rate (Specificity)
+    fpr = fp / (fp + tn)  # False Positive Rate
+    fnr = fn / (fn + tp)  # False Negative Rate
+
+    precision = precision_score(y_eval, y_pred)
+    recall = recall_score(y_eval, y_pred)
+    f1 = f1_score(y_eval, y_pred)
+    accuracy = accuracy_score(y_eval, y_pred)
+
+    metrics = {
+        'TPR': tpr,
+        'TNR': tnr,
+        'FPR': fpr,
+        'FNR': fnr,
+        'Precision': precision,
+        'Recall': recall,
+        'F1': f1,
+        'Accuracy': accuracy
+    }
+
+    return metrics, rf_classifier
+
+
+def analyze_embeddings(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                       test_pos_seqs, test_neg_seqs, x=10):
+    metrics, rf_classifier = run_random_forest(
+        model=model,
+        train_pos_seqs=train_pos_seqs,
+        neg_seqs=neg_seqs,
+        valid_pos_seqs=valid_pos_seqs,
+        valid_neg_seqs=valid_neg_seqs,
+        test_pos_seqs=test_pos_seqs,
+        test_neg_seqs=test_neg_seqs,
+        x=x
+    )
+
+    # Print metrics
+    print("\nEvaluation Metrics:")
+    print("-------------------")
+    print(f"True Positive Rate (TPR): {metrics['TPR']:.4f}")
+    print(f"True Negative Rate (TNR): {metrics['TNR']:.4f}")
+    print(f"False Positive Rate (FPR): {metrics['FPR']:.4f}")
+    print(f"False Negative Rate (FNR): {metrics['FNR']:.4f}")
+    print(f"Precision: {metrics['Precision']:.4f}")
+    print(f"Recall: {metrics['Recall']:.4f}")
+    print(f"F1 Score: {metrics['F1']:.4f}")
+    print(f"Accuracy: {metrics['Accuracy']:.4f}")
+
+    return metrics, rf_classifier

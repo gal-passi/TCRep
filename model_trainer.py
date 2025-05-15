@@ -86,6 +86,8 @@ class CustomLossCriterion(nn.Module):
             batch_sample_distances = self.aaseq_to_dist(batch_samples).to(self.device)
             per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
             sample_weights = batch_sample_distances.type(torch.float32)
+            negative_indices = labels == 0
+            sample_weights[negative_indices] = batch_sample_distances[negative_indices].type(torch.float32)
             weighted_losses = per_sample_losses * sample_weights
             ce_loss = weighted_losses.mean()
         else:

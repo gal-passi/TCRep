@@ -205,6 +205,21 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         kde_normalizer(kde)
         kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
         kde_normalizer(kde)
+    # More Healthy patients
+    for i in range(len(test_inds), len(test_inds) + 6):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        # Plot KDE for healthy patient samples
+        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
     ax2.set_ylim(0, 1.1)
@@ -219,7 +234,111 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         wandb.log({"output_distributions_per_patient": wandb.Image(plt)})
     else:
         plt.show()
-    pass
+
+    # Add plot for cumulative distributions instead of KDE:
+    # Add plot for cumulative distributions instead of KDE:
+    # Create a new figure for CDF plots with two subplots
+    fig_cdf, (cdf_ax1, cdf_ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    fig_cdf.suptitle(f"Cumulative Distribution Functions for {model_type} Model", fontsize=16)
+
+    # Subplot 1: Test Set Positives and Negatives CDFs
+    cdf_ax1.set_title("Test Set Positives and Negatives (CDF)")
+    for i, patient_ind in enumerate(test_inds):
+        mask = (test_masks[i] == 1)
+        pos_seqs = np.array(positive_seqs)[mask]
+        # Negative sequences for this patient
+        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.unique(neg_seqs)
+        # Make sure that there are no sequences in the negative set that are in the positive set
+        neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            pos_logits = trained_model(pos_seqs)
+            neg_logits = trained_model(neg_seqs)
+        # Convert to probabilities
+        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+
+        # Plot CDFs for positive and negative samples
+        # For positive sequences
+        x = np.sort(pos_probs)
+        y = np.arange(1, len(x) + 1) / len(x)
+        cdf_ax1.plot(x, y, color=test_pos_colors[i], label=f'Pos Set {i}')
+
+        # For negative sequences
+        x = np.sort(neg_probs)
+        y = np.arange(1, len(x) + 1) / len(x)
+        cdf_ax1.plot(x, y, color=test_neg_colors[i], label=f'Neg Set {i}')
+
+    cdf_ax1.set_xlabel("Predicted Probability for Positive Class")
+    cdf_ax1.set_ylabel("Cumulative Probability")
+    cdf_ax1.set_ylim(0, 1.05)
+    cdf_ax1.legend()
+
+    # Subplot 2: Healthy vs Ill Patients CDFs
+    cdf_ax2.set_title("Healthy vs Ill Patients (CDF)")
+    for i, patient_ind in enumerate(test_inds):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        disease_seqs = np.unique(disease_seqs)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+            disease_logits = trained_model(disease_seqs)
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+
+        # Plot CDFs for healthy and disease samples
+        # For healthy sequences
+        x = np.sort(healthy_probs)
+        y = np.arange(1, len(x) + 1) / len(x)
+        cdf_ax2.plot(x, y, color=healthy_colors[i], label=f'Healthy Set {i}')
+
+        # For disease sequences
+        x = np.sort(disease_probs)
+        y = np.arange(1, len(x) + 1) / len(x)
+        cdf_ax2.plot(x, y, color=test_colors[i], label=f'Ill Set {i}')
+
+    # More Healthy patients
+    for i in range(len(test_inds), len(test_inds) + 6):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+
+        # Plot CDF for healthy patient samples
+        x = np.sort(healthy_probs)
+        y = np.arange(1, len(x) + 1) / len(x)
+        cdf_ax2.plot(x, y, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}')
+
+    cdf_ax2.set_xlabel("Predicted Probability for Positive Class")
+    cdf_ax2.set_ylabel("Cumulative Probability")
+    cdf_ax2.set_ylim(0, 1.05)
+    cdf_ax2.legend()
+
+    # Save the CDF plot
+    plt.tight_layout()
+    plt.savefig(
+        f"plots/{model_type}_model/dist_model_output/cumulative_distribution_per_patients_{get_model_config_str(args)}.png")
+
+    # Save the figure in wandb:
+    if log_wandb:
+        wandb.log({"cumulative_distributions_per_patient": wandb.Image(fig_cdf)})
+    else:
+        plt.show()
 
 
 def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,

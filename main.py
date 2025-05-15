@@ -645,7 +645,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -673,6 +673,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "masking": masking,
             "ratio": ratio,
             "dist_loss_type": dist_loss_type,
+            "ch_type": ch_type,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -702,7 +703,8 @@ def sweep_model():
     lora = wandb.config.lora
     masking = wandb.config.masking
     ratio = wandb.config.ratio
-    dist_loss_type = wandb.config.dist_loss_type
+    # dist_loss_type = wandb.config.dist_loss_type
+    # ch_type = wandb.config.ch_type
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the dataset
@@ -776,6 +778,7 @@ if __name__ == '__main__':
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
     dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
+    ch_types = ['none', 'v1', 'v2']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -795,7 +798,6 @@ if __name__ == '__main__':
     parser.add_argument('--classification_dropout', '--dropout', type=float, default=0.2, help='Dropout rate for the classification head')
     parser.add_argument('--to_sweep', '--sweep', '-sweep', action='store_true', help='Sweep the hyperparameters using Weights & Biases')
     parser.add_argument('--force_retrain', '-retrain', action='store_true', help='Forces the model to retrain even if a similar model .pth file already exists')
-    parser.add_argument('-v2_inference', action='store_true', help='V2 Inference')  # TODO: REMOVE!
     parser.add_argument('-dont_inference', action='store_true', help='Do not inference')
     parser.add_argument('-dont_plot', action='store_true', help='Do not create plots')
     parser.add_argument('--cvc_layers_to_train', type=int, default=3, help='Number of layers to train in case we use the CVC model')
@@ -805,6 +807,7 @@ if __name__ == '__main__':
     parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
     parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
     parser.add_argument('--dist_loss_type', type=str, choices=dist_loss_types, default='none', help='Type of distribution loss to use')
+    parser.add_argument('--ch_type', type=str, choices=ch_types, default='none', help='Type of classification head to use')
 
     args = parser.parse_args()
 
@@ -826,7 +829,6 @@ if __name__ == '__main__':
     to_sweep = args.to_sweep
     scheduler_type = args.scheduler_type.lower()
     force_retrain = args.force_retrain
-    v2_inference = args.v2_inference
     dont_inference = args.dont_inference
     dont_plot = args.dont_plot
     cvc_layers_to_train = args.cvc_layers_to_train if not freeze_embed_model else 0  # No layers to train if embedding model is frozen
@@ -837,6 +839,7 @@ if __name__ == '__main__':
     masking = args.masking if model_type == 'cvc' else False  # Masking is only applicable for CVC model
     ratio = args.ratio
     dist_loss_type = args.dist_loss_type
+    ch_type = args.ch_type.lower() if model_type == 'cvc' else 'none'  # Only CVC model can use dist loss
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -873,6 +876,7 @@ if __name__ == '__main__':
     print(f"\tMasking: {args.masking}")
     print(f"\tUsing Ratio: {args.ratio}")
     print(f"\tDist Loss Type: {args.dist_loss_type}")
+    print(f"\tClassification Head Type: {args.ch_type}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -1067,6 +1071,7 @@ if __name__ == '__main__':
                 masking=masking,
                 ratio=ratio,
                 dist_loss_type=dist_loss_type,
+                ch_type=ch_type,
                 device=device,
             )
 
@@ -1075,7 +1080,7 @@ if __name__ == '__main__':
             model = FeedForwardClassifier(max_seq_len)
         elif model_type == 'cvc':
             model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
-                                       freeze_embed_model=freeze_embed_model, lora=lora, device=device)
+                                       freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
         elif model_type == 'esmc':
             model = ESMCFeedForwardClassifier(device=device)
         else:
@@ -1143,15 +1148,37 @@ if __name__ == '__main__':
     # Inference:
     if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")
-        if not v2_inference:
-            from inference.inference_testing import inference_ratio_distance
-            inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
-                                     test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader)
 
-            # from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
-            # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
-            # background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-            # my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)
-        else:
-            from inference.inference_testing_v2 import background_dist_inference
-            background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+        neg_to_pos_inference_ratio = 5
+        print(f"Testing out random forest classifier (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
+        model = CVCClassifierModel(batch_size=batch_size, ch_dropout=0,
+                                   cvc_layers_to_train=0,
+                                   freeze_embed_model=True, lora=False, device=device)
+
+        from inference.inference_testing import analyze_embeddings
+        analyze_embeddings(model, train_pos_seqs, neg_seqs,
+                           valid_pos_seqs, valid_neg_seqs,
+                           test_pos_seqs, test_neg_seqs, x=neg_to_pos_inference_ratio)
+        exit(0)
+
+        # Display distribution on other dataset (article is T1D)
+        other_dataset_type = 'article' if dataset_type == 'ms' else 'ms'
+        print(f"Plotting the output distributions per patient on {dataset_type} and {other_dataset_type}")
+        from inference.plot_handler import kde_normalizer
+        from inference.inference_testing import display_distributions_on_different_sets
+        # TODO: There is some problem her with loading the positive sequences from the other dataset, figure this out.
+        other_dataset_loader = DatasetLoader(dataset_type=other_dataset_type, unique_patient_ids=unique_patient_ids,
+                                             k_fold=k_fold, dist_loss_type=dist_loss_type)
+        df_bld_other, df_hlt_other = other_dataset_loader.get_dfs()
+        display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
+                                                unique_patient_ids, test_patient_inds, valid_patient_inds,
+                                                df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
+
+        # from inference.inference_testing import inference_ratio_distance
+        # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
+        #                          test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader)
+
+        # from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
+        # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
+        # background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
+        # my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)

@@ -223,7 +223,7 @@ class CVCModel(nn.Module):
 
 class CVCClassifierModel(nn.Module):
     def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', ch_dropout: float = 0.0, device: str = 'cuda',
-                 batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
+                 batch_size: int = 256, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False, ch_type: str = 'none'):
         super().__init__()
         self.device = device
         self.model = CVCModel(model_dir, method, device, batch_size, ch_dropout, freeze_embed_model, cvc_layers_to_train, lora)
@@ -234,15 +234,40 @@ class CVCClassifierModel(nn.Module):
         # Add linear layers
         # self.linear = nn.Linear(768, 2).to(device)
         hidden_dim, num_classes = (768 // 2), 2
-        self.linear = nn.Sequential(
-            nn.Linear(768, hidden_dim),
-            nn.ReLU(),
-            # nn.Dropout(self.dropout_rate),  # Add dropout after first layer
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
-            # nn.Dropout(self.dropout_rate),  # Add another dropout layer
-            nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
-        ).to(device)
+        if ch_type == 'none':
+            self.linear = nn.Sequential(
+                nn.Linear(768, hidden_dim),
+                nn.ReLU(),
+                # nn.Dropout(self.dropout_rate),  # Add dropout after first layer
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                # nn.Dropout(self.dropout_rate),  # Add another dropout layer
+                nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
+            ).to(device)
+        elif ch_type == 'v1':  # larger version
+            self.linear = nn.Sequential(
+                nn.Linear(768, 768),
+                nn.ReLU(),
+                nn.Linear(768, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, num_classes)  # Output dim = 2 for binary classification
+            ).to(device)
+        elif ch_type == 'v2':
+            self.linear = nn.Sequential(
+                nn.Conv1d(in_channels=768, out_channels=256, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.Conv1d(256, 128, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.AdaptiveMaxPool1d(1),  # Global max pooling across sequence length
+                nn.Flatten(),  # shape: (batch_size, 128)
+                nn.Linear(128, num_classes)
+            ).to(device)
+        else:
+            raise ValueError(f"Unknown ch_type: {ch_type}")
 
     def forward(self, seqs: List[str]):
         embeddings = self.model(seqs)  # Get transformer embeddings

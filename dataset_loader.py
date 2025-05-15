@@ -8,6 +8,7 @@ from itertools import combinations
 from tqdm import tqdm
 from Curation import Study
 from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
+import hashlib
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -264,7 +265,7 @@ class DatasetLoader:
         # create hash of the df_dist in order to save or load it
 
         hash_str = "_".join(sorted_seqs)
-        hash_of_df = hash(hash_str)
+        hash_of_df = hashlib.sha256(hash_str.encode()).hexdigest()
 
         # check if the df_dist already exists
         df_dist_filename = f"cache/{dataset_type}/df_dist_{hash_of_df}.pkl"

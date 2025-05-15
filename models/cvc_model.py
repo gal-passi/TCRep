@@ -230,9 +230,9 @@ class CVCClassifierModel(nn.Module):
         self.batch_size = batch_size
         self.method = method
         self.dropout_rate = ch_dropout
+        self.ch_type = ch_type
 
         # Add linear layers
-        # self.linear = nn.Linear(768, 2).to(device)
         hidden_dim, num_classes = (768 // 2), 2
         if ch_type == 'none':
             self.linear = nn.Sequential(
@@ -250,7 +250,7 @@ class CVCClassifierModel(nn.Module):
                 nn.ReLU(),
                 nn.Linear(768, hidden_dim),
                 nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.Linear(hidden_dim, hidden_dim),
                 nn.ReLU(),
                 nn.Linear(hidden_dim, hidden_dim // 2),
                 nn.ReLU(),
@@ -258,13 +258,16 @@ class CVCClassifierModel(nn.Module):
             ).to(device)
         elif ch_type == 'v2':
             self.linear = nn.Sequential(
-                nn.Conv1d(in_channels=768, out_channels=256, kernel_size=3, padding=1),
+                nn.Unflatten(1, (1, 768)),  # reshape from (batch_size, 768) to (batch_size, 1, 768)
+                nn.Conv1d(1, 32, kernel_size=3, padding=1),  # (batch_size, 32, 768)
                 nn.ReLU(),
-                nn.Conv1d(256, 128, kernel_size=3, padding=1),
+                nn.Conv1d(32, 64, kernel_size=3, padding=1),  # (batch_size, 64, 768)
                 nn.ReLU(),
-                nn.AdaptiveMaxPool1d(1),  # Global max pooling across sequence length
-                nn.Flatten(),  # shape: (batch_size, 128)
-                nn.Linear(128, num_classes)
+                nn.AdaptiveAvgPool1d(1),  # (batch_size, 64, 1)
+                nn.Flatten(),  # (batch_size, 64)
+                nn.Linear(64, 32),
+                nn.ReLU(),
+                nn.Linear(32, num_classes)  # (batch_size, 2)
             ).to(device)
         else:
             raise ValueError(f"Unknown ch_type: {ch_type}")
@@ -272,32 +275,6 @@ class CVCClassifierModel(nn.Module):
     def forward(self, seqs: List[str]):
         embeddings = self.model(seqs)  # Get transformer embeddings
         logits = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
-
-        # from transformers import BertConfig, BertForMaskedLM
-        # kwargs = {'hidden_size': 768, 'num_hidden_layers': 12, 'num_attention_heads': 12, 'intermediate_size': 3072, 'hidden_act': 'gelu', 'hidden_dropout_prob': 0.1, 'attention_probs_dropout_prob': 0.1, 'max_position_embeddings': 512, 'type_vocab_size': 2, 'initializer_range': 0.02, 'position_embedding_type': 'absolute'}
-        # config = BertConfig(
-        #     **kwargs,
-        #     vocab_size=len(ft.AMINO_ACIDS_WITH_ALL_ADDITIONAL),
-        #     pad_token_id=ft.AMINO_ACIDS_WITH_ALL_ADDITIONAL_TO_IDX[ft.PAD],
-        # )
-        # model = BertForMaskedLM(config)
-
-        # set the state of the model to the state of the pretrained model
-        # model.load_state_dict(self.model.model.state_dict())
-        # self.model.model = model
-        # embeddings2 = self.model(seqs[:10])  # Get transformer embeddings
-        # logits2 = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
-
-        # max_len: int = 64
-        # seqs2 = [s if ft.is_whitespaced(s) else ft.insert_whitespace(s) for s in seqs]
-        # encoded = self.model.tok(
-        #     *seqs2, padding="max_length", max_length=max_len, return_tensors="pt"
-        # )
-        # encoded = {k: v.to(self.device) for k, v in encoded.items()}
-        #
-        # x = model.forward(**encoded, output_hidden_states=True, output_attentions=True)
-        # out = model(seqs[:10])
-
         return logits
 
     def predict(self, seqs: List[str]):

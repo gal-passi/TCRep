@@ -4,6 +4,8 @@ from sched import scheduler
 
 from pyarrow.dataset import dataset
 from triton.language.semantic import device_print
+from wandb.sdk.internal.system.assets import asset_registry
+
 warnings.simplefilter("ignore", category=FutureWarning)
 import pandas as pd
 import numpy as np
@@ -29,6 +31,7 @@ from embedding.esmc_finetuning import load_fine_tuned_esmc, fine_tune_esmc
 from models.cvc_model import CVCClassifierModel
 from models.ff_model import FeedForwardClassifier
 from models.esmc_ff_model import ESMCFeedForwardClassifier
+from models.cvc_ensemble_model import CVCEnsembleModel
 from torch.utils.data import Dataset, DataLoader
 import time
 import random
@@ -645,7 +648,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, neg_partition, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -674,6 +677,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "ratio": ratio,
             "dist_loss_type": dist_loss_type,
             "ch_type": ch_type,
+            "neg_partition": neg_partition,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -808,6 +812,8 @@ if __name__ == '__main__':
     parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
     parser.add_argument('--dist_loss_type', type=str, choices=dist_loss_types, default='none', help='Type of distribution loss to use')
     parser.add_argument('--ch_type', type=str, choices=ch_types, default='none', help='Type of classification head to use')
+    parser.add_argument('--negative_partition', '--neg_partition', type=int, default=0, help='Negative Partition Index (0 for no partitioning of the negative samples)')
+    parser.add_argument('--to_ensemble', '--ensemble', '-ensemble', action='store_true', help='Ensemble the models (Only applicable after first training with all 1..5 negative_partitioning)')
 
     args = parser.parse_args()
 
@@ -840,6 +846,8 @@ if __name__ == '__main__':
     ratio = args.ratio
     dist_loss_type = args.dist_loss_type
     ch_type = args.ch_type.lower() if model_type == 'cvc' else 'none'  # Only CVC model can use dist loss
+    neg_partition = args.negative_partition
+    to_ensemble = args.to_ensemble
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -853,6 +861,8 @@ if __name__ == '__main__':
     assert not (to_k_fold and to_sweep), "Cannot do k-fold cross-validation and sweep at the same time"
     assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
     assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
+    assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
+    assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -872,6 +882,7 @@ if __name__ == '__main__':
     print(f"\tForce Retrain: {args.force_retrain}")
     print(f"\tCVC model layers to train: {args.cvc_layers_to_train}")
     print(f"\tDo K-Fold Cross-Validation: {args.k_fold}")
+    print(f"\tTest Mode Epoch: {args.negative_partition}")
     print(f"\tUse LoRA: {args.lora}")
     print(f"\tMasking: {args.masking}")
     print(f"\tUsing Ratio: {args.ratio}")
@@ -934,7 +945,8 @@ if __name__ == '__main__':
         altered_lists = generate_shifted_lists(list(unique_patient_ids))
         unique_patient_ids = altered_lists[k_fold]
 
-    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids, k_fold=k_fold, dist_loss_type=dist_loss_type)
+    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
+                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1072,6 +1084,7 @@ if __name__ == '__main__':
                 ratio=ratio,
                 dist_loss_type=dist_loss_type,
                 ch_type=ch_type,
+                neg_partition=neg_partition,
                 device=device,
             )
 
@@ -1089,6 +1102,8 @@ if __name__ == '__main__':
         # load the model if possible
         trained_model = None
         if not force_retrain:
+            if to_ensemble:
+                trained_model = CVCEnsembleModel(args, device)
             if test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1148,11 +1163,32 @@ if __name__ == '__main__':
     # Inference:
     if not dont_inference and not force_retrain and not log_wandb:
         print("Inference:")
+        trained_model.to(device)
+
+        # Evaluate the model on the validation set
+        from model_trainer import evaluate_model, CustomLossCriterion
+        class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
+        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+        val_metrics = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
+        val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
+        print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}, Validation AUC: {val_auc:.4f}, Validation PR AUC: {val_prauc:.4f}")
+        print(f"Validation TPR: {val_tpr}, Validation FPR: {val_fpr}, Validation TNR: {val_tnr}, Validation FNR: {val_fnr}")
+        print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
+        print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
+
+        exit(0)
+
+
+        from inference.inference_testing import get_df_embeddings
+        df_embed = get_df_embeddings(args, trained_model, train_pos_seqs, neg_seqs,
+                      valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs)
+
+        exit(0)
 
         neg_to_pos_inference_ratio = 5
         print(f"Testing out random forest classifier (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
         from inference.inference_testing import analyze_embeddings
-        analyze_embeddings(trained_model, train_pos_seqs, neg_seqs,
+        analyze_embeddings(df_embed, train_pos_seqs, neg_seqs,
                            valid_pos_seqs, valid_neg_seqs,
                            test_pos_seqs, test_neg_seqs, x=neg_to_pos_inference_ratio)
         exit(0)

@@ -15,6 +15,7 @@ from utils import pairwise_scores, levenshtein_dist_non_bin
 import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, accuracy_score
+from cache_handler import get_embedding_save_path
 
 
 def calculate_probas(df, trained_model, patient_ids, to_print=True):
@@ -1607,7 +1608,7 @@ def display_distributions_on_different_sets(trained_model, dataset_type, other_d
     plt.show()
 
 
-def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+def run_random_forest(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                       test_pos_seqs, test_neg_seqs, x=10, random_state=42):
     """
     Train a Random Forest classifier on embeddings from positive and negative sequences.
@@ -1645,26 +1646,25 @@ def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg
     print(f"Using {n_pos} positive training examples and {n_neg_to_use} negative training examples")
 
     # Get embeddings for training data
-    model.eval()
     with torch.no_grad():
         # Convert sequences to embeddings
-        train_pos_embeddings = model.model(train_pos_seqs).cpu().numpy()
-        train_neg_embeddings = model.model(neg_seqs_sampled).cpu().numpy()
+        train_pos_embeddings = get_embedding_by_sequences(df_embed, train_pos_seqs)
+        train_neg_embeddings = get_embedding_by_sequences(df_embed, neg_seqs_sampled)
 
         # For evaluation
-        valid_pos_embeddings = model.model(valid_pos_seqs).cpu().numpy()
-        valid_neg_embeddings = model.model(valid_neg_seqs).cpu().numpy()
-        test_pos_embeddings = model.model(test_pos_seqs).cpu().numpy()
-        test_neg_embeddings = model.model(test_neg_seqs).cpu().numpy()
+        valid_pos_embeddings = get_embedding_by_sequences(df_embed, valid_pos_seqs)
+        valid_neg_embeddings = get_embedding_by_sequences(df_embed, valid_neg_seqs)
+        test_pos_embeddings = get_embedding_by_sequences(df_embed, test_pos_seqs)
+        test_neg_embeddings = get_embedding_by_sequences(df_embed, test_neg_seqs)
 
     # Prepare training data
-    X_train = np.vstack((train_pos_embeddings, train_neg_embeddings))
+    X_train = np.stack((train_pos_embeddings, train_neg_embeddings), axis=0)
     y_train = np.concatenate([np.ones(len(train_pos_embeddings)),
                               np.zeros(len(train_neg_embeddings))])
 
     # Prepare evaluation data (concatenate validation and test sets)
-    X_eval = np.vstack((valid_pos_embeddings, valid_neg_embeddings,
-                        test_pos_embeddings, test_neg_embeddings))
+    X_eval = np.stack((valid_pos_embeddings, valid_neg_embeddings,
+                        test_pos_embeddings, test_neg_embeddings), axis=0)
     y_eval = np.concatenate([np.ones(len(valid_pos_embeddings)),
                              np.zeros(len(valid_neg_embeddings)),
                              np.ones(len(test_pos_embeddings)),
@@ -1724,10 +1724,10 @@ def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg
     return metrics, rf_classifier, all_probs
 
 
-def analyze_embeddings(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+def analyze_embeddings(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                        test_pos_seqs, test_neg_seqs, x=10):
     metrics, rf_classifier, all_probs = run_random_forest(
-        model=model,
+        df_embed=df_embed,
         train_pos_seqs=train_pos_seqs,
         neg_seqs=neg_seqs,
         valid_pos_seqs=valid_pos_seqs,
@@ -1842,3 +1842,66 @@ def plot_classifier_scores(all_probs, figsize=(12, 8)):
     plt.legend()
 
     return plt
+
+
+def get_df_embeddings(args, trained_model, train_pos_seqs, neg_seqs,
+                      valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs):
+    embedding_path = get_embedding_save_path(args, make_dirs=False)
+
+    # load the embeddings from the file if it exists
+    if os.path.exists(embedding_path):
+        df_embed = pd.read_csv(embedding_path)
+    else:
+        # calculate embeddings of all sequences and save as df under cache/models/<specific_model_dir>/embeddings
+        all_seqs = []
+        all_embeds = []
+        trained_model.eval()
+        with torch.no_grad():
+            for seqs in [train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]:
+                all_seqs.extend(seqs)
+                embeddings = trained_model.get_embeddings(seqs).cpu()
+                all_embeds.append(embeddings)
+        # concatenate all embeddings
+        embeddings = torch.cat(all_embeds, dim=0).numpy()
+        # calculate labels
+        labels = ([1] * len(train_pos_seqs) + [0] * len(neg_seqs) +
+                  [1] * len(valid_pos_seqs) + [0] * len(valid_neg_seqs) +
+                  [1] * len(test_pos_seqs) + [0] * len(test_neg_seqs))
+        # calculate set_origins (the origins of the sequence, for example train/test)
+        set_origins = (['train'] * len(train_pos_seqs) + ['train'] * len(neg_seqs) +
+                       ['valid'] * len(valid_pos_seqs) + ['valid'] * len(valid_neg_seqs) +
+                       ['test'] * len(test_pos_seqs) + ['test'] * len(test_neg_seqs))
+        # create a dataframe with the AASeq, embedding, label and set_origin as columns
+        df_embed = pd.DataFrame({
+            'AASeq': all_seqs,
+            'embedding': list(embeddings),
+            'label': labels,
+            'set_origin': set_origins,
+        })
+        # save the dataframe to a csv file
+        df_embed.to_csv(embedding_path, index=False)
+    return df_embed
+
+
+def get_embedding_by_sequences(df_embed, sequences):
+    """
+    Get the embeddings for a list of sequences from the dataframe.
+
+    Args:
+        df_embed (pd.DataFrame): DataFrame containing embeddings and sequences
+        sequences (list): List of sequences to get embeddings for
+
+    Returns:
+        pd.DataFrame: DataFrame containing the embeddings for the specified sequences
+    """
+    # Set index for fast lookup
+    df_map = df_embed.set_index('AASeq')
+
+    # Lookup using .loc and reindex to match the order of `sequences`
+    df_selected = df_map.loc[df_map.index.intersection(sequences)]
+    df_selected = df_selected.reindex(sequences)
+
+    # Stack embeddings into an array
+    embeddings = np.stack(df_selected['embedding'].dropna())
+
+    return embeddings

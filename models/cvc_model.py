@@ -277,6 +277,10 @@ class CVCClassifierModel(nn.Module):
         logits = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
         return logits
 
+    def get_embeddings(self, seqs: List[str]):
+        embeddings = self.model(seqs)
+        return embeddings
+
     def predict(self, seqs: List[str]):
         logits = self(seqs)  # Get logits
         probs = torch.nn.functional.softmax(logits, dim=-1)  # Convert to probabilities

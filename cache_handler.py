@@ -3,18 +3,22 @@ import torch
 
 
 def get_model_config_str(args):
+    metadata = ""
     if args.k_fold > 0:
-        metadata = f"_fold-{args.k_fold}"
-    else:
-        metadata = ""
+        metadata += f"_fold-{args.k_fold}"
+    if args.negative_partition > 0:
+        metadata += f"_neg-{args.negative_partition}"
+    if args.to_ensemble:
+        metadata += f"_ensemble-{args.ensemble_method}"
+
     config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}{metadata}_epochs-{args.epochs}_" \
                  f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
                  f"lr-{args.learning_rate}_regcoef-{args.regularization_coefficient}_freeze-{args.freeze_embed_model}_criterion-{args.special_criterion}"
     return config_str
 
 
-def get_model_save_path(args, epoch, make_dirs=True):
-    # Define the base save directory
+def get_model_dir(args, make_dirs=True):
+    # Define the base directory for saving models
     base_dir = "cache/models"
     if make_dirs:
         os.makedirs(base_dir, exist_ok=True)
@@ -24,6 +28,13 @@ def get_model_save_path(args, epoch, make_dirs=True):
     save_dir = os.path.join(base_dir, config_str)
     if make_dirs:
         os.makedirs(save_dir, exist_ok=True)
+
+    return save_dir
+
+
+def get_model_save_path(args, epoch, make_dirs=True):
+    # Get the directory for saving the model
+    save_dir = get_model_dir(args, make_dirs=make_dirs)
 
     # Define the save path for the model state_dict
     model_save_path = os.path.join(save_dir, f"model_epoch_{epoch}.pth")
@@ -50,3 +61,7 @@ def load_model_state(model, args, epoch, device):
     else:
         print("No saved model found for the given epoch and configuration.")
         return None
+
+def get_embedding_save_path(args, make_dirs=True):
+    save_path = get_model_dir(args, make_dirs=make_dirs)
+    return os.path.join(save_path, "embedding.csv")

@@ -31,7 +31,7 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 
 
 class DatasetLoader:
-    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none'):
+    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none', neg_partition=0):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -229,6 +229,15 @@ class DatasetLoader:
             lookup_series = self.df_aaseq_to_distance.set_index('AASeq')['distance']
             result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
             return result if dont_use_function else distance_func(torch.tensor(result), a=self._dist_a)
+
+        # use only negatives according to the neg_partition parameter, that is: divide the negatives into 5 parts and use only chunk no. neg_partition of it
+        if neg_partition > 0:
+            neg_partition = neg_partition - 1
+            num_of_negatives = len(neg_seqs)
+            chunk_size = num_of_negatives // 5
+            start_index = chunk_size * neg_partition
+            end_index = start_index + chunk_size
+            neg_seqs = neg_seqs[start_index:end_index]
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs

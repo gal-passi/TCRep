@@ -1151,12 +1151,8 @@ if __name__ == '__main__':
 
         neg_to_pos_inference_ratio = 5
         print(f"Testing out random forest classifier (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
-        model = CVCClassifierModel(batch_size=batch_size, ch_dropout=0,
-                                   cvc_layers_to_train=0,
-                                   freeze_embed_model=True, lora=False, device=device)
-
         from inference.inference_testing import analyze_embeddings
-        analyze_embeddings(model, train_pos_seqs, neg_seqs,
+        analyze_embeddings(trained_model, train_pos_seqs, neg_seqs,
                            valid_pos_seqs, valid_neg_seqs,
                            test_pos_seqs, test_neg_seqs, x=neg_to_pos_inference_ratio)
         exit(0)

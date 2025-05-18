@@ -1434,13 +1434,15 @@ def create_visualizations(base_save_path):
     # print how many samples in each group by levenshtein distance
     print("Number of samples in each group by Levenshtein distance (Validation + Test):")
     print(df_valid_test_filtered['distances'].value_counts())
-    create_violin_plot(df_valid_test_filtered, 'Model Predictions by Levenshtein Distance (Only Negatives!)\n(Validation + Test)', ax1)
+    create_violin_plot(df_valid_test_filtered,
+                       'Model Predictions by Levenshtein Distance (Only Negatives!)\n(Validation + Test)', ax1)
 
     # Plot 2: Violin plot of model predictions by Levenshtein distance (Healthy)
     create_violin_plot(df_healthy_filtered, 'Model Predictions by Levenshtein Distance\n(Healthy)', ax2)
 
     # Plot 3: Scatter plot of Median Ratio by model prediction with labels (Validation + Test)
-    create_scatter_plot_with_labels(df_valid_test_filtered, 'Median Ratio by Model Prediction\n(Validation + Test)', ax3)
+    create_scatter_plot_with_labels(df_valid_test_filtered, 'Median Ratio by Model Prediction\n(Validation + Test)',
+                                    ax3)
 
     # Plot 4: Scatter plot of Median Ratio by model prediction (Healthy)
     create_scatter_plot_healthy(df_healthy_filtered, 'Median Ratio by Model Prediction\n(Healthy)', ax4)
@@ -1677,6 +1679,24 @@ def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg
     # Predict on evaluation set
     y_pred = rf_classifier.predict(X_eval)
 
+    # Calculate prediction probabilities for each set (for visualization)
+    train_pos_probs = rf_classifier.predict_proba(train_pos_embeddings)[:, 1]
+    train_neg_probs = rf_classifier.predict_proba(train_neg_embeddings)[:, 1]
+    valid_pos_probs = rf_classifier.predict_proba(valid_pos_embeddings)[:, 1]
+    valid_neg_probs = rf_classifier.predict_proba(valid_neg_embeddings)[:, 1]
+    test_pos_probs = rf_classifier.predict_proba(test_pos_embeddings)[:, 1]
+    test_neg_probs = rf_classifier.predict_proba(test_neg_embeddings)[:, 1]
+
+    # Store all probabilities for visualization
+    all_probs = {
+        'train_pos': train_pos_probs,
+        'train_neg': train_neg_probs,
+        'valid_pos': valid_pos_probs,
+        'valid_neg': valid_neg_probs,
+        'test_pos': test_pos_probs,
+        'test_neg': test_neg_probs
+    }
+
     # Calculate metrics
     tn, fp, fn, tp = confusion_matrix(y_eval, y_pred).ravel()
 
@@ -1701,12 +1721,12 @@ def run_random_forest(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg
         'Accuracy': accuracy
     }
 
-    return metrics, rf_classifier
+    return metrics, rf_classifier, all_probs
 
 
 def analyze_embeddings(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                        test_pos_seqs, test_neg_seqs, x=10):
-    metrics, rf_classifier = run_random_forest(
+    metrics, rf_classifier, all_probs = run_random_forest(
         model=model,
         train_pos_seqs=train_pos_seqs,
         neg_seqs=neg_seqs,
@@ -1729,4 +1749,96 @@ def analyze_embeddings(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_ne
     print(f"F1 Score: {metrics['F1']:.4f}")
     print(f"Accuracy: {metrics['Accuracy']:.4f}")
 
-    return metrics, rf_classifier
+    # Plot the distribution of classifier scores
+    print("\nGenerating score distribution plots...")
+
+    # Option 1: All distributions on one plot
+    plt1 = plot_classifier_scores(all_probs)
+    plt1.tight_layout()
+    plt1.savefig('all_distributions.png')
+    plt1.show()
+
+    # Option 2: Separate subplots for each dataset
+    plt2 = plot_combined_classifier_scores(all_probs)
+    plt2.tight_layout()
+    plt2.savefig('separated_distributions.png')
+    plt2.show()
+
+    return metrics, rf_classifier, all_probs
+
+
+def plot_combined_classifier_scores(all_probs, figsize=(12, 8)):
+    """
+    Plot the distribution of classifier scores with separate subplots for each dataset type
+
+    Parameters:
+    - all_probs: Dictionary containing prediction probabilities for each set
+    - figsize: Size of the figure
+
+    Returns:
+    - None (displays a plot)
+    """
+    fig, axs = plt.subplots(3, 1, figsize=figsize, sharex=True)
+
+    # Plot training data
+    sns.kdeplot(all_probs['train_pos'], color='blue', label='Positive', shade=True, alpha=0.5, ax=axs[0])
+    sns.kdeplot(all_probs['train_neg'], color='red', label='Negative', shade=True, alpha=0.5, ax=axs[0])
+    axs[0].set_title('Training Set')
+    axs[0].set_ylabel('Density')
+    axs[0].grid(True, linestyle='--', alpha=0.7)
+    axs[0].legend()
+
+    # Plot validation data
+    sns.kdeplot(all_probs['valid_pos'], color='blue', label='Positive', shade=True, alpha=0.5, ax=axs[1])
+    sns.kdeplot(all_probs['valid_neg'], color='red', label='Negative', shade=True, alpha=0.5, ax=axs[1])
+    axs[1].set_title('Validation Set')
+    axs[1].set_ylabel('Density')
+    axs[1].grid(True, linestyle='--', alpha=0.7)
+    axs[1].legend()
+
+    # Plot test data
+    sns.kdeplot(all_probs['test_pos'], color='blue', label='Positive', shade=True, alpha=0.5, ax=axs[2])
+    sns.kdeplot(all_probs['test_neg'], color='red', label='Negative', shade=True, alpha=0.5, ax=axs[2])
+    axs[2].set_title('Test Set')
+    axs[2].set_xlabel('Classifier Score (Probability of Positive Class)')
+    axs[2].set_ylabel('Density')
+    axs[2].grid(True, linestyle='--', alpha=0.7)
+    axs[2].legend()
+
+    fig.suptitle('Distribution of Random Forest Classifier Scores', fontsize=16)
+    plt.tight_layout()
+    return plt
+
+
+def plot_classifier_scores(all_probs, figsize=(12, 8)):
+    """
+    Plot the distribution of classifier scores for each set (positives/negatives)
+
+    Parameters:
+    - all_probs: Dictionary containing prediction probabilities for each set
+    - figsize: Size of the figure
+
+    Returns:
+    - None (displays a plot)
+    """
+    plt.figure(figsize=figsize)
+
+    # Plot training data distributions
+    sns.kdeplot(all_probs['train_pos'], color='blue', label='Train Positive', shade=True, alpha=0.3)
+    sns.kdeplot(all_probs['train_neg'], color='red', label='Train Negative', shade=True, alpha=0.3)
+
+    # Plot validation data distributions
+    sns.kdeplot(all_probs['valid_pos'], color='green', label='Validation Positive', shade=True, alpha=0.3)
+    sns.kdeplot(all_probs['valid_neg'], color='orange', label='Validation Negative', shade=True, alpha=0.3)
+
+    # Plot test data distributions
+    sns.kdeplot(all_probs['test_pos'], color='purple', label='Test Positive', shade=True, alpha=0.3)
+    sns.kdeplot(all_probs['test_neg'], color='brown', label='Test Negative', shade=True, alpha=0.3)
+
+    plt.xlabel('Classifier Score (Probability of Positive Class)')
+    plt.ylabel('Density')
+    plt.title('Distribution of Classifier Scores by Set')
+    plt.grid(True, linestyle='--', alpha=0.7)
+    plt.legend()
+
+    return plt

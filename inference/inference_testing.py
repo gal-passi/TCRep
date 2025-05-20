@@ -16,6 +16,7 @@ import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, accuracy_score
 from cache_handler import get_embedding_save_path
+from inference.plot_handler import kde_normalizer
 
 
 def calculate_probas(df, trained_model, patient_ids, to_print=True):
@@ -1609,7 +1610,7 @@ def display_distributions_on_different_sets(trained_model, dataset_type, other_d
 
 
 def run_random_forest(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                      test_pos_seqs, test_neg_seqs, x=10, random_state=42):
+                      test_pos_seqs, test_neg_seqs, x=10, nw=1, pw=10, threshold=0.5, n_estimators=100, to_balance=False, random_state=42):
     """
     Train a Random Forest classifier on embeddings from positive and negative sequences.
 
@@ -1658,26 +1659,33 @@ def run_random_forest(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_
         test_neg_embeddings = get_embedding_by_sequences(df_embed, test_neg_seqs)
 
     # Prepare training data
-    X_train = np.stack((train_pos_embeddings, train_neg_embeddings), axis=0)
+    X_train = np.concatenate((train_pos_embeddings, train_neg_embeddings))
     y_train = np.concatenate([np.ones(len(train_pos_embeddings)),
                               np.zeros(len(train_neg_embeddings))])
 
     # Prepare evaluation data (concatenate validation and test sets)
-    X_eval = np.stack((valid_pos_embeddings, valid_neg_embeddings,
-                        test_pos_embeddings, test_neg_embeddings), axis=0)
+    X_eval = np.concatenate((valid_pos_embeddings, valid_neg_embeddings,
+                             test_pos_embeddings, test_neg_embeddings))
     y_eval = np.concatenate([np.ones(len(valid_pos_embeddings)),
                              np.zeros(len(valid_neg_embeddings)),
                              np.ones(len(test_pos_embeddings)),
                              np.zeros(len(test_neg_embeddings))])
 
     # Train Random Forest
-    class_weights = {0: 1, 1: 25}  # or use 'balanced' to automatically adjust weights
+    if to_balance:
+        class_weights = 'balanced'
+    else:
+        class_weights = {0: nw, 1: pw}  # or use 'balanced' to automatically adjust weights
     print(f"Training Random Forest classifier (class weights = {class_weights})...")
-    rf_classifier = RandomForestClassifier(n_estimators=100, class_weight=class_weights, random_state=random_state)
+    rf_classifier = RandomForestClassifier(n_estimators=n_estimators, class_weight=class_weights, random_state=random_state)
     rf_classifier.fit(X_train, y_train)
 
     # Predict on evaluation set
-    y_pred = rf_classifier.predict(X_eval)
+    # y_pred = rf_classifier.predict(X_eval)
+    y_probs = rf_classifier.predict_proba(X_eval)[:, 1]
+
+    # Set your custom threshold (e.g., 0.3)
+    y_pred = (y_probs >= threshold).astype(int)
 
     # Calculate prediction probabilities for each set (for visualization)
     train_pos_probs = rf_classifier.predict_proba(train_pos_embeddings)[:, 1]
@@ -1725,7 +1733,8 @@ def run_random_forest(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_
 
 
 def analyze_embeddings(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                       test_pos_seqs, test_neg_seqs, x=10):
+                       test_pos_seqs, test_neg_seqs, nw=1, pw=10, x=10, threshold=0.5, n_estimators=100,
+                       to_balance=False, to_plot=True):
     metrics, rf_classifier, all_probs = run_random_forest(
         df_embed=df_embed,
         train_pos_seqs=train_pos_seqs,
@@ -1734,7 +1743,12 @@ def analyze_embeddings(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid
         valid_neg_seqs=valid_neg_seqs,
         test_pos_seqs=test_pos_seqs,
         test_neg_seqs=test_neg_seqs,
-        x=x
+        x=x,
+        nw=nw,
+        pw=pw,
+        threshold=threshold,
+        n_estimators=n_estimators,
+        to_balance=to_balance
     )
 
     # Print metrics
@@ -1749,25 +1763,26 @@ def analyze_embeddings(df_embed, train_pos_seqs, neg_seqs, valid_pos_seqs, valid
     print(f"F1 Score: {metrics['F1']:.4f}")
     print(f"Accuracy: {metrics['Accuracy']:.4f}")
 
-    # Plot the distribution of classifier scores
-    print("\nGenerating score distribution plots...")
+    if to_plot:
+        # Plot the distribution of classifier scores
+        print("\nGenerating score distribution plots...")
 
-    # Option 1: All distributions on one plot
-    plt1 = plot_classifier_scores(all_probs)
-    plt1.tight_layout()
-    plt1.savefig('all_distributions.png')
-    plt1.show()
+        # # Option 1: All distributions on one plot
+        # plt1 = plot_classifier_scores(all_probs)
+        # plt1.tight_layout()
+        # plt1.savefig('all_distributions.png')
+        # plt1.show()
 
-    # Option 2: Separate subplots for each dataset
-    plt2 = plot_combined_classifier_scores(all_probs)
-    plt2.tight_layout()
-    plt2.savefig('separated_distributions.png')
-    plt2.show()
+        # Option 2: Separate subplots for each dataset
+        plt2 = plot_combined_classifier_scores(all_probs)
+        plt2.tight_layout()
+        plt2.savefig('separated_distributions.png')
+        plt2.show()
 
     return metrics, rf_classifier, all_probs
 
 
-def plot_combined_classifier_scores(all_probs, figsize=(12, 8)):
+def plot_combined_classifier_scores(all_probs, figsize=(12, 12)):
     """
     Plot the distribution of classifier scores with separate subplots for each dataset type
 
@@ -1810,7 +1825,7 @@ def plot_combined_classifier_scores(all_probs, figsize=(12, 8)):
     return plt
 
 
-def plot_classifier_scores(all_probs, figsize=(12, 8)):
+def plot_classifier_scores(all_probs, figsize=(12, 12)):
     """
     Plot the distribution of classifier scores for each set (positives/negatives)
 
@@ -1845,12 +1860,15 @@ def plot_classifier_scores(all_probs, figsize=(12, 8)):
 
 
 def get_df_embeddings(args, trained_model, train_pos_seqs, neg_seqs,
-                      valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs):
-    embedding_path = get_embedding_save_path(args, make_dirs=False)
+                      valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, metadata_name=''):
+    embedding_path = get_embedding_save_path(args, metadata=metadata_name, make_dirs=False)
 
     # load the embeddings from the file if it exists
     if os.path.exists(embedding_path):
         df_embed = pd.read_csv(embedding_path)
+        df_embed['embedding'] = df_embed['embedding'].apply(
+            lambda s: np.fromstring(s.strip("[]").replace('\n', ''), sep=' ')
+        )
     else:
         # calculate embeddings of all sequences and save as df under cache/models/<specific_model_dir>/embeddings
         all_seqs = []
@@ -1905,3 +1923,187 @@ def get_embedding_by_sequences(df_embed, sequences):
     embeddings = np.stack(df_selected['embedding'].dropna())
 
     return embeddings
+
+
+def get_df_embeddings_onehot(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs):
+    # Define all possible amino acids
+    AMINO_ACIDS = "ACDEFGHIKLMNPQRSTVWYX"  # Standard 20 amino acids plus 'X' for unknown
+    AA_TO_IDX = {aa: idx for idx, aa in enumerate(AMINO_ACIDS)}
+    MAX_SEQ_LENGTH = 1000  # Define a maximum length for padding/truncating
+
+
+    def one_hot_encode_sequence(seq, max_length=MAX_SEQ_LENGTH):
+        # Truncate sequence if longer than max_length
+        seq = seq[:max_length]
+
+        # Initialize one-hot encoding matrix (sequence length x number of amino acids)
+        one_hot = np.zeros((max_length, len(AMINO_ACIDS)))
+
+        # Fill in the one-hot encoding for each position in the sequence
+        for i, aa in enumerate(seq):
+            if aa in AA_TO_IDX:
+                one_hot[i, AA_TO_IDX[aa]] = 1
+            else:
+                # For any amino acid not in our set, use the unknown 'X' encoding
+                one_hot[i, AA_TO_IDX['X']] = 1
+
+        # Flatten the one-hot encoding to a 1D array
+        return one_hot.flatten()
+
+
+    # Analyze sequence lengths to determine appropriate max_length
+    def analyze_sequence_lengths(sequences):
+        """Analyze the distribution of sequence lengths"""
+        lengths = [len(seq) for seq in sequences]
+        return {
+            'min': min(lengths),
+            'max': max(lengths),
+            'mean': sum(lengths) / len(lengths),
+            'median': sorted(lengths)[len(lengths) // 2],
+            'p90': sorted(lengths)[int(len(lengths) * 0.9)]
+        }
+
+
+    # Modified code with one-hot encoding
+    all_seqs = []
+    all_embeds = []
+    all_labels = []
+    all_set_origins = []
+
+    # Gather all sequences first
+    for seqs, label, origin in [
+        (train_pos_seqs, 1, 'train'),
+        (neg_seqs, 0, 'train'),
+        (valid_pos_seqs, 1, 'valid'),
+        (valid_neg_seqs, 0, 'valid'),
+        (test_pos_seqs, 1, 'test'),
+        (test_neg_seqs, 0, 'test')
+    ]:
+        all_seqs.extend(seqs)
+        all_labels.extend([label] * len(seqs))
+        all_set_origins.extend([origin] * len(seqs))
+
+    # Analyze sequence lengths to determine appropriate max_length
+    length_stats = analyze_sequence_lengths(all_seqs)
+
+    # Use the 90th percentile as a reasonable maximum length, or adjust as needed
+    max_seq_length = min(length_stats['p90'], MAX_SEQ_LENGTH)
+
+    # One-hot encode all sequences
+    embeddings = np.array([one_hot_encode_sequence(seq, max_seq_length) for seq in all_seqs])
+
+    # Create a dataframe with the AASeq, embedding, label and set_origin as columns
+    df_embed_onehot = pd.DataFrame({
+            'AASeq': all_seqs,
+            'embedding': list(embeddings),
+            'label': all_labels,
+            'set_origin': all_set_origins,
+        })
+    return df_embed_onehot
+
+
+def plot_output_distributions_per_patient_random_forest(model, rf_classifier, test_patient_inds,
+                                                        valid_patient_inds, unique_patient_ids,
+                                                        test_masks, valid_masks, positive_seqs, df_bld,
+                                                        df_hlt, model_type, args, device='cuda'):
+    """
+    Create a comprehensive visualization of model output distributions across validation,
+    training, and healthy patient sets.
+    Parameters:
+    - trained_model: The trained neural network model
+    - Various data-related parameters to extract sequences and patient sets
+    """
+    model.to(device)
+    model.eval()
+
+    # Set up the figure with three subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
+
+    # Create new test_inds which is all test_patient_inds and one from valid_patient_inds
+    test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
+    # And create a new test_mask which contains both
+    test_masks = np.concatenate((test_masks, valid_masks), axis=0)
+
+    # Color palettes for different sets
+    min_color, max_color = 0.4, 0.8
+    test_pos_colors = plt.cm.Greens(np.linspace(min_color, max_color, len(test_inds)))
+    test_neg_colors = plt.cm.Reds(np.linspace(min_color, max_color, len(test_inds)))
+    test_colors = plt.cm.Purples(np.linspace(min_color, max_color, len(test_inds)))
+    healthy_colors = plt.cm.Oranges(np.linspace(min_color, max_color, len(test_inds)))
+
+    # Subplot 1: Validation Set Distributions
+    ax1.set_title("Test Set Positives and Negatives")
+    for i, patient_ind in enumerate(test_inds):
+        mask = (test_masks[i] == 1)
+        pos_seqs = np.array(positive_seqs)[mask]
+        # Negative sequences for this patient
+        neg_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        neg_seqs = np.unique(neg_seqs)
+        # make sure that all pos_seqs are in neg_seqs
+        assert np.all(np.isin(pos_seqs, neg_seqs)), f"Positives are not in negatives for patient {patient_ind}"
+        # Make sure that there are no sequences in the negative set that are in the positive set
+        neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
+        # Get model outputs
+        with torch.no_grad():
+            pos_embeds = model.get_embeddings(pos_seqs).cpu()
+            neg_embeds = model.get_embeddings(neg_seqs).cpu()
+        # Convert to probabilities
+        pos_probs = rf_classifier.predict_proba(pos_embeds)[:, 1]
+        neg_probs = rf_classifier.predict_proba(neg_embeds)[:, 1]
+        # Plot KDE for positive and negative samples
+        kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
+        kde_normalizer(kde)
+        kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
+        kde_normalizer(kde)
+    ax1.set_xlabel("Predicted Probability for Positive Class")
+    ax1.set_ylabel("Density")
+    ax1.set_ylim(0, 1.1)
+    # ax1.legend()
+
+    # Subplot 2: Healthy Patients Distributions
+    ax2.set_title("Healthy vs Ill Patients")
+    healthy_patients = df_hlt["patient_id"].unique()
+    np.random.shuffle(healthy_patients)
+    for i, patient_ind in enumerate(test_inds):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        disease_seqs = np.unique(disease_seqs)
+        # Get model outputs
+        with torch.no_grad():
+            healthy_embeds = model.get_embeddings(healthy_seqs).cpu()
+            disease_embeds = model.get_embeddings(disease_seqs).cpu()
+        # Convert to probabilities
+        healthy_probs = rf_classifier.predict_proba(healthy_embeds)[:, 1]
+        disease_probs = rf_classifier.predict_proba(disease_embeds)[:, 1]
+        # Plot KDE for healthy patient samples
+        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
+        kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
+        kde_normalizer(kde)
+    # More Healthy patients
+    for i in range(len(test_inds), len(test_inds) + 6):
+        patient = healthy_patients[i]
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = np.unique(healthy_seqs)
+        # Get model outputs
+        with torch.no_grad():
+            healthy_embeds = model.get_embeddings(healthy_seqs).cpu()
+        # Convert to probabilities
+        healthy_probs = rf_classifier.predict_proba(healthy_embeds)[:, 1]
+        # Plot KDE for healthy patient samples
+        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
+        kde_normalizer(kde)
+    ax2.set_xlabel("Predicted Probability for Positive Class")
+    ax2.set_ylabel("Density")
+    ax2.set_ylim(0, 1.1)
+    # ax2.legend()
+    # Save the plot
+    os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/rf_classifier_distribution_per_patients_{get_model_config_str(args)}.png")
+    plt.tight_layout()
+
+    # save the figure in wandb:
+    plt.show()

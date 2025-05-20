@@ -9,7 +9,7 @@ def get_model_config_str(args):
     if args.negative_partition > 0:
         metadata += f"_neg-{args.negative_partition}"
     if args.to_ensemble:
-        metadata += f"_ensemble-{args.ensemble_method}"
+        metadata += f"_ensemble-{args.to_ensemble}"
 
     config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}{metadata}_epochs-{args.epochs}_" \
                  f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \
@@ -62,6 +62,6 @@ def load_model_state(model, args, epoch, device):
         print("No saved model found for the given epoch and configuration.")
         return None
 
-def get_embedding_save_path(args, make_dirs=True):
+def get_embedding_save_path(args, metadata='', make_dirs=True):
     save_path = get_model_dir(args, make_dirs=make_dirs)
-    return os.path.join(save_path, "embedding.csv")
+    return os.path.join(save_path, f"embedding{metadata}.csv")

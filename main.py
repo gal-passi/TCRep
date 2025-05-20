@@ -55,6 +55,9 @@ TO_DISPLAY_RESULTS_PLOT_TSNE = False
 TO_DISPLAY_NUMBER_OF_COMMON_SEQUENCES = False
 TO_LOAD_FULL_SYNAPSE_DATA = False
 TO_DISPLAY_RATIO_FIGURES = False
+INFERENCE_TO_RANDOM_FOREST = False
+INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
+INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 
 dataset_loader = None
 
@@ -959,6 +962,9 @@ if __name__ == '__main__':
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
 
+    # TODO: calculate levenstein distance between positive and negative sequences:
+
+
     # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
     for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
         if not (seq.startswith('C') and seq.endswith('F')):
@@ -1103,8 +1109,10 @@ if __name__ == '__main__':
         trained_model = None
         if not force_retrain:
             if to_ensemble:
-                trained_model = CVCEnsembleModel(args, device)
-            if test_mode_epoch >= 0:
+                from cache_handler import get_model_dir
+                cache_dir = get_model_dir(args)
+                trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='median')
+            elif test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
                     print(f"Model for epoch {test_mode_epoch} is not available!")
@@ -1162,49 +1170,78 @@ if __name__ == '__main__':
 
     # Inference:
     if not dont_inference and not force_retrain and not log_wandb:
-        print("Inference:")
-        trained_model.to(device)
+        print("\nInference:")
 
         # Evaluate the model on the validation set
-        from model_trainer import evaluate_model, CustomLossCriterion
-        class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
-        criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
-        val_metrics = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
-        val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
-        print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}, Validation AUC: {val_auc:.4f}, Validation PR AUC: {val_prauc:.4f}")
-        print(f"Validation TPR: {val_tpr}, Validation FPR: {val_fpr}, Validation TNR: {val_tnr}, Validation FNR: {val_fnr}")
-        print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
-        print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
+        if to_ensemble:
+            trained_model.to(device)
+            from model_trainer import evaluate_model, CustomLossCriterion
+            class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
+            criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+            val_metrics = evaluate_model(trained_model, valid_pos_seqs, valid_neg_seqs, criterion, device)
+            val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
+            print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}, Validation AUC: {val_auc:.4f}, Validation PR AUC: {val_prauc:.4f}")
+            print(f"Validation TPR: {val_tpr}, Validation FPR: {val_fpr}, Validation TNR: {val_tnr}, Validation FNR: {val_fnr}")
+            print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
+            print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
+            print(f"Validation F1: {val_f1:.4f}")
 
-        exit(0)
+        # Create a dataframe with the AASeq, embedding, label and set_origin as columns
+        if INFERENCE_TO_RANDOM_FOREST:
+            from inference.inference_testing import get_df_embeddings_onehot, get_df_embeddings
+            print("Getting the embeddings the dataset and saving as df to cache")
+            df_embed_onehot = get_df_embeddings_onehot(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs)
+            untrained_model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
+                                                 freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
+            model_for_embedding = untrained_model
+            df_embed = get_df_embeddings(args, model_for_embedding, train_pos_seqs, neg_seqs,
+                                         valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, metadata_name='untrained')
 
+            neg_to_pos_inference_ratio = 10
+            print(f"Testing out random forest classifier - CVC Embedding (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
+            from inference.inference_testing import analyze_embeddings
+            rf_classifier = analyze_embeddings(df_embed, train_pos_seqs, neg_seqs,
+                                               valid_pos_seqs, valid_neg_seqs,
+                                               test_pos_seqs, test_neg_seqs,
+                                               x=neg_to_pos_inference_ratio,
+                                               nw=1, pw=20,
+                                               threshold=0.145,
+                                               n_estimators=100,
+                                               to_balance=True,
+                                               to_plot=True)[1]
 
-        from inference.inference_testing import get_df_embeddings
-        df_embed = get_df_embeddings(args, trained_model, train_pos_seqs, neg_seqs,
-                      valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs)
+            print(f"Testing out random forest classifier - Onehot Embedding (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
+            from inference.inference_testing import analyze_embeddings
+            analyze_embeddings(df_embed_onehot, train_pos_seqs, neg_seqs,
+                               valid_pos_seqs, valid_neg_seqs,
+                               test_pos_seqs, test_neg_seqs,
+                               x=neg_to_pos_inference_ratio,
+                               nw=1, pw=20,
+                               threshold=0.145,
+                               n_estimators=100,
+                               to_balance=True,
+                               to_plot=True)
 
-        exit(0)
-
-        neg_to_pos_inference_ratio = 5
-        print(f"Testing out random forest classifier (Taking neg to pos ratio: {neg_to_pos_inference_ratio})")
-        from inference.inference_testing import analyze_embeddings
-        analyze_embeddings(df_embed, train_pos_seqs, neg_seqs,
-                           valid_pos_seqs, valid_neg_seqs,
-                           test_pos_seqs, test_neg_seqs, x=neg_to_pos_inference_ratio)
-        exit(0)
+            if INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT:
+                from inference.inference_testing import plot_output_distributions_per_patient_random_forest
+                plot_output_distributions_per_patient_random_forest(untrained_model, rf_classifier, test_patient_inds, valid_patient_inds,
+                                                                    unique_patient_ids,
+                                                                    test_masks, valid_masks, positive_seqs, df_bld,
+                                                                    df_hlt, model_type, args, device=device)
 
         # Display distribution on other dataset (article is T1D)
-        other_dataset_type = 'article' if dataset_type == 'ms' else 'ms'
-        print(f"Plotting the output distributions per patient on {dataset_type} and {other_dataset_type}")
-        from inference.plot_handler import kde_normalizer
-        from inference.inference_testing import display_distributions_on_different_sets
-        # TODO: There is some problem her with loading the positive sequences from the other dataset, figure this out.
-        other_dataset_loader = DatasetLoader(dataset_type=other_dataset_type, unique_patient_ids=unique_patient_ids,
-                                             k_fold=k_fold, dist_loss_type=dist_loss_type)
-        df_bld_other, df_hlt_other = other_dataset_loader.get_dfs()
-        display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
-                                                unique_patient_ids, test_patient_inds, valid_patient_inds,
-                                                df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
+        if INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS:
+            other_dataset_type = 'article' if dataset_type == 'ms' else 'ms'
+            print(f"Plotting the output distributions per patient on {dataset_type} and {other_dataset_type}")
+            from inference.plot_handler import kde_normalizer
+            from inference.inference_testing import display_distributions_on_different_sets
+            # TODO: There is some problem her with loading the positive sequences from the other dataset, figure this out.
+            other_dataset_loader = DatasetLoader(dataset_type=other_dataset_type, unique_patient_ids=unique_patient_ids,
+                                                 k_fold=k_fold, dist_loss_type=dist_loss_type)
+            df_bld_other, df_hlt_other = other_dataset_loader.get_dfs()
+            display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
+                                                    unique_patient_ids, test_patient_inds, valid_patient_inds,
+                                                    df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
 
         # from inference.inference_testing import inference_ratio_distance
         # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,

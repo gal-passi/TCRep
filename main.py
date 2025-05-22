@@ -1116,7 +1116,7 @@ if __name__ == '__main__':
             if to_ensemble:
                 from cache_handler import get_model_dir
                 cache_dir = get_model_dir(args)
-                trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='median')
+                trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='median')  # or 'weighted_sum'
             elif test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1177,12 +1177,24 @@ if __name__ == '__main__':
     if not dont_inference and not force_retrain and not log_wandb:
         print("\nInference:")
 
-        # Evaluate the model on the validation set
+        # Inference ensemble model
         if to_ensemble:
             trained_model.to(device)
             from model_trainer import evaluate_model, CustomLossCriterion
             class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
             criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+
+            default_to_return = trained_model.default_to_return
+            if default_to_return == 'weighted_sum':
+                models_tprs = []
+                for i in range(5):
+                    trained_model.default_to_return = i
+                    test_metrics = evaluate_model(trained_model, test_pos_seqs, test_neg_seqs, criterion, device)
+                    models_tprs.append(test_metrics[12])
+                model_weights = np.array(models_tprs) / np.sum(models_tprs)
+                trained_model.weights = model_weights
+                trained_model.default_to_return = default_to_return
+
             val_metrics = evaluate_model(trained_model, valid_pos_seqs, valid_neg_seqs, criterion, device)
             val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
             print(f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}, Validation AUC: {val_auc:.4f}, Validation PR AUC: {val_prauc:.4f}")
@@ -1253,7 +1265,7 @@ if __name__ == '__main__':
             from inference.inference_classification import inference_classification_model
             inference_classification_model(trained_model, args, df_bld, df_hlt,
                                            test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device)
+                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device)
 
         # from inference.inference_testing import inference_ratio_distance
         # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,

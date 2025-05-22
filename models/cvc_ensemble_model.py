@@ -14,12 +14,13 @@ NUM_OF_MODELS = 5
 
 
 class CVCEnsembleModel(nn.Module):
-    def __init__(self, args, device, models_weights=None, cache_dir=None, default_to_return='weighted_sum'):
+    def __init__(self, args, device, models_weights=None, cache_dir=None, default_to_return='weighted_sum', verbose=False):
         super(CVCEnsembleModel, self).__init__()
 
         self.models = []
         self.device = device
         self.default_to_return = default_to_return
+        self.verbose = verbose
         args.to_ensemble = False
         for i in range(1, NUM_OF_MODELS + 1):
             args.negative_partition = i
@@ -99,7 +100,7 @@ class CVCEnsembleModel(nn.Module):
         """Forward pass with caching and additional statistics"""
         if to_return is None:
             to_return = self.default_to_return
-        if to_return not in ['weighted_sum', 'min', 'max', 'median', 'all_models']:
+        if to_return not in ['weighted_sum', 'min', 'max', 'median', 'all_models'] and not isinstance(to_return, int):
             raise ValueError("to_return must be one of ['weighted_sum', 'min', 'max', 'median', 'all_models']")
 
         batch_outputs = []
@@ -157,7 +158,7 @@ class CVCEnsembleModel(nn.Module):
             self._save_cache(new_cache_entries)
 
         # Print cache stats
-        if len(x) > 0:
+        if len(x) > 0 and self.verbose:
             print(f"Cache hits: {cache_hits}/{len(x)} ({cache_hits/len(x)*100:.1f}%)")
 
         # Stack and organize results
@@ -185,4 +186,7 @@ class CVCEnsembleModel(nn.Module):
             'all_models': all_outputs  # Include all models' outputs if needed
         }
 
+        if isinstance(to_return, int):  # return outputs of only model to_return
+            to_return = to_return % NUM_OF_MODELS
+            return result['all_models'][:, to_return, :]
         return result[to_return]

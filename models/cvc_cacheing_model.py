@@ -8,10 +8,11 @@ from cache_handler import get_model_dir
 
 
 class CVCCachingModel(nn.Module):
-    def __init__(self, model, args, device):
+    def __init__(self, model, args, device, verbose=False):
         super(CVCCachingModel, self).__init__()
         self.model = model
         self.device = device
+        self.verbose = verbose
 
         # Cache setup
         self.cache_dir = os.path.join(get_model_dir(args, False), "output_cache.json")
@@ -123,7 +124,7 @@ class CVCCachingModel(nn.Module):
             self._save_cache(new_cache_entries)
 
         # Print cache stats
-        if len(x) > 0:
+        if len(x) > 0 and self.verbose:
             print(f"Cache hits: {cache_hits}/{len(x)} ({cache_hits/len(x)*100:.1f}%)")
 
         # Stack and organize results

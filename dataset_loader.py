@@ -199,7 +199,9 @@ class DatasetLoader:
 
         # get the dataframes for the test and train sets to convert AASeqs to ratios
         if dataset_type not in ['article', 'article_sle']:
-            self.build_clone_fraction_df(df_bld, method='max')
+            # concat df_bld and df_hlt to get the dataframes
+            df_concat = pd.concat([df_bld, df_hlt], axis=0, ignore_index=True)
+            self.build_clone_fraction_df(df_concat, method='max')
 
         # V1: f(x, a=1, b=0.5, c=0.5)  # b=1.5 might be better if we want most to be 1.0
         #     return a + c * (x ** b)
@@ -231,7 +233,7 @@ class DatasetLoader:
             return result if dont_use_function else distance_func(torch.tensor(result), a=self._dist_a)
 
         # use only negatives according to the neg_partition parameter, that is: divide the negatives into 5 parts and use only chunk no. neg_partition of it
-        if neg_partition > 0:
+        if neg_partition > 0 and not use_similar_negatives:
             neg_partition = neg_partition - 1
             num_of_negatives = len(neg_seqs)
             chunk_size = num_of_negatives // 5
@@ -240,7 +242,7 @@ class DatasetLoader:
             neg_seqs = neg_seqs[start_index:end_index]
 
         if use_similar_negatives:
-            neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio)
+            neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition)
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -272,7 +274,7 @@ class DatasetLoader:
         self.aaseq_to_ratio = aaseq_to_ratio
         self.aaseq_to_distance = aaseq_to_distance
 
-    def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio):
+    def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
         similar_neg_cache_path = 'cache/ms'
         os.makedirs(similar_neg_cache_path, exist_ok=True)
         # Check if the file already exists
@@ -326,18 +328,22 @@ class DatasetLoader:
             # Save the histogram
             plt.savefig(os.path.join(similar_neg_cache_path, 'histogram_min_dist.png'))
 
-        # In total take len(train_pos_seqs) * neg_pos_ratio * 1.2 sequences from neg_seqs in the following manner:
-        # 1. Take all sequences of dist 1
-        # 2. Take sequences from dist 2 at random until we reach 70% of our capacity
-        # 3. Take sequences from dist 3 at random until we reach 90% of our capacity
+        if neg_partition > 0:
+            np.random.seed(neg_partition)
+
+        # In total take len(train_pos_seqs) * neg_pos_ratio sequences from neg_seqs in the following manner:
+        # 1. Take 30% sequences of dist 1
+        # 2. Take sequences from dist 2 at random until we reach 65% of our capacity
+        # 3. Take sequences from dist 3 at random until we reach 80% of our capacity
         # 4. Take sequences from dist 4 or more at random until we reach 100% of our capacity
 
         # Calculate how many negatives we want
-        total_needed = int(len(train_pos_seqs) * neg_pos_ratio * 1.2)
+        total_needed = int(len(train_pos_seqs) * neg_pos_ratio)
 
-        # Step 1: Take all sequences with distance 1
+        # Step 1: Take 30% sequences with distance 1
         dist_1_mask = (min_dist == 1)
         dist_1_seqs = neg_seqs[dist_1_mask]
+        dist_1_seqs = np.random.choice(dist_1_seqs, size=min(int(total_needed * 0.3), len(dist_1_seqs)), replace=False)
 
         sampled = list(dist_1_seqs)
         remaining_capacity = total_needed - len(sampled)
@@ -355,11 +361,11 @@ class DatasetLoader:
                 sampled.extend(selected)
                 remaining_capacity -= to_sample
 
-        # Step 2: Fill up to 70% with dist == 2
-        sample_from_dist(2, int(total_needed * 0.7) - len(sampled))
+        # Step 2: Fill up to 65% with dist == 2
+        sample_from_dist(2, int(total_needed * 0.65) - len(sampled))
 
-        # Step 3: Fill up to 90% with dist == 3
-        sample_from_dist(3, int(total_needed * 0.9) - len(sampled))
+        # Step 3: Fill up to 80% with dist == 3
+        sample_from_dist(3, int(total_needed * 0.8) - len(sampled))
 
         # Step 4: Fill the rest with dist >= 4
         mask_4_or_more = (min_dist >= 4)
@@ -371,8 +377,9 @@ class DatasetLoader:
 
         neg_seqs = np.array(sampled[:total_needed])
 
-        # # take only len(train_pos_seqs) * neg_pos_ratio sequences from neg_seqs to be used for training (sort by min_dist)
-        # neg_seqs = neg_seqs[np.argsort(min_dist)][:min(len(train_pos_seqs) * neg_pos_ratio, len(neg_seqs))]
+        # shuffle the negative sequences
+        np.random.shuffle(neg_seqs)
+
         return neg_seqs
 
     def build_distance_df(self, df_bld, train_pos_seqs, dataset_type='ms', batch_size=1000):

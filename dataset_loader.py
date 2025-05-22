@@ -31,7 +31,7 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 
 
 class DatasetLoader:
-    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none', neg_partition=0):
+    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -239,6 +239,9 @@ class DatasetLoader:
             end_index = start_index + chunk_size
             neg_seqs = neg_seqs[start_index:end_index]
 
+        if use_similar_negatives:
+            neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio)
+
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
         self.test_neg_seqs = test_neg_seqs
@@ -268,6 +271,109 @@ class DatasetLoader:
         self.df_hlt = df_hlt
         self.aaseq_to_ratio = aaseq_to_ratio
         self.aaseq_to_distance = aaseq_to_distance
+
+    def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio):
+        similar_neg_cache_path = 'cache/ms'
+        os.makedirs(similar_neg_cache_path, exist_ok=True)
+        # Check if the file already exists
+        similar_neg_seqs_path = os.path.join(similar_neg_cache_path, "similar_negatives.npy")
+        similar_neg_min_dists_path = os.path.join(similar_neg_cache_path, "similar_neg_min_dists.npy")
+        if os.path.exists(similar_neg_seqs_path) and os.path.exists(similar_neg_min_dists_path):
+            # Load the file
+            neg_seqs = np.load(similar_neg_seqs_path, allow_pickle=True)
+            min_dist = np.load(similar_neg_min_dists_path, allow_pickle=True)
+        else:
+            import matplotlib.pyplot as plt
+            # Calculate the similar negatives
+            def batched_min_dist(neg_seqs, train_pos_seqs, score_func, num_batches=4):
+                batch_size = len(neg_seqs) // num_batches
+                min_dists = []
+
+                for i in range(num_batches):
+                    start = i * batch_size
+                    end = (i + 1) * batch_size if i < num_batches - 1 else len(neg_seqs)
+
+                    batch = neg_seqs[start:end]
+                    pwc_mat_batch = pairwise_scores(batch, train_pos_seqs, score=score_func)
+                    min_dists_batch = np.min(pwc_mat_batch, axis=1)
+                    min_dists.append(min_dists_batch)
+
+                return np.concatenate(min_dists)
+
+            # get the minimum distance
+            min_dist = batched_min_dist(neg_seqs, train_pos_seqs, levenshtein_dist_non_bin, num_batches=16)
+
+            # save min_dist to file and corresponding neg_seqs to file (under base_path = 'cache/ms'):
+            np.save(similar_neg_seqs_path, neg_seqs)
+            np.save(similar_neg_min_dists_path, min_dist)
+
+            # Plot the histogram of min_dist
+            num_bins = len(np.unique(min_dist))
+            # Create the histogram
+            counts, bins, patches = plt.hist(min_dist, bins=np.arange(1, num_bins + 2) - 0.5, edgecolor='black')
+            # Add counts above bars
+            for count, patch in zip(counts, patches):
+                plt.text(patch.get_x() + patch.get_width() / 2, count + 0.5, int(count), ha='center', va='bottom',
+                         fontsize=10)
+            plt.xticks(range(1, num_bins + 1))  # Set x-ticks from 1 to 8
+            plt.xlabel('Value')
+            plt.ylabel('Frequency')
+            plt.title('Histogram of min_dist')
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+            plt.tight_layout()
+            plt.show()
+
+            # Save the histogram
+            plt.savefig(os.path.join(similar_neg_cache_path, 'histogram_min_dist.png'))
+
+        # In total take len(train_pos_seqs) * neg_pos_ratio * 1.2 sequences from neg_seqs in the following manner:
+        # 1. Take all sequences of dist 1
+        # 2. Take sequences from dist 2 at random until we reach 70% of our capacity
+        # 3. Take sequences from dist 3 at random until we reach 90% of our capacity
+        # 4. Take sequences from dist 4 or more at random until we reach 100% of our capacity
+
+        # Calculate how many negatives we want
+        total_needed = int(len(train_pos_seqs) * neg_pos_ratio * 1.2)
+
+        # Step 1: Take all sequences with distance 1
+        dist_1_mask = (min_dist == 1)
+        dist_1_seqs = neg_seqs[dist_1_mask]
+
+        sampled = list(dist_1_seqs)
+        remaining_capacity = total_needed - len(sampled)
+        if remaining_capacity <= 0:
+            return np.array(sampled[:total_needed])
+
+        # Helper function to sample from a distance category
+        def sample_from_dist(dist_val, target_capacity):
+            nonlocal sampled, remaining_capacity
+            mask = (min_dist == dist_val)
+            candidates = neg_seqs[mask]
+            to_sample = min(target_capacity, len(candidates))
+            if to_sample > 0:
+                selected = np.random.choice(candidates, size=to_sample, replace=False)
+                sampled.extend(selected)
+                remaining_capacity -= to_sample
+
+        # Step 2: Fill up to 70% with dist == 2
+        sample_from_dist(2, int(total_needed * 0.7) - len(sampled))
+
+        # Step 3: Fill up to 90% with dist == 3
+        sample_from_dist(3, int(total_needed * 0.9) - len(sampled))
+
+        # Step 4: Fill the rest with dist >= 4
+        mask_4_or_more = (min_dist >= 4)
+        candidates = neg_seqs[mask_4_or_more]
+        to_sample = min(remaining_capacity, len(candidates))
+        if to_sample > 0:
+            selected = np.random.choice(candidates, size=to_sample, replace=False)
+            sampled.extend(selected)
+
+        neg_seqs = np.array(sampled[:total_needed])
+
+        # # take only len(train_pos_seqs) * neg_pos_ratio sequences from neg_seqs to be used for training (sort by min_dist)
+        # neg_seqs = neg_seqs[np.argsort(min_dist)][:min(len(train_pos_seqs) * neg_pos_ratio, len(neg_seqs))]
+        return neg_seqs
 
     def build_distance_df(self, df_bld, train_pos_seqs, dataset_type='ms', batch_size=1000):
         sorted_seqs = sorted(list(df_bld["AASeq"].unique()))
@@ -749,4 +855,3 @@ class DatasetLoader:
         std_percent_of_total = np.std(percent_of_total_values)  # Calculate std for percent_of_total
 
         return mean_results, std_percent_of_total
-

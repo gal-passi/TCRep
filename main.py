@@ -32,6 +32,7 @@ from models.cvc_model import CVCClassifierModel
 from models.ff_model import FeedForwardClassifier
 from models.esmc_ff_model import ESMCFeedForwardClassifier
 from models.cvc_ensemble_model import CVCEnsembleModel
+from models.cvc_cacheing_model import CVCCachingModel
 from torch.utils.data import Dataset, DataLoader
 import time
 import random
@@ -651,7 +652,8 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, neg_partition, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, neg_partition,
+              use_similar_negatives, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -681,6 +683,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "dist_loss_type": dist_loss_type,
             "ch_type": ch_type,
             "neg_partition": neg_partition,
+            "use_similar_negatives": use_similar_negatives,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -817,6 +820,7 @@ if __name__ == '__main__':
     parser.add_argument('--ch_type', type=str, choices=ch_types, default='none', help='Type of classification head to use')
     parser.add_argument('--negative_partition', '--neg_partition', type=int, default=0, help='Negative Partition Index (0 for no partitioning of the negative samples)')
     parser.add_argument('--to_ensemble', '--ensemble', '-ensemble', action='store_true', help='Ensemble the models (Only applicable after first training with all 1..5 negative_partitioning)')
+    parser.add_argument('--use_similar_negatives', action='store_true', help='Use similar negatives to training positives for training (similar according to Levenstein distance)')
 
     args = parser.parse_args()
 
@@ -851,6 +855,7 @@ if __name__ == '__main__':
     ch_type = args.ch_type.lower() if model_type == 'cvc' else 'none'  # Only CVC model can use dist loss
     neg_partition = args.negative_partition
     to_ensemble = args.to_ensemble
+    use_similar_negatives = args.use_similar_negatives
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -891,6 +896,7 @@ if __name__ == '__main__':
     print(f"\tUsing Ratio: {args.ratio}")
     print(f"\tDist Loss Type: {args.dist_loss_type}")
     print(f"\tClassification Head Type: {args.ch_type}")
+    print(f"\tUsing similar negatives to positives in train: {args.use_similar_negatives}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -949,7 +955,8 @@ if __name__ == '__main__':
         unique_patient_ids = altered_lists[k_fold]
 
     dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
-                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition)
+                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                   use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -961,9 +968,6 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
-
-    # TODO: calculate levenstein distance between positive and negative sequences:
-
 
     # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
     for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
@@ -1091,6 +1095,7 @@ if __name__ == '__main__':
                 dist_loss_type=dist_loss_type,
                 ch_type=ch_type,
                 neg_partition=neg_partition,
+                use_similar_negatives=use_similar_negatives,
                 device=device,
             )
 
@@ -1242,6 +1247,13 @@ if __name__ == '__main__':
             display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
                                                     unique_patient_ids, test_patient_inds, valid_patient_inds,
                                                     df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
+
+        # Inference classification model
+        if k_fold > 0:
+            from inference.inference_classification import inference_classification_model
+            inference_classification_model(trained_model, args, df_bld, df_hlt,
+                                           test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device)
 
         # from inference.inference_testing import inference_ratio_distance
         # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,

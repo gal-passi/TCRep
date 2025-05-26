@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -7,6 +8,55 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import confusion_matrix
 from models.cvc_cacheing_model import CVCCachingModel
+from cache_handler import get_model_config_str
+from sklearn.manifold import TSNE
+from sklearn.decomposition import PCA
+
+
+INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
+INFERENCE_CONFUSION_MATRIX_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices/")
+INFERENCE_VECTOR_PLOTS_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots/")
+
+
+def create_binned_disease_probs(patient_ratio, disease_probs, num_bins=20):
+    """
+    Create bins based on patient_ratio and compute average disease_probs for each bin.
+
+    Parameters:
+    patient_ratio (ndarray): Array of patient ratios to determine binning
+    disease_probs (ndarray): Array of disease probabilities (same shape as patient_ratio)
+    num_bins (int): Number of bins to create (default: 20)
+
+    Returns:
+    ndarray: Array of size num_bins with average disease probabilities for each bin
+    """
+
+    # Flatten arrays in case they're multi-dimensional
+    patient_ratio_flat = patient_ratio.flatten()
+    disease_probs_flat = disease_probs.flatten()
+
+    # Create bin edges based on patient_ratio range
+    min_ratio = np.min(patient_ratio_flat)
+    max_ratio = np.max(patient_ratio_flat)
+    bin_edges = np.linspace(min_ratio, max_ratio, num_bins + 1)
+
+    # Assign each patient_ratio to a bin
+    bin_indices = np.digitize(patient_ratio_flat, bin_edges) - 1
+    # Handle edge case where values equal to max fall into bin num_bins
+    bin_indices = np.clip(bin_indices, 0, num_bins - 1)
+
+    # Initialize result array
+    binned_avg_probs = np.zeros(num_bins)
+
+    # Calculate average disease_probs for each bin
+    for i in range(num_bins):
+        mask = bin_indices == i
+        if np.any(mask):  # If there are values in this bin
+            binned_avg_probs[i] = np.mean(disease_probs_flat[mask])
+        else:  # If bin is empty, you might want to set to 0 or NaN
+            binned_avg_probs[i] = 0  # or np.nan
+
+    return binned_avg_probs
 
 
 def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_bins, add_ratio_to_vector,
@@ -28,19 +78,25 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
 
         # bin using np into x bins (min value is 0 and max is 1)
-        disease_probs = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
+        disease_probs_dig = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
         # Vectorized bin counting
-        patient_vector = np.bincount(disease_probs, minlength=10).astype(np.float32)
+        patient_vector = np.bincount(disease_probs_dig, minlength=10).astype(np.float32)
         patient_vector /= patient_vector.sum()
+        # patient_vector /= patient_vector.max()
 
         if add_ratio_to_vector:
-            # bin patient ratio
-            patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
-            patient_ratio = np.digitize(patient_ratio, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-            # Vectorized bin counting
-            patient_vector_ratio = np.bincount(patient_ratio, minlength=10).astype(np.float32)
-            patient_vector_ratio /= patient_vector_ratio.sum()
+            patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values
+            patient_vector_ratio = create_binned_disease_probs(patient_ratio, disease_probs, num_bins=vector_representation_bins)
+            patient_vector_ratio /= patient_vector_ratio.max()
             patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
+            pass
+            # bin patient ratio
+            # patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
+            # patient_ratio = np.digitize(patient_ratio, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
+            # # Vectorized bin counting
+            # patient_vector_ratio = np.bincount(patient_ratio, minlength=10).astype(np.float32)
+            # patient_vector_ratio /= patient_vector_ratio.sum()
+            # patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
         else:
             patient_vectors.append(patient_vector)
     patient_vectors = np.array(patient_vectors)
@@ -51,6 +107,10 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
                                    add_ratio_to_vector=False,
                                    vector_representation_bins=20, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
+    # make sure that plot dirs exists
+    os.makedirs(INFERENCE_CONFUSION_MATRIX_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_VECTOR_PLOTS_DIR, exist_ok=True)
+
     # Creating a caching model of the trained model
     trained_model.eval()
     caching_model = CVCCachingModel(trained_model, args, device)
@@ -158,14 +218,14 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         y_test = np.hstack([np.ones(test_vectors.shape[0]), np.zeros(healthy_test_vectors.shape[0])])
 
         # 1. KNN Classifier
-        knn = KNeighborsClassifier(n_neighbors=3)  # You might want to tune this parameter
+        knn = KNeighborsClassifier(n_neighbors=2)  # You might want to tune this parameter
         knn.fit(X_train, y_train)
         y_pred_knn = knn.predict(X_test)
         cm_knn = confusion_matrix(y_test, y_pred_knn)
 
         # 2. Balanced Random Forest Classifier
         # Using class_weight='balanced' to handle class imbalance
-        rf = RandomForestClassifier(n_estimators=10, class_weight='balanced', random_state=42)
+        rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
         rf.fit(X_train, y_train)
         y_pred_rf = rf.predict(X_test)
         cm_rf = confusion_matrix(y_test, y_pred_rf)
@@ -254,18 +314,10 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         plt.title('Average Confusion Matrix - Random Forest')
 
         plt.tight_layout()
+        # save under plot dirs with name including the get_model_config_str
+        model_config_str = get_model_config_str(args)
+        plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR, f"avg_confusion_matrices_{model_config_str}.png"))
         plt.show()
-
-        # # Calculate and display additional metrics
-        # print("\nAdditional average metrics:")
-        # # KNN metrics
-        # knn_sensitivity = avg_cm_knn[1, 1] / (avg_cm_knn[1, 0] + avg_cm_knn[1, 1])  # TPR
-        # knn_specificity = avg_cm_knn[0, 0] / (avg_cm_knn[0, 0] + avg_cm_knn[0, 1])  # TNR
-        # # RF metrics
-        # rf_sensitivity = avg_cm_rf[1, 1] / (avg_cm_rf[1, 0] + avg_cm_rf[1, 1])  # TPR
-        # rf_specificity = avg_cm_rf[0, 0] / (avg_cm_rf[0, 0] + avg_cm_rf[0, 1])  # TNR
-        # print(f"KNN - Sensitivity (TPR): {knn_sensitivity:.4f}, Specificity (TNR): {knn_specificity:.4f}")
-        # print(f"RF  - Sensitivity (TPR): {rf_sensitivity:.4f}, Specificity (TNR): {rf_specificity:.4f}")
 
     # Execute the function to display average results
     display_average_results(total_cm_knn, total_cm_rf)
@@ -314,3 +366,76 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     print("      Pred_Healthy  Pred_Disease")
     print(f"Act_Healthy    {std_rates_rf[0, 0]:.4f}    {std_rates_rf[0, 1]:.4f}  (TNR, FPR)")
     print(f"Act_Disease    {std_rates_rf[1, 0]:.4f}    {std_rates_rf[1, 1]:.4f}  (FNR, TPR)")
+
+    # TODO: Check the following code!
+
+    # Plot dimensionality reduction visualizations
+    all_healthy_vectors = np.vstack([healthy_vectors, healthy_test_vectors])
+    plot_vectors(patient_vectors, all_healthy_vectors, args, " - All Patients")
+
+
+def plot_vectors(patient_vectors, healthy_vectors, args, title_suffix=""):
+    """
+    Plot t-SNE and PCA visualizations of patient vectors, colored by disease/healthy status
+
+    Args:
+        patient_vectors: numpy array of disease patient vectors
+        healthy_vectors: numpy array of healthy patient vectors
+        title_suffix: string to add to plot titles
+    """
+    # Combine all vectors and create labels
+    all_vectors = np.vstack([patient_vectors, healthy_vectors])
+    labels = np.hstack([np.ones(len(patient_vectors)), np.zeros(len(healthy_vectors))])
+    label_names = ['Healthy', 'Disease']
+    # Blue for healthy, Red/Pink for disease
+    colors = ['#2E86AB', '#A23B72']
+
+    # Create figure with subplots
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6))
+
+    # PCA
+    pca = PCA(n_components=2, random_state=42)
+    pca_result = pca.fit_transform(all_vectors)
+
+    # Plot PCA
+    for i, (label, color, name) in enumerate(zip([0, 1], colors, label_names)):
+        mask = labels == label
+        axes[0].scatter(pca_result[mask, 0], pca_result[mask, 1],
+                        c=color, label=name, alpha=0.7, s=60, edgecolors='black', linewidth=0.5)
+
+    axes[0].set_xlabel(f'PC1 ({pca.explained_variance_ratio_[0]:.2%} variance)')
+    axes[0].set_ylabel(f'PC2 ({pca.explained_variance_ratio_[1]:.2%} variance)')
+    axes[0].set_title(f'PCA of Patient Vectors{title_suffix}')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+
+    # t-SNE
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(all_vectors) - 1))
+    tsne_result = tsne.fit_transform(all_vectors)
+
+    # Plot t-SNE
+    for i, (label, color, name) in enumerate(zip([0, 1], colors, label_names)):
+        mask = labels == label
+        axes[1].scatter(tsne_result[mask, 0], tsne_result[mask, 1],
+                        c=color, label=name, alpha=0.7, s=60, edgecolors='black', linewidth=0.5)
+
+    axes[1].set_xlabel('t-SNE Component 1')
+    axes[1].set_ylabel('t-SNE Component 2')
+    axes[1].set_title(f't-SNE of Patient Vectors{title_suffix}')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    # save under plot dirs with name including the get_model_config_str
+    model_config_str = get_model_config_str(args)
+    plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_DIR, f"patient_vectors_{model_config_str}{title_suffix}.png"))
+    plt.show()
+
+    # Print some statistics
+    print(f"Vector dimensionality: {all_vectors.shape[1]}")
+    print(f"Number of disease patients: {len(patient_vectors)}")
+    print(f"Number of healthy patients: {len(healthy_vectors)}")
+    print(
+        f"PCA explained variance ratio: PC1={pca.explained_variance_ratio_[0]:.3f}, PC2={pca.explained_variance_ratio_[1]:.3f}")
+    print(f"Total explained variance by first 2 PCs: {sum(pca.explained_variance_ratio_):.3f}")
+

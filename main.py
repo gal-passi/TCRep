@@ -870,7 +870,9 @@ if __name__ == '__main__':
     assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
     assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
     assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
+    assert not ((neg_partition > 0) and to_k_fold), "Cannot use negative partitioning and k-fold cross-validation at the same time"  # Problem with cache for example
     assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
+
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")

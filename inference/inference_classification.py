@@ -11,6 +11,13 @@ from models.cvc_cacheing_model import CVCCachingModel
 from cache_handler import get_model_config_str
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
+from sklearn.naive_bayes import GaussianNB
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import wasserstein_distance, ks_2samp
+from multiprocessing import Pool, cpu_count
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
@@ -60,8 +67,9 @@ def create_binned_disease_probs(patient_ratio, disease_probs, num_bins=20):
 
 
 def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_bins, add_ratio_to_vector,
-                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None):
+                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0):
     patient_vectors = []
+    patient_probs = []
     for patient_ind in patient_inds:
         # Extract and process the patient sequences
         if unique_patient_ids is not None and possible_seqs is not None:
@@ -76,19 +84,21 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
 
         # Convert to probabilities
         disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+        patient_probs.append(disease_probs)
 
         # bin using np into x bins (min value is 0 and max is 1)
         disease_probs_dig = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
         # Vectorized bin counting
         patient_vector = np.bincount(disease_probs_dig, minlength=10).astype(np.float32)
-        patient_vector /= patient_vector.sum()
-        # patient_vector /= patient_vector.max()
+        # patient_vector /= patient_vector.sum()
+        patient_vector /= patient_vector.max()
+        patient_vector = patient_vector[start_vec_from:]
 
         if add_ratio_to_vector:
             patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values
             patient_vector_ratio = create_binned_disease_probs(patient_ratio, disease_probs, num_bins=vector_representation_bins)
             patient_vector_ratio /= patient_vector_ratio.max()
-            patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
+            patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio[start_vec_from:]], axis=0))
             pass
             # bin patient ratio
             # patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
@@ -100,12 +110,172 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         else:
             patient_vectors.append(patient_vector)
     patient_vectors = np.array(patient_vectors)
-    return patient_vectors
+    return patient_vectors, patient_probs
+
+
+# Display final results
+def calculate_average_cm_rates(cm_list):
+    """Calculate the average confusion matrix rates from a list of confusion matrices"""
+    rates_list = []
+
+    for cm in cm_list:
+        # Calculate rates for each confusion matrix
+        # cm structure: [[TN, FP], [FN, TP]]
+        TN, FP, FN, TP = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+
+        # Calculate rates (avoiding division by zero)
+        total_actual_positive = TP + FN
+        total_actual_negative = TN + FP
+
+        if total_actual_positive > 0:
+            TPR = TP / total_actual_positive  # Sensitivity/Recall
+            FNR = FN / total_actual_positive  # Miss Rate
+        else:
+            TPR = FNR = 0
+
+        if total_actual_negative > 0:
+            TNR = TN / total_actual_negative  # Specificity
+            FPR = FP / total_actual_negative  # Fall-out
+        else:
+            TNR = FPR = 0
+
+        # Create rate matrix in same structure as confusion matrix
+        rate_matrix = np.array([[TNR, FPR], [FNR, TPR]])
+        rates_list.append(rate_matrix)
+
+    # Calculate average rates across all folds
+    rates_array = np.array(rates_list)
+    avg_rates = np.mean(rates_array, axis=0)
+
+    return np.round(avg_rates, 4)
+
+
+# Display average results from multiple k-fold runs
+def display_average_results(total_cm_knn, total_cm_rf, args):
+    """Display the average results from multiple k-fold runs"""
+    # Calculate average confusion matrices
+    avg_cm_knn = calculate_average_cm_rates(total_cm_knn)
+    avg_cm_rf = calculate_average_cm_rates(total_cm_rf)
+
+    # Number of folds
+    n_folds = len(total_cm_knn)
+
+    # Print results
+    print(f"Average results across {n_folds} folds:")
+
+    print("\nKNN - Average Confusion Matrix:")
+    # rearrange to: [[TP, FP], [FN, TN]]
+    avg_cm_knn_rearranged = np.array([[avg_cm_knn[1, 1], avg_cm_knn[1, 0]],
+                                      [avg_cm_knn[0, 1], avg_cm_knn[0, 0]]])
+    print(avg_cm_knn_rearranged)
+    # print(f"Average Disease correctly classified: {avg_cm_knn[1, 1]:.2f}")
+    # print(f"Average Healthy correctly classified: {avg_cm_knn[0, 0]:.2f}")
+
+    print("\nRandom Forest - Average Confusion Matrix:")
+    # rearrange to: [[TP, FP], [FN, TN]]
+    avg_cm_rf_rearranged = np.array([[avg_cm_rf[1, 1], avg_cm_rf[1, 0]],
+                                     [avg_cm_rf[0, 1], avg_cm_rf[0, 0]]])
+    print(avg_cm_rf_rearranged)
+    # print(f"Average Disease correctly classified: {avg_cm_rf[1, 1]:.2f}")
+    # print(f"Average Healthy correctly classified: {avg_cm_rf[0, 0]:.2f}")
+
+    # Visualize average confusion matrices
+    plt.figure(figsize=(12, 5))
+
+    plt.subplot(1, 2, 1)
+    sns.heatmap(avg_cm_knn, annot=True, fmt='.2f', cmap='Blues',
+                xticklabels=['Predicted Healthy', 'Predicted Disease'],
+                yticklabels=['Actual Healthy', 'Actual Disease'])
+    plt.title('Average Confusion Matrix - KNN')
+
+    plt.subplot(1, 2, 2)
+    sns.heatmap(avg_cm_rf, annot=True, fmt='.2f', cmap='Blues',
+                xticklabels=['Predicted Healthy', 'Predicted Disease'],
+                yticklabels=['Actual Healthy', 'Actual Disease'])
+    plt.title('Average Confusion Matrix - Random Forest')
+
+    plt.tight_layout()
+    # save under plot dirs with name including the get_model_config_str
+    model_config_str = get_model_config_str(args)
+    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR, f"avg_confusion_matrices_{model_config_str}.png"))
+    plt.show()
+
+
+# Calculate standard deviations to show variability across folds
+def calculate_std_cm_rates(cm_list):
+    """Calculate standard deviation of confusion matrix rates across folds"""
+    rates_list = []
+
+    for cm in cm_list:
+        # Calculate rates for each confusion matrix
+        TN, FP, FN, TP = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+
+        total_actual_positive = TP + FN
+        total_actual_negative = TN + FP
+
+        if total_actual_positive > 0:
+            TPR = TP / total_actual_positive
+            FNR = FN / total_actual_positive
+        else:
+            TPR = FNR = 0
+
+        if total_actual_negative > 0:
+            TNR = TN / total_actual_negative
+            FPR = FP / total_actual_negative
+        else:
+            TNR = FPR = 0
+
+        rate_matrix = np.array([[TNR, FPR], [FNR, TPR]])
+        rates_list.append(rate_matrix)
+
+    rates_array = np.array(rates_list)
+    std_rates = np.std(rates_array, axis=0)
+    return np.round(std_rates, 4)
+
+
+def ks_statistic(x, y):
+    return ks_2samp(x, y).statistic
+
+
+def _predict_single(args):
+    metric_func, disease_base, healthy_base, target = args
+    disease_dist = metric_func(disease_base, target)
+    healthy_dist = metric_func(healthy_base, target)
+    return 1 if disease_dist < healthy_dist else 0
+
+
+def dist_predictor(metric_func, disease_base, healthy_base, targets, num_workers=None):
+    if num_workers is None:
+        num_workers = cpu_count()
+
+    args_list = [(metric_func, disease_base, healthy_base, target) for target in targets]
+
+    with Pool(processes=num_workers) as pool:
+        y_pred = pool.map(_predict_single, args_list)
+
+    return np.array(y_pred)
+
+
+def plot_feature_importances(rf_feature_importance, start_vec_from, args):
+    print("\nRandom Forest Sorted Feature Importances (averaged across folds):")
+    rf_feature_importance /= rf_feature_importance.max()
+    feature_names = [f"Feature {i + start_vec_from}" for i in range(len(rf_feature_importance))]
+    indices = np.argsort(rf_feature_importance)[::-1]
+    plt.figure(figsize=(10, 6))
+    plt.title("Feature Importances (Normalized)")
+    plt.bar(range(len(rf_feature_importance)), rf_feature_importance[indices], align="center")
+    plt.xticks(range(len(rf_feature_importance)), [feature_names[i] for i in indices], rotation=90)
+    plt.tight_layout()
+    # save under plot dirs with name including the get_model_config_str
+    model_config_str = get_model_config_str(args)
+    plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_DIR, f"rf_feature_importances_{model_config_str}.png"))
+    plt.show()
 
 
 def inference_classification_model(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
-                                   add_ratio_to_vector=False,
+                                   add_ratio_to_vector=False, start_vec_from=8,
+                                   # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=20, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
     # make sure that plot dirs exists
     os.makedirs(INFERENCE_CONFUSION_MATRIX_DIR, exist_ok=True)
@@ -122,83 +292,33 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     patient_valid_test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
 
     # get the patient vectors
-    patient_vectors = calc_patient_vectors(df_bld, caching_model, patient_valid_test_inds, vector_representation_bins,
-                                           add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=unique_patient_ids, possible_seqs=possible_seqs)
-    # patient_vectors = []
-    # for patient_ind in patient_valid_test_inds:
-    #     # Extract and process the patient sequences
-    #     patient_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-    #     patient_seqs = np.array([x for x in np.unique(patient_seqs) if x in possible_seqs])
-    #
-    #     # Get model outputs
-    #     with torch.no_grad():
-    #         disease_logits = caching_model(patient_seqs)
-    #
-    #     # Convert to probabilities
-    #     disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
-    #
-    #     # bin using np into x bins (min value is 0 and max is 1)
-    #     disease_probs = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-    #     # Vectorized bin counting
-    #     patient_vector = np.bincount(disease_probs, minlength=10).astype(np.float32)
-    #     patient_vector /= patient_vector.sum()
-    #
-    #     if add_ratio_to_vector:
-    #         # bin patient ratio
-    #         patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
-    #         patient_ratio = np.digitize(patient_ratio, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-    #         # Vectorized bin counting
-    #         patient_vector_ratio = np.bincount(patient_ratio, minlength=10).astype(np.float32)
-    #         patient_vector_ratio /= patient_vector_ratio.sum()
-    #         patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
-    #     else:
-    #         patient_vectors.append(patient_vector)
-
-    patient_vectors = np.array(patient_vectors)
+    patient_vectors, patient_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_inds, vector_representation_bins,
+                                                          add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=unique_patient_ids,
+                                                          possible_seqs=possible_seqs, start_vec_from=start_vec_from)
 
     # healthy vectors helping data
     healthy_patients = df_hlt["patient_id"].unique()
     np.random.shuffle(healthy_patients)
     healthy_patients = healthy_patients[:num_of_healthy_patients]
 
-    # get the healthy patient vectors
-    # healthy_vectors = []
-    # for patient_ind in healthy_patients:
-    #     # Extract and process the patient sequences
-    #     patient_seqs = df_hlt.loc[df_hlt["patient_id"] == patient_ind, "AASeq"].values
-    #
-    #     # Get model outputs
-    #     with torch.no_grad():
-    #         healthy_logits = caching_model(patient_seqs)
-    #
-    #     # Convert to probabilities
-    #     healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-    #
-    #     # bin using np into x bins (min value is 0 and max is 1)
-    #     healthy_probs = np.digitize(healthy_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-    #     # Vectorized bin counting
-    #     healthy_vector = np.bincount(healthy_probs, minlength=vector_representation_bins).astype(np.float32)
-    #     healthy_vector /= healthy_vector.sum()
-    #
-    #     if add_ratio_to_vector:
-    #         # bin patient ratio
-    #         healthy_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
-    #         healthy_ratio = np.digitize(healthy_ratio, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-    #         # Vectorized bin counting
-    #         healthy_vector_ratio = np.bincount(healthy_ratio, minlength=10).astype(np.float32)
-    #         healthy_vector_ratio /= healthy_vector_ratio.sum()
-    #         healthy_vectors.append(np.concatenate([healthy_vector, healthy_vector_ratio], axis=0))
-    #     else:
-    #         healthy_vectors.append(healthy_vector)
-    # healthy_vectors = np.array(healthy_vectors)
-
-    healthy_vectors = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
-                                           add_ratio_to_vector, aaseq_to_ratio)
+    healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
+                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from)
     healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
                                              healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
+    healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
+                                         healthy_probs[num_of_healthy_patients - num_of_healthy_test_patients:])
 
     total_cm_knn = []
     total_cm_rf = []
+    total_cm_svm_rbf = []
+    total_cm_svm_linear = []
+    total_cm_logistic = []
+    total_cm_mlp = []
+    total_cm_nb = []
+    total_cm_jsd = []
+    total_cm_wsd = []
+    total_cm_ks = []
+    rf_feature_importance = np.zeros(vector_representation_bins - start_vec_from)
 
     # Do k-fold on patients and each time leave 2 different patients out (using combinations)
     possible_patients = list(range(len(patient_valid_test_inds)))
@@ -217,6 +337,39 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         X_test = np.vstack([test_vectors, healthy_test_vectors])
         y_test = np.hstack([np.ones(test_vectors.shape[0]), np.zeros(healthy_test_vectors.shape[0])])
 
+        # Generate model scores for score-based classifiers
+        # TODO: Find a way to deal with cases where the lengths are not equal!!!
+        # min_len = 10000  # min([len(x) for x in patient_probs + healthy_probs])
+        # train_patient_scores = get_model_scores(patient_probs, train_patients, min_len)  # patient_probs[train_patients]
+        # train_healthy_scores = get_model_scores(healthy_probs, list(range(len(healthy_probs))), min_len)  # healthy_probs
+        # test_patient_scores = get_model_scores(patient_probs, test_patients, min_len) # patient_probs[test_patients]
+        # test_healthy_scores = get_model_scores(healthy_test_probs, list(range(len(healthy_test_probs))), min_len)  # healthy_test_probs
+        # # Combine scores for training and testing
+        # train_scores = np.vstack([train_patient_scores, train_healthy_scores])
+        # test_scores = np.vstack([test_patient_scores, test_healthy_scores])
+
+        # # Reshape scores to be 2D if they're 1D
+        # if len(train_scores.shape) == 1:
+        #     train_scores = train_scores.reshape(-1, 1)
+        # if len(test_scores.shape) == 1:
+        #     test_scores = test_scores.reshape(-1, 1)
+
+        disease_base_bins = train_vectors.mean(axis=0)
+        healthy_base_bins = healthy_vectors.mean(axis=0)
+        distribution_test_bins = np.concatenate([test_vectors, healthy_test_vectors])
+
+        disease_base = np.concatenate([patient_probs[i] for i in train_patients])
+        healthy_base = np.concatenate(healthy_probs)
+        distribution_test = [patient_probs[i] for i in test_patients] + list(healthy_test_probs)
+
+        # 0. Distance-based predictions
+        y_pred_jsd = dist_predictor(jensenshannon, disease_base_bins, healthy_base_bins, distribution_test_bins)
+        cm_jsd = confusion_matrix(y_test, y_pred_jsd)
+        y_pred_wsd = dist_predictor(wasserstein_distance, disease_base, healthy_base, distribution_test)
+        cm_wsd = confusion_matrix(y_test, y_pred_wsd)
+        y_pred_ks = dist_predictor(ks_statistic, disease_base, healthy_base, distribution_test)
+        cm_ks = confusion_matrix(y_test, y_pred_ks)
+
         # 1. KNN Classifier
         knn = KNeighborsClassifier(n_neighbors=2)  # You might want to tune this parameter
         knn.fit(X_train, y_train)
@@ -230,129 +383,79 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         y_pred_rf = rf.predict(X_test)
         cm_rf = confusion_matrix(y_test, y_pred_rf)
 
+        importances = rf.feature_importances_
+        rf_feature_importance += importances
+        # feature_names = [f"Feature {i}" for i in range(X_train.shape[1])]
+        # indices = np.argsort(importances)[::-1]
+        # print("Feature importances (top 10):")
+        # for f in range(min(10, len(importances))):
+        #     print(f"{f + 1}. {feature_names[indices[f]]} ({importances[indices[f]]:.4f})")
+        # add results to rf_feature_importance
+
+        # 3. SVM with RBF kernel (Score-based)
+        svm_rbf = SVC(kernel='rbf', class_weight='balanced', random_state=42, probability=True)
+        svm_rbf.fit(X_train, y_train)
+        y_pred_svm_rbf = svm_rbf.predict(X_test)
+        cm_svm_rbf = confusion_matrix(y_test, y_pred_svm_rbf)
+
+        # 4. SVM with Linear kernel (Score-based)
+        svm_linear = SVC(kernel='linear', class_weight='balanced', random_state=42, probability=True)
+        svm_linear.fit(X_train, y_train)
+        y_pred_svm_linear = svm_linear.predict(X_test)
+        cm_svm_linear = confusion_matrix(y_test, y_pred_svm_linear)
+
+        # 5. Logistic Regression (Score-based)
+        logistic = LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
+        logistic.fit(X_train, y_train)
+        y_pred_logistic = logistic.predict(X_test)
+        cm_logistic = confusion_matrix(y_test, y_pred_logistic)
+
+        # 6. Multi-layer Perceptron (Score-based)
+        mlp = MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=1000, random_state=42)
+        mlp.fit(X_train, y_train)
+        y_pred_mlp = mlp.predict(X_test)
+        cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+
+        # 7. Naive Bayes (Score-based)
+        nb = GaussianNB()
+        nb.fit(X_train, y_train)
+        y_pred_nb = nb.predict(X_test)
+        cm_nb = confusion_matrix(y_test, y_pred_nb)
+
         # Append the confusion matrices to the total list
         total_cm_knn.append(cm_knn)
         total_cm_rf.append(cm_rf)
+        total_cm_svm_rbf.append(cm_svm_rbf)
+        total_cm_svm_linear.append(cm_svm_linear)
+        total_cm_logistic.append(cm_logistic)
+        total_cm_mlp.append(cm_mlp)
+        total_cm_nb.append(cm_nb)
+        total_cm_jsd.append(cm_jsd)
+        total_cm_wsd.append(cm_wsd)
+        total_cm_ks.append(cm_ks)
 
-    # Display final results
-    def calculate_average_cm_rates(cm_list):
-        """Calculate the average confusion matrix rates from a list of confusion matrices"""
-        rates_list = []
+    # Print feature importance for Random Forest
+    plot_feature_importances(rf_feature_importance, start_vec_from, args)
 
-        for cm in cm_list:
-            # Calculate rates for each confusion matrix
-            # cm structure: [[TN, FP], [FN, TP]]
-            TN, FP, FN, TP = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
+    # # Execute the function to display average results
+    # display_average_results(total_cm_knn, total_cm_rf, args)
 
-            # Calculate rates (avoiding division by zero)
-            total_actual_positive = TP + FN
-            total_actual_negative = TN + FP
+    # Dictionary of all classifiers and their results
+    all_classifiers = {
+        'KNN (Vector-based)': total_cm_knn,
+        'Random Forest (Vector-based)': total_cm_rf,
+        'SVM RBF (Score-based)': total_cm_svm_rbf,
+        'SVM Linear (Score-based)': total_cm_svm_linear,
+        'Logistic Regression (Score-based)': total_cm_logistic,
+        'MLP (Score-based)': total_cm_mlp,
+        'Naive Bayes (Score-based)': total_cm_nb,
+        'Jensen-Shannon Distance': total_cm_jsd,
+        'Wasserstein Distance': total_cm_wsd,
+        'Kolmogorov-Smirnov Distance': total_cm_ks
+    }
 
-            if total_actual_positive > 0:
-                TPR = TP / total_actual_positive  # Sensitivity/Recall
-                FNR = FN / total_actual_positive  # Miss Rate
-            else:
-                TPR = FNR = 0
-
-            if total_actual_negative > 0:
-                TNR = TN / total_actual_negative  # Specificity
-                FPR = FP / total_actual_negative  # Fall-out
-            else:
-                TNR = FPR = 0
-
-            # Create rate matrix in same structure as confusion matrix
-            rate_matrix = np.array([[TNR, FPR], [FNR, TPR]])
-            rates_list.append(rate_matrix)
-
-        # Calculate average rates across all folds
-        rates_array = np.array(rates_list)
-        avg_rates = np.mean(rates_array, axis=0)
-
-        return np.round(avg_rates, 4)
-
-    def display_average_results(total_cm_knn, total_cm_rf):
-        """Display the average results from multiple k-fold runs"""
-        # Calculate average confusion matrices
-        avg_cm_knn = calculate_average_cm_rates(total_cm_knn)
-        avg_cm_rf = calculate_average_cm_rates(total_cm_rf)
-
-        # Number of folds
-        n_folds = len(total_cm_knn)
-
-        # Print results
-        print(f"Average results across {n_folds} folds:")
-
-        print("\nKNN - Average Confusion Matrix:")
-        # rearrange to: [[TP, FP], [FN, TN]]
-        avg_cm_knn_rearranged = np.array([[avg_cm_knn[1, 1], avg_cm_knn[1, 0]],
-                                          [avg_cm_knn[0, 1], avg_cm_knn[0, 0]]])
-        print(avg_cm_knn_rearranged)
-        # print(f"Average Disease correctly classified: {avg_cm_knn[1, 1]:.2f}")
-        # print(f"Average Healthy correctly classified: {avg_cm_knn[0, 0]:.2f}")
-
-        print("\nRandom Forest - Average Confusion Matrix:")
-        # rearrange to: [[TP, FP], [FN, TN]]
-        avg_cm_rf_rearranged = np.array([[avg_cm_rf[1, 1], avg_cm_rf[1, 0]],
-                                         [avg_cm_rf[0, 1], avg_cm_rf[0, 0]]])
-        print(avg_cm_rf_rearranged)
-        # print(f"Average Disease correctly classified: {avg_cm_rf[1, 1]:.2f}")
-        # print(f"Average Healthy correctly classified: {avg_cm_rf[0, 0]:.2f}")
-
-        # Visualize average confusion matrices
-        plt.figure(figsize=(12, 5))
-
-        plt.subplot(1, 2, 1)
-        sns.heatmap(avg_cm_knn, annot=True, fmt='.2f', cmap='Blues',
-                    xticklabels=['Predicted Healthy', 'Predicted Disease'],
-                    yticklabels=['Actual Healthy', 'Actual Disease'])
-        plt.title('Average Confusion Matrix - KNN')
-
-        plt.subplot(1, 2, 2)
-        sns.heatmap(avg_cm_rf, annot=True, fmt='.2f', cmap='Blues',
-                    xticklabels=['Predicted Healthy', 'Predicted Disease'],
-                    yticklabels=['Actual Healthy', 'Actual Disease'])
-        plt.title('Average Confusion Matrix - Random Forest')
-
-        plt.tight_layout()
-        # save under plot dirs with name including the get_model_config_str
-        model_config_str = get_model_config_str(args)
-        plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR, f"avg_confusion_matrices_{model_config_str}.png"))
-        plt.show()
-
-    # Execute the function to display average results
-    display_average_results(total_cm_knn, total_cm_rf)
-
-    # You could also calculate standard deviations to show variability across folds
-    def calculate_std_cm_rates(cm_list):
-        """Calculate standard deviation of confusion matrix rates across folds"""
-        rates_list = []
-
-        for cm in cm_list:
-            # Calculate rates for each confusion matrix
-            TN, FP, FN, TP = cm[0, 0], cm[0, 1], cm[1, 0], cm[1, 1]
-
-            total_actual_positive = TP + FN
-            total_actual_negative = TN + FP
-
-            if total_actual_positive > 0:
-                TPR = TP / total_actual_positive
-                FNR = FN / total_actual_positive
-            else:
-                TPR = FNR = 0
-
-            if total_actual_negative > 0:
-                TNR = TN / total_actual_negative
-                FPR = FP / total_actual_negative
-            else:
-                TNR = FPR = 0
-
-            rate_matrix = np.array([[TNR, FPR], [FNR, TPR]])
-            rates_list.append(rate_matrix)
-
-        rates_array = np.array(rates_list)
-        std_rates = np.std(rates_array, axis=0)
-        return np.round(std_rates, 4)
-
+    # Display final results for all classifiers
+    display_enhanced_results(all_classifiers, args)
     std_rates_knn = calculate_std_cm_rates(total_cm_knn)
     std_rates_rf = calculate_std_cm_rates(total_cm_rf)
 
@@ -431,11 +534,178 @@ def plot_vectors(patient_vectors, healthy_vectors, args, title_suffix=""):
     plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_DIR, f"patient_vectors_{model_config_str}{title_suffix}.png"))
     plt.show()
 
-    # Print some statistics
+    # Print statistics
     print(f"Vector dimensionality: {all_vectors.shape[1]}")
     print(f"Number of disease patients: {len(patient_vectors)}")
     print(f"Number of healthy patients: {len(healthy_vectors)}")
-    print(
-        f"PCA explained variance ratio: PC1={pca.explained_variance_ratio_[0]:.3f}, PC2={pca.explained_variance_ratio_[1]:.3f}")
+    print(f"PCA explained variance ratio: PC1={pca.explained_variance_ratio_[0]:.3f}, PC2={pca.explained_variance_ratio_[1]:.3f}")
     print(f"Total explained variance by first 2 PCs: {sum(pca.explained_variance_ratio_):.3f}")
 
+
+def get_model_scores(patient_probs, train_patients, min_len=None):
+    min_array_len = min([len(x) for x in patient_probs]) if min_len is None else min_len
+    # Ensure all patient_probs have the same length
+    # patient_probs = [x[:min_array_len] for x in patient_probs]
+    modified_patient_probs = []
+    for i in range(len(patient_probs)):
+        prob = patient_probs[i]
+        if len(prob) < min_array_len:
+            difference_len = min_len - len(prob)
+            # sample that many out of prob
+            prob = np.concatenate([prob, np.random.choice(prob, size=difference_len, replace=True)])
+        else:
+            prob = np.random.choice(prob, size=min_len, replace=False)
+        modified_patient_probs.append(prob)
+    # Stack the probabilities for the training patients
+    patient_probs_stacked = np.vstack([modified_patient_probs[i] for i in train_patients])
+    return patient_probs_stacked
+
+
+def display_enhanced_results(all_classifiers, args):
+    """Display results for all classifiers"""
+
+    n_folds = len(list(all_classifiers.values())[0])
+    print(f"Average results across {n_folds} folds for all classifiers:")
+    print("=" * 80)
+
+    # Calculate and display results for each classifier
+    results_summary = {}
+
+    for classifier_name, cm_list in all_classifiers.items():
+        print(f"\n{classifier_name}:")
+        print("-" * 50)
+
+        # Calculate average and std
+        avg_rates = calculate_average_cm_rates(cm_list)
+        std_rates = calculate_std_cm_rates(cm_list)
+
+        # Store results
+        results_summary[classifier_name] = {
+            'avg_rates': avg_rates,
+            'std_rates': std_rates
+        }
+
+        # Display confusion matrix
+        print("Average Confusion Matrix (Rates):")
+        print("      Pred_Healthy  Pred_Disease")
+        print(f"Act_Healthy    {avg_rates[0, 0]:.4f}    {avg_rates[0, 1]:.4f}  (TNR, FPR)")
+        print(f"Act_Disease    {avg_rates[1, 0]:.4f}    {avg_rates[1, 1]:.4f}  (FNR, TPR)")
+
+        print("\nStandard Deviations:")
+        print("      Pred_Healthy  Pred_Disease")
+        print(f"Act_Healthy    {std_rates[0, 0]:.4f}    {std_rates[0, 1]:.4f}  (TNR, FPR)")
+        print(f"Act_Disease    {std_rates[1, 0]:.4f}    {std_rates[1, 1]:.4f}  (FNR, TPR)")
+
+        # Calculate key metrics
+        TPR = avg_rates[1, 1]  # Sensitivity
+        TNR = avg_rates[0, 0]  # Specificity
+        PPV = TPR / (TPR + avg_rates[0, 1]) if (TPR + avg_rates[0, 1]) > 0 else 0  # Precision
+        F1 = 2 * (PPV * TPR) / (PPV + TPR) if (PPV + TPR) > 0 else 0
+
+        print(f"\nKey Metrics:")
+        print(f"Sensitivity (TPR): {TPR:.4f}")
+        print(f"Specificity (TNR): {TNR:.4f}")
+        print(f"Precision (PPV):   {PPV:.4f}")
+        print(f"F1-Score:          {F1:.4f}")
+
+    # Create comprehensive visualization
+    create_comprehensive_visualization(all_classifiers, args)
+
+    # Create summary comparison
+    create_summary_comparison(results_summary, args)
+
+
+def create_comprehensive_visualization(all_classifiers, args):
+    """Create comprehensive visualization of all classifiers"""
+
+    n_classifiers = len(all_classifiers)
+    cols = 3
+    rows = (n_classifiers + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(15, 5 * rows))
+    if rows == 1:
+        axes = axes.reshape(1, -1)
+    elif n_classifiers == 1:
+        axes = np.array([[axes]])
+
+    axes = axes.flatten()
+
+    for idx, (classifier_name, cm_list) in enumerate(all_classifiers.items()):
+        avg_rates = calculate_average_cm_rates(cm_list)
+
+        sns.heatmap(avg_rates, annot=True, fmt='.3f', cmap='Blues',
+                    xticklabels=['Predicted Healthy', 'Predicted Disease'],
+                    yticklabels=['Actual Healthy', 'Actual Disease'],
+                    ax=axes[idx])
+        axes[idx].set_title(f'{classifier_name}')
+
+    # Hide unused subplots
+    for idx in range(n_classifiers, len(axes)):
+        axes[idx].set_visible(False)
+
+    plt.tight_layout()
+
+    # Save plot
+    model_config_str = get_model_config_str(args)
+    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR,
+                             f"all_classifiers_confusion_matrices_{model_config_str}.png"))
+    plt.show()
+
+
+def create_summary_comparison(results_summary, args):
+    """Create a summary comparison of all classifiers"""
+
+    classifiers = list(results_summary.keys())
+    metrics = ['Sensitivity-TPR', 'Specificity-TNR', 'Precision', 'F1-Score']
+
+    # Calculate metrics for each classifier
+    metric_values = {metric: [] for metric in metrics}
+
+    for classifier_name in classifiers:
+        avg_rates = results_summary[classifier_name]['avg_rates']
+
+        TPR = avg_rates[1, 1]  # Sensitivity
+        TNR = avg_rates[0, 0]  # Specificity
+        PPV = TPR / (TPR + avg_rates[0, 1]) if (TPR + avg_rates[0, 1]) > 0 else 0  # Precision
+        F1 = 2 * (PPV * TPR) / (PPV + TPR) if (PPV + TPR) > 0 else 0
+
+        metric_values['Sensitivity-TPR'].append(TPR)
+        metric_values['Specificity-TNR'].append(TNR)
+        metric_values['Precision'].append(PPV)
+        metric_values['F1-Score'].append(F1)
+
+    # Create comparison plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+
+    x = np.arange(len(classifiers))
+    width = 0.2
+
+    for i, metric in enumerate(metrics):
+        ax.bar(x + i * width, metric_values[metric], width, label=metric, alpha=0.8)
+
+    ax.set_xlabel('Classifiers')
+    ax.set_ylabel('Score')
+    ax.set_title('Classifier Performance Comparison')
+    ax.set_xticks(x + width * 1.5)
+    ax.set_xticklabels(classifiers, rotation=45, ha='right')
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save plot
+    model_config_str = get_model_config_str(args)
+    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR, f"classifier_performance_comparison_{model_config_str}.png"))
+    plt.show()
+
+    # Print summary table
+    print("\n" + "=" * 100)
+    print("CLASSIFIER PERFORMANCE SUMMARY")
+    print("=" * 100)
+    print(f"{'Classifier':<35} {'Sensitivity':<12} {'Specificity':<12} {'Precision':<12} {'F1-Score':<12}")
+    print("-" * 100)
+
+    for i, classifier_name in enumerate(classifiers):
+        print(f"{classifier_name:<35} {metric_values['Sensitivity-TPR'][i]:<12.4f} "
+              f"{metric_values['Specificity-TNR'][i]:<12.4f} {metric_values['Precision'][i]:<12.4f} "
+              f"{metric_values['F1-Score'][i]:<12.4f}")

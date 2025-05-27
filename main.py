@@ -59,6 +59,7 @@ TO_DISPLAY_RATIO_FIGURES = False
 INFERENCE_TO_RANDOM_FOREST = False
 INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
 INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
+INFERENCE_CLASSIFICATION_MODEL = True
 
 dataset_loader = None
 
@@ -1263,7 +1264,7 @@ if __name__ == '__main__':
                                                     df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
 
         # Inference classification model
-        if k_fold > 0:
+        if k_fold > 0 or INFERENCE_CLASSIFICATION_MODEL:
             from inference.inference_classification import inference_classification_model
             inference_classification_model(trained_model, args, df_bld, df_hlt,
                                            test_patient_inds, valid_patient_inds, unique_patient_ids,

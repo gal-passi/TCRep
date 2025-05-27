@@ -84,7 +84,8 @@ class CVCEnsembleModel(nn.Module):
             try:
                 with open(cache_file, 'w') as f:
                     json.dump(existing_cache, f)
-                print(f"Updated cache with {len(new_entries)} new entries, total entries: {len(existing_cache)}")
+                if self.verbose:
+                    print(f"Updated cache with {len(new_entries)} new entries, total entries: {len(existing_cache)}")
             except Exception as e:
                 print(f"Error saving cache: {e}")
 

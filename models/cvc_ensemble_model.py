@@ -39,8 +39,8 @@ class CVCEnsembleModel(nn.Module):
 
         # Cache setup
         self.cache_dir = cache_dir
-        if self.cache_dir and not os.path.exists(self.cache_dir):
-            os.makedirs(self.cache_dir)
+        if self.cache_dir:
+            os.makedirs(self.cache_dir, exist_ok=True)
         self.cache = {}
         self._load_cache()
 

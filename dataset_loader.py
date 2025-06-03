@@ -239,7 +239,18 @@ class DatasetLoader:
             chunk_size = num_of_negatives // 5
             start_index = chunk_size * neg_partition
             end_index = start_index + chunk_size
-            neg_seqs = neg_seqs[start_index:end_index]
+            new_neg_seqs = neg_seqs[start_index:end_index]
+            if len(positive_seqs) * neg_pos_ratio > len(new_neg_seqs):
+                neg_seqs_to_add = int(len(positive_seqs) * neg_pos_ratio - len(new_neg_seqs))
+                remaining_neg_seqs = np.array(list(set(neg_seqs) - set(new_neg_seqs)))
+                # add randomly sequences that do not appear in new_neg_seqs but do appear in neg_seqs
+                np.random.seed(neg_partition)
+                replace = True if neg_seqs_to_add > len(remaining_neg_seqs) else False
+                neg_seqs = np.concatenate((new_neg_seqs, np.random.choice(remaining_neg_seqs, size=neg_seqs_to_add, replace=replace)))
+                np.random.seed(42)
+            else:
+                neg_seqs = new_neg_seqs
+
 
         if use_similar_negatives:
             neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition)

@@ -59,7 +59,7 @@ TO_DISPLAY_RATIO_FIGURES = False
 INFERENCE_TO_RANDOM_FOREST = False
 INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
 INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
-INFERENCE_CLASSIFICATION_MODEL = True
+INFERENCE_CLASSIFICATION_MODEL = False
 
 dataset_loader = None
 
@@ -1119,7 +1119,7 @@ if __name__ == '__main__':
             if to_ensemble:
                 from cache_handler import get_model_dir
                 cache_dir = get_model_dir(args)
-                trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='median')  # or 'weighted_sum'
+                trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='min')  # or 'weighted_sum'
             elif test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1151,6 +1151,25 @@ if __name__ == '__main__':
                                                  )
 
     if not dont_plot:
+        # if not dont_inference and not force_retrain and not log_wandb:
+        #     class TrainedModelWrapper:
+        #         def __init__(self, trained_model, aaseq_to_ratio, ratio_threshold=0.1e-5):
+        #             self.trained_model = trained_model
+        #             self.aaseq_to_ratio = aaseq_to_ratio
+        #             self.ratio_threshold = ratio_threshold
+        #
+        #         def to(self, device):
+        #             self.trained_model.to(device)
+        #
+        #         def eval(self):
+        #             self.trained_model.eval()
+        #
+        #         def __call__(self, sequences):
+        #             sequences = sequences[
+        #                 self.aaseq_to_ratio(sequences, dont_use_function=True).values >= self.ratio_threshold]
+        #             return self.trained_model(sequences)
+        #     trained_model = TrainedModelWrapper(trained_model, aaseq_to_ratio)
+
         # New distribution plot
         print("Plotting the output distributions per patient (New)")
         plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
@@ -1205,6 +1224,7 @@ if __name__ == '__main__':
             print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
             print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
             print(f"Validation F1: {val_f1:.4f}")
+            exit(0)
 
         # Create a dataframe with the AASeq, embedding, label and set_origin as columns
         if INFERENCE_TO_RANDOM_FOREST:

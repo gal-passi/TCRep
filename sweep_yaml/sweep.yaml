@@ -23,7 +23,7 @@ parameters:
   pos_weights:
     distribution: uniform
     min: 3
-    max: 6  # Sweeping different positive weights
+    max: 8  # Sweeping different positive weights
   learning_rate:
     value: 0.0025  # Fixed default value
 #    distribution: log_uniform_values
@@ -48,6 +48,8 @@ parameters:
     value: False  # Always False
   test_mode_epoch:
     value: -1  # Always -1
+  dont_inference:
+    value: True  # Always True
   classification_dropout:
     distribution: uniform
     min: 0.1
@@ -66,6 +68,8 @@ parameters:
     value: False  # Always False
   dist_loss_type:
     value: None
+  ch_type:
+    value: 'v1'
 #    value: 'ReduceLROnPlateau'  # Fixed default value
 #    distribution: uniform
 #    min: 0.1

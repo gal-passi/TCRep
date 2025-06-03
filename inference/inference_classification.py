@@ -24,6 +24,10 @@ INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
 INFERENCE_CONFUSION_MATRIX_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices/")
 INFERENCE_VECTOR_PLOTS_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots/")
 
+# Models Configurations:
+DISABLE_BAD_MODELS = True
+DISABLE_DIST_MODELS = True
+
 
 def create_binned_disease_probs(patient_ratio, disease_probs, num_bins=20):
     """
@@ -98,15 +102,8 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
             patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values
             patient_vector_ratio = create_binned_disease_probs(patient_ratio, disease_probs, num_bins=vector_representation_bins)
             patient_vector_ratio /= patient_vector_ratio.max()
-            patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio[start_vec_from:]], axis=0))
-            pass
-            # bin patient ratio
-            # patient_ratio = aaseq_to_ratio(patient_seqs, dont_use_function=True).values ** 0.2
-            # patient_ratio = np.digitize(patient_ratio, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
-            # # Vectorized bin counting
-            # patient_vector_ratio = np.bincount(patient_ratio, minlength=10).astype(np.float32)
-            # patient_vector_ratio /= patient_vector_ratio.sum()
-            # patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
+            patient_vector_ratio = patient_vector_ratio[start_vec_from:]
+            patient_vectors.append(np.concatenate([patient_vector, patient_vector_ratio], axis=0))
         else:
             patient_vectors.append(patient_vector)
     patient_vectors = np.array(patient_vectors)
@@ -148,57 +145,6 @@ def calculate_average_cm_rates(cm_list):
     avg_rates = np.mean(rates_array, axis=0)
 
     return np.round(avg_rates, 4)
-
-
-# Display average results from multiple k-fold runs
-def display_average_results(total_cm_knn, total_cm_rf, args):
-    """Display the average results from multiple k-fold runs"""
-    # Calculate average confusion matrices
-    avg_cm_knn = calculate_average_cm_rates(total_cm_knn)
-    avg_cm_rf = calculate_average_cm_rates(total_cm_rf)
-
-    # Number of folds
-    n_folds = len(total_cm_knn)
-
-    # Print results
-    print(f"Average results across {n_folds} folds:")
-
-    print("\nKNN - Average Confusion Matrix:")
-    # rearrange to: [[TP, FP], [FN, TN]]
-    avg_cm_knn_rearranged = np.array([[avg_cm_knn[1, 1], avg_cm_knn[1, 0]],
-                                      [avg_cm_knn[0, 1], avg_cm_knn[0, 0]]])
-    print(avg_cm_knn_rearranged)
-    # print(f"Average Disease correctly classified: {avg_cm_knn[1, 1]:.2f}")
-    # print(f"Average Healthy correctly classified: {avg_cm_knn[0, 0]:.2f}")
-
-    print("\nRandom Forest - Average Confusion Matrix:")
-    # rearrange to: [[TP, FP], [FN, TN]]
-    avg_cm_rf_rearranged = np.array([[avg_cm_rf[1, 1], avg_cm_rf[1, 0]],
-                                     [avg_cm_rf[0, 1], avg_cm_rf[0, 0]]])
-    print(avg_cm_rf_rearranged)
-    # print(f"Average Disease correctly classified: {avg_cm_rf[1, 1]:.2f}")
-    # print(f"Average Healthy correctly classified: {avg_cm_rf[0, 0]:.2f}")
-
-    # Visualize average confusion matrices
-    plt.figure(figsize=(12, 5))
-
-    plt.subplot(1, 2, 1)
-    sns.heatmap(avg_cm_knn, annot=True, fmt='.2f', cmap='Blues',
-                xticklabels=['Predicted Healthy', 'Predicted Disease'],
-                yticklabels=['Actual Healthy', 'Actual Disease'])
-    plt.title('Average Confusion Matrix - KNN')
-
-    plt.subplot(1, 2, 2)
-    sns.heatmap(avg_cm_rf, annot=True, fmt='.2f', cmap='Blues',
-                xticklabels=['Predicted Healthy', 'Predicted Disease'],
-                yticklabels=['Actual Healthy', 'Actual Disease'])
-    plt.title('Average Confusion Matrix - Random Forest')
-
-    plt.tight_layout()
-    # save under plot dirs with name including the get_model_config_str
-    model_config_str = get_model_config_str(args)
-    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_DIR, f"avg_confusion_matrices_{model_config_str}.png"))
-    plt.show()
 
 
 # Calculate standard deviations to show variability across folds
@@ -256,10 +202,14 @@ def dist_predictor(metric_func, disease_base, healthy_base, targets, num_workers
     return np.array(y_pred)
 
 
-def plot_feature_importances(rf_feature_importance, start_vec_from, args):
+def plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to_vector, args):
     print("\nRandom Forest Sorted Feature Importances (averaged across folds):")
     rf_feature_importance /= rf_feature_importance.max()
-    feature_names = [f"Feature {i + start_vec_from}" for i in range(len(rf_feature_importance))]
+    if add_ratio_to_vector:
+        feature_names = [f"Feature {i + start_vec_from}" for i in range(len(rf_feature_importance) // 2)] + \
+                        [f"Ratio Feature {i + start_vec_from + len(rf_feature_importance) // 2}" for i in range(len(rf_feature_importance) // 2)]
+    else:
+        feature_names = [f"Feature {i + start_vec_from}" for i in range(len(rf_feature_importance))]
     indices = np.argsort(rf_feature_importance)[::-1]
     plt.figure(figsize=(10, 6))
     plt.title("Feature Importances (Normalized)")
@@ -274,9 +224,9 @@ def plot_feature_importances(rf_feature_importance, start_vec_from, args):
 
 def inference_classification_model(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
-                                   add_ratio_to_vector=False, start_vec_from=8,
+                                   add_ratio_to_vector=False, start_vec_from=25,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
-                                   vector_representation_bins=20, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
+                                   vector_representation_bins=50, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
     # make sure that plot dirs exists
     os.makedirs(INFERENCE_CONFUSION_MATRIX_DIR, exist_ok=True)
     os.makedirs(INFERENCE_VECTOR_PLOTS_DIR, exist_ok=True)
@@ -311,6 +261,7 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     total_cm_knn = []
     total_cm_rf = []
     total_cm_svm_rbf = []
+    total_cm_knn_rbf = []
     total_cm_svm_linear = []
     total_cm_logistic = []
     total_cm_mlp = []
@@ -318,7 +269,7 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     total_cm_jsd = []
     total_cm_wsd = []
     total_cm_ks = []
-    rf_feature_importance = np.zeros(vector_representation_bins - start_vec_from)
+    rf_feature_importance = np.zeros(len(patient_vectors[0]))
 
     # Do k-fold on patients and each time leave 2 different patients out (using combinations)
     possible_patients = list(range(len(patient_valid_test_inds)))
@@ -354,21 +305,22 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         # if len(test_scores.shape) == 1:
         #     test_scores = test_scores.reshape(-1, 1)
 
-        disease_base_bins = train_vectors.mean(axis=0)
-        healthy_base_bins = healthy_vectors.mean(axis=0)
-        distribution_test_bins = np.concatenate([test_vectors, healthy_test_vectors])
+        if not DISABLE_DIST_MODELS:
+            disease_base_bins = train_vectors.mean(axis=0)
+            healthy_base_bins = healthy_vectors.mean(axis=0)
+            distribution_test_bins = np.concatenate([test_vectors, healthy_test_vectors])
 
-        disease_base = np.concatenate([patient_probs[i] for i in train_patients])
-        healthy_base = np.concatenate(healthy_probs)
-        distribution_test = [patient_probs[i] for i in test_patients] + list(healthy_test_probs)
+            disease_base = np.concatenate([patient_probs[i] for i in train_patients])
+            healthy_base = np.concatenate(healthy_probs)
+            distribution_test = [patient_probs[i] for i in test_patients] + list(healthy_test_probs)
 
-        # 0. Distance-based predictions
-        y_pred_jsd = dist_predictor(jensenshannon, disease_base_bins, healthy_base_bins, distribution_test_bins)
-        cm_jsd = confusion_matrix(y_test, y_pred_jsd)
-        y_pred_wsd = dist_predictor(wasserstein_distance, disease_base, healthy_base, distribution_test)
-        cm_wsd = confusion_matrix(y_test, y_pred_wsd)
-        y_pred_ks = dist_predictor(ks_statistic, disease_base, healthy_base, distribution_test)
-        cm_ks = confusion_matrix(y_test, y_pred_ks)
+            # 0. Distance-based predictions
+            y_pred_jsd = dist_predictor(jensenshannon, disease_base_bins, healthy_base_bins, distribution_test_bins)
+            cm_jsd = confusion_matrix(y_test, y_pred_jsd)
+            y_pred_wsd = dist_predictor(wasserstein_distance, disease_base, healthy_base, distribution_test)
+            cm_wsd = confusion_matrix(y_test, y_pred_wsd)
+            y_pred_ks = dist_predictor(ks_statistic, disease_base, healthy_base, distribution_test)
+            cm_ks = confusion_matrix(y_test, y_pred_ks)
 
         # 1. KNN Classifier
         knn = KNeighborsClassifier(n_neighbors=2)  # You might want to tune this parameter
@@ -385,12 +337,6 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
 
         importances = rf.feature_importances_
         rf_feature_importance += importances
-        # feature_names = [f"Feature {i}" for i in range(X_train.shape[1])]
-        # indices = np.argsort(importances)[::-1]
-        # print("Feature importances (top 10):")
-        # for f in range(min(10, len(importances))):
-        #     print(f"{f + 1}. {feature_names[indices[f]]} ({importances[indices[f]]:.4f})")
-        # add results to rf_feature_importance
 
         # 3. SVM with RBF kernel (Score-based)
         svm_rbf = SVC(kernel='rbf', class_weight='balanced', random_state=42, probability=True)
@@ -398,61 +344,87 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
         y_pred_svm_rbf = svm_rbf.predict(X_test)
         cm_svm_rbf = confusion_matrix(y_test, y_pred_svm_rbf)
 
-        # 4. SVM with Linear kernel (Score-based)
-        svm_linear = SVC(kernel='linear', class_weight='balanced', random_state=42, probability=True)
-        svm_linear.fit(X_train, y_train)
-        y_pred_svm_linear = svm_linear.predict(X_test)
-        cm_svm_linear = confusion_matrix(y_test, y_pred_svm_linear)
+        # TODO: Figure out how to run KNN with RBF kernel correctly!
+        # KNN with RBF kernel
+        from sklearn.metrics.pairwise import rbf_kernel
+        gamma = 1.0 / (2 * np.var(X_train))  # A common heuristic
+        # Compute RBF kernel matrix
+        X_train_rbf = rbf_kernel(X_train, X_train, gamma=gamma)
+        X_test_rbf = rbf_kernel(X_test, X_train, gamma=gamma)
+        # Apply KNN on the transformed features
+        knn_rbf = KNeighborsClassifier(n_neighbors=3, metric='euclidean')
+        knn_rbf.fit(X_train_rbf, y_train)
+        y_pred_knn_rbf = knn_rbf.predict(X_test_rbf)
+        cm_knn_rbf = confusion_matrix(y_test, y_pred_knn_rbf)
 
-        # 5. Logistic Regression (Score-based)
-        logistic = LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
-        logistic.fit(X_train, y_train)
-        y_pred_logistic = logistic.predict(X_test)
-        cm_logistic = confusion_matrix(y_test, y_pred_logistic)
+        # knn_rbf = KNeighborsClassifier(n_neighbors=2, metric='rbf')  # Not directly supported, using default metric
+        # knn_rbf.fit(X_train, y_train)
+        # y_pred_knn_rbf = knn_rbf.predict(X_test)
+        # cm_knn_rbf = confusion_matrix(y_test, y_pred_knn_rbf)
 
-        # 6. Multi-layer Perceptron (Score-based)
-        mlp = MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=1000, random_state=42)
-        mlp.fit(X_train, y_train)
-        y_pred_mlp = mlp.predict(X_test)
-        cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+        if not DISABLE_BAD_MODELS:
+            # 4. SVM with Linear kernel (Score-based)
+            svm_linear = SVC(kernel='linear', class_weight='balanced', random_state=42, probability=True)
+            svm_linear.fit(X_train, y_train)
+            y_pred_svm_linear = svm_linear.predict(X_test)
+            cm_svm_linear = confusion_matrix(y_test, y_pred_svm_linear)
 
-        # 7. Naive Bayes (Score-based)
-        nb = GaussianNB()
-        nb.fit(X_train, y_train)
-        y_pred_nb = nb.predict(X_test)
-        cm_nb = confusion_matrix(y_test, y_pred_nb)
+            # 5. Logistic Regression (Score-based)
+            logistic = LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
+            logistic.fit(X_train, y_train)
+            y_pred_logistic = logistic.predict(X_test)
+            cm_logistic = confusion_matrix(y_test, y_pred_logistic)
+
+            # 6. Multi-layer Perceptron (Score-based)
+            mlp = MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=1000, random_state=42)
+            mlp.fit(X_train, y_train)
+            y_pred_mlp = mlp.predict(X_test)
+            cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+
+            # 7. Naive Bayes (Score-based)
+            nb = GaussianNB()
+            nb.fit(X_train, y_train)
+            y_pred_nb = nb.predict(X_test)
+            cm_nb = confusion_matrix(y_test, y_pred_nb)
 
         # Append the confusion matrices to the total list
         total_cm_knn.append(cm_knn)
         total_cm_rf.append(cm_rf)
         total_cm_svm_rbf.append(cm_svm_rbf)
-        total_cm_svm_linear.append(cm_svm_linear)
-        total_cm_logistic.append(cm_logistic)
-        total_cm_mlp.append(cm_mlp)
-        total_cm_nb.append(cm_nb)
-        total_cm_jsd.append(cm_jsd)
-        total_cm_wsd.append(cm_wsd)
-        total_cm_ks.append(cm_ks)
+        total_cm_knn_rbf.append(cm_knn_rbf)
+        if not DISABLE_BAD_MODELS:
+            total_cm_svm_linear.append(cm_svm_linear)
+            total_cm_logistic.append(cm_logistic)
+            total_cm_mlp.append(cm_mlp)
+            total_cm_nb.append(cm_nb)
+        if not DISABLE_DIST_MODELS:
+            total_cm_jsd.append(cm_jsd)
+            total_cm_wsd.append(cm_wsd)
+            total_cm_ks.append(cm_ks)
 
     # Print feature importance for Random Forest
-    plot_feature_importances(rf_feature_importance, start_vec_from, args)
-
-    # # Execute the function to display average results
-    # display_average_results(total_cm_knn, total_cm_rf, args)
+    plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to_vector, args)
 
     # Dictionary of all classifiers and their results
     all_classifiers = {
         'KNN (Vector-based)': total_cm_knn,
         'Random Forest (Vector-based)': total_cm_rf,
         'SVM RBF (Score-based)': total_cm_svm_rbf,
-        'SVM Linear (Score-based)': total_cm_svm_linear,
-        'Logistic Regression (Score-based)': total_cm_logistic,
-        'MLP (Score-based)': total_cm_mlp,
-        'Naive Bayes (Score-based)': total_cm_nb,
-        'Jensen-Shannon Distance': total_cm_jsd,
-        'Wasserstein Distance': total_cm_wsd,
-        'Kolmogorov-Smirnov Distance': total_cm_ks
+        'KNN RBF Kernel (Vector-based)': total_cm_knn_rbf
     }
+    if not DISABLE_BAD_MODELS:
+        all_classifiers.update({
+            'SVM Linear (Score-based)': total_cm_svm_linear,
+            'Logistic Regression (Score-based)': total_cm_logistic,
+            'MLP (Score-based)': total_cm_mlp,
+            'Naive Bayes (Score-based)': total_cm_nb
+        })
+    if not DISABLE_DIST_MODELS:
+        all_classifiers.update({
+            'Jensen-Shannon Distance': total_cm_jsd,
+            'Wasserstein Distance': total_cm_wsd,
+            'Kolmogorov-Smirnov Distance': total_cm_ks
+        })
 
     # Display final results for all classifiers
     display_enhanced_results(all_classifiers, args)
@@ -469,8 +441,6 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     print("      Pred_Healthy  Pred_Disease")
     print(f"Act_Healthy    {std_rates_rf[0, 0]:.4f}    {std_rates_rf[0, 1]:.4f}  (TNR, FPR)")
     print(f"Act_Disease    {std_rates_rf[1, 0]:.4f}    {std_rates_rf[1, 1]:.4f}  (FNR, TPR)")
-
-    # TODO: Check the following code!
 
     # Plot dimensionality reduction visualizations
     all_healthy_vectors = np.vstack([healthy_vectors, healthy_test_vectors])
@@ -656,7 +626,7 @@ def create_summary_comparison(results_summary, args):
     """Create a summary comparison of all classifiers"""
 
     classifiers = list(results_summary.keys())
-    metrics = ['Sensitivity-TPR', 'Specificity-TNR', 'Precision', 'F1-Score']
+    metrics = ['Sensitivity-TPR', 'Specificity-TNR', 'Precision', 'F1-Score', 'Accuracy']
 
     # Calculate metrics for each classifier
     metric_values = {metric: [] for metric in metrics}
@@ -668,11 +638,13 @@ def create_summary_comparison(results_summary, args):
         TNR = avg_rates[0, 0]  # Specificity
         PPV = TPR / (TPR + avg_rates[0, 1]) if (TPR + avg_rates[0, 1]) > 0 else 0  # Precision
         F1 = 2 * (PPV * TPR) / (PPV + TPR) if (PPV + TPR) > 0 else 0
+        accuracy = (avg_rates[0, 0] + avg_rates[1, 1]) / np.sum(avg_rates) if np.sum(avg_rates) > 0 else 0
 
         metric_values['Sensitivity-TPR'].append(TPR)
         metric_values['Specificity-TNR'].append(TNR)
         metric_values['Precision'].append(PPV)
         metric_values['F1-Score'].append(F1)
+        metric_values['Accuracy'].append(accuracy)
 
     # Create comparison plot
     fig, ax = plt.subplots(figsize=(12, 8))

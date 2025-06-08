@@ -18,6 +18,7 @@ from sklearn.naive_bayes import GaussianNB
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance, ks_2samp
 from multiprocessing import Pool, cpu_count
+from cache_handler import load_model_state
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
@@ -93,7 +94,7 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         # bin using np into x bins (min value is 0 and max is 1)
         disease_probs_dig = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
         # Vectorized bin counting
-        patient_vector = np.bincount(disease_probs_dig, minlength=10).astype(np.float32)
+        patient_vector = np.bincount(disease_probs_dig, minlength=vector_representation_bins).astype(np.float32)
         # patient_vector /= patient_vector.sum()
         patient_vector /= patient_vector.max()
         patient_vector = patient_vector[start_vec_from:]
@@ -224,9 +225,9 @@ def plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to
 
 def inference_classification_model(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
-                                   add_ratio_to_vector=False, start_vec_from=25,
+                                   add_ratio_to_vector=False, start_vec_from=20,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
-                                   vector_representation_bins=50, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
+                                   vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
     # make sure that plot dirs exists
     os.makedirs(INFERENCE_CONFUSION_MATRIX_DIR, exist_ok=True)
     os.makedirs(INFERENCE_VECTOR_PLOTS_DIR, exist_ok=True)
@@ -425,6 +426,9 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
             'Wasserstein Distance': total_cm_wsd,
             'Kolmogorov-Smirnov Distance': total_cm_ks
         })
+
+    if only_all_classifiers:
+        return all_classifiers
 
     # Display final results for all classifiers
     display_enhanced_results(all_classifiers, args)
@@ -681,3 +685,44 @@ def create_summary_comparison(results_summary, args):
         print(f"{classifier_name:<35} {metric_values['Sensitivity-TPR'][i]:<12.4f} "
               f"{metric_values['Specificity-TNR'][i]:<12.4f} {metric_values['Precision'][i]:<12.4f} "
               f"{metric_values['F1-Score'][i]:<12.4f}")
+
+
+def inference_classification_model_combined(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
+                                   add_ratio_to_vector=False, start_vec_from=20,
+                                   # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
+                                   vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
+    all_classifiers = []
+
+    for fold_ind in range(1, 6):
+        # Load the model state for the current fold
+        args.k_fold = fold_ind
+        trained_model = load_model_state(trained_model, args, args.epochs - 1, device)
+        if trained_model is None:
+            print(f"Model for fold {fold_ind} not found. Skipping this fold.")
+            continue
+
+        # Run inference for the current fold
+        fold_classifier = inference_classification_model(
+            trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds,
+            unique_patient_ids, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+            aaseq_to_ratio, device, add_ratio_to_vector=add_ratio_to_vector,
+            start_vec_from=start_vec_from, vector_representation_bins=vector_representation_bins,
+            num_of_healthy_patients=num_of_healthy_patients,
+            num_of_healthy_test_patients=num_of_healthy_test_patients,
+            only_all_classifiers=True
+        )
+
+        # Append the results of the current fold to the all_classifiers list
+        all_classifiers.append(fold_classifier)
+
+    # Combine results from all folds
+    combined_classifiers = {}
+    for classifier_name in all_classifiers[0].keys():
+        combined_classifiers[classifier_name] = []
+        for fold_classifier in all_classifiers:
+            combined_classifiers[classifier_name].extend(fold_classifier[classifier_name])
+
+    # Display combined results using display_enhanced_results
+    args.k_fold = 0
+    display_enhanced_results(combined_classifiers, args)

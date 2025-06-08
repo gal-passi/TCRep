@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import KFold
-from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, accuracy_score
+from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, accuracy_score, f1_score
 from itertools import combinations, chain
 import multiprocessing as mp
 from collections import Counter
@@ -654,7 +654,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
               scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, neg_partition,
-              use_similar_negatives, device):
+              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -685,6 +685,9 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "ch_type": ch_type,
             "neg_partition": neg_partition,
             "use_similar_negatives": use_similar_negatives,
+            "filter_num_of_patients": filter_num_of_patients,
+            "filter_to_inflate": filter_to_inflate,
+            "change_negatives": change_negatives,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -716,6 +719,7 @@ def sweep_model():
     ratio = wandb.config.ratio
     # dist_loss_type = wandb.config.dist_loss_type
     # ch_type = wandb.config.ch_type
+    change_negatives = wandb.config.change_negatives
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Load the dataset
@@ -762,6 +766,7 @@ def sweep_model():
                                          aaseq_to_dist=aaseq_to_dist,
                                          masking=masking,
                                          ratio=ratio,
+                                         change_negatives=change_negatives,
                                          args=args,
                                          )
 
@@ -790,6 +795,7 @@ if __name__ == '__main__':
     dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
+    dataset_filter_types = ['none', 'num_of_patients=3,to_inflate=False', 'num_of_patients=4,to_inflate=False']
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -822,6 +828,11 @@ if __name__ == '__main__':
     parser.add_argument('--negative_partition', '--neg_partition', type=int, default=0, help='Negative Partition Index (0 for no partitioning of the negative samples)')
     parser.add_argument('--to_ensemble', '--ensemble', '-ensemble', action='store_true', help='Ensemble the models (Only applicable after first training with all 1..5 negative_partitioning)')
     parser.add_argument('--use_similar_negatives', action='store_true', help='Use similar negatives to training positives for training (similar according to Levenstein distance)')
+    parser.add_argument('--combine_classification', '-comb_class', action='store_true', help='Combine classification model results (Only applicable after first training with all 1..5 k-folds)')
+    parser.add_argument('--dataset_filter_num_of_patients', type=int, default=3, help='Number of patients to filter the dataset by (take positive from this num of patients)')
+    parser.add_argument('--dataset_filter_dont_inflate', '-no_inflate', action='store_true', help='Do not inflate the dataset when filtering positives and negatives')
+    parser.add_argument('--changing_negatives', '-change_neg', action='store_true', help='Whether to run sample the negatives each epoch or not')
+    parser.add_argument('--remove_seqs_by_len', action='store_true', help='Whether to remove sequences from valid/test sets by length or not')
 
     args = parser.parse_args()
 
@@ -857,6 +868,11 @@ if __name__ == '__main__':
     neg_partition = args.negative_partition
     to_ensemble = args.to_ensemble
     use_similar_negatives = args.use_similar_negatives
+    combine_classification = args.combine_classification
+    filter_num_of_patients = args.dataset_filter_num_of_patients
+    filter_to_inflate = not args.dataset_filter_dont_inflate
+    changing_negatives = args.changing_negatives
+    remove_seqs_by_len = args.remove_seqs_by_len
 
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
@@ -871,8 +887,9 @@ if __name__ == '__main__':
     assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
     assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
     assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
-    assert not ((neg_partition > 0) and to_k_fold), "Cannot use negative partitioning and k-fold cross-validation at the same time"  # Problem with cache for example
+    # assert not ((neg_partition > 0) and to_k_fold), "Cannot use negative partitioning and k-fold cross-validation at the same time"  # Problem with cache for example
     assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
+    assert not (combine_classification and to_k_fold), "Cannot combine classification and k-fold cross-validation at the same time"
 
 
     print("RUN CONFIGURATION:")
@@ -899,7 +916,10 @@ if __name__ == '__main__':
     print(f"\tUsing Ratio: {args.ratio}")
     print(f"\tDist Loss Type: {args.dist_loss_type}")
     print(f"\tClassification Head Type: {args.ch_type}")
-    print(f"\tUsing similar negatives to positives in train: {args.use_similar_negatives}")
+    print(f"\tDataset Filter Number of Patients: {args.dataset_filter_num_of_patients}")
+    print(f"\tDataset Filter Inflate: {not args.dataset_filter_dont_inflate}")
+    print(f"\tNegative Partition Index: {args.negative_partition}")
+    print(f"\tChanging Negatives: {args.changing_negatives}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -959,7 +979,9 @@ if __name__ == '__main__':
 
     dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
                                    k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
-                                   use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio)
+                                   use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                   filter_num_of_patients=filter_num_of_patients, filter_to_inflate=filter_to_inflate,
+                                   remove_seqs_by_len=remove_seqs_by_len)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1099,6 +1121,9 @@ if __name__ == '__main__':
                 ch_type=ch_type,
                 neg_partition=neg_partition,
                 use_similar_negatives=use_similar_negatives,
+                filter_num_of_patients=filter_num_of_patients,
+                filter_to_inflate=filter_to_inflate,
+                change_negatives=changing_negatives,
                 device=device,
             )
 
@@ -1120,6 +1145,8 @@ if __name__ == '__main__':
                 from cache_handler import get_model_dir
                 cache_dir = get_model_dir(args)
                 trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='min')  # or 'weighted_sum'
+            elif combine_classification:
+                trained_model = model
             elif test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1147,6 +1174,7 @@ if __name__ == '__main__':
                                                  aaseq_to_dist=aaseq_to_dist,
                                                  masking=masking,
                                                  ratio=ratio,
+                                                 change_negatives=changing_negatives,
                                                  args=args,
                                                  )
 
@@ -1201,10 +1229,41 @@ if __name__ == '__main__':
 
         # Inference ensemble model
         if to_ensemble:
+            # TODO: Added this inference: remove later!!!
+            # def plot_histogram_of_lengths(all_seqs, title_extra=''):
+            #     lengths = [len(seq) for seq in all_seqs]
+            #     possible_lengths = sorted(set(lengths))
+            #     # Extend bins so each length is fully included (add +1 to the max for right edge)
+            #     bins = list(range(min(possible_lengths), max(possible_lengths) + 2))
+            #     plt.figure(figsize=(10, 6))
+            #     counts, bins, patches = plt.hist(lengths, bins=bins, color='blue', alpha=0.7, align='left')
+            #     # Annotate each bar with the count
+            #     for count, patch in zip(counts, patches):
+            #         if count > 0:
+            #             plt.text(patch.get_x() + patch.get_width() / 2, count + 0.5, str(int(count)),
+            #                      ha='center', va='bottom', fontsize=9)
+            #     # Set x-ticks to all possible lengths
+            #     plt.xticks(possible_lengths)
+            #     plt.xlabel('Sequence Length')
+            #     plt.ylabel('Count')
+            #     plt.title(f'Histogram of Sequence Lengths {title_extra} - Total Sequences: {len(all_seqs)}')
+            #     plt.tight_layout()
+            #     plt.show()
+            # all_seqs = df_bld['AASeq'].unique()
+            # plot_histogram_of_lengths(all_seqs, '(All Sequences)')
+            # plot_histogram_of_lengths(positive_seqs, '(Positive Sequences)')
+            # plot_histogram_of_lengths(neg_seqs, '(Negative Sequences)')
+
             trained_model.to(device)
             from model_trainer import evaluate_model, CustomLossCriterion
             class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
             criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+
+            # Added this to plot confusion matrices
+            from inference.inference_ensemble import plot_confusion_matrices
+            from cache_handler import get_model_config_str
+            model_string = get_model_config_str(args)
+            plot_confusion_matrices(trained_model, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, model_string, device)
 
             default_to_return = trained_model.default_to_return
             if default_to_return == 'weighted_sum':
@@ -1225,6 +1284,21 @@ if __name__ == '__main__':
             print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
             print(f"Validation F1: {val_f1:.4f}")
             exit(0)
+
+        if neg_partition > 0:
+            from model_trainer import evaluate_model, CustomLossCriterion
+            class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
+            criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio,
+                                            aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+            val_metrics = evaluate_model(trained_model, valid_pos_seqs, valid_neg_seqs, criterion, device)
+            val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
+            print(
+                f"Validation Loss: {val_loss:.4f}, Validation Accuracy: {val_acc:.4f}, Validation AUC: {val_auc:.4f}, Validation PR AUC: {val_prauc:.4f}")
+            print(
+                f"Validation TPR: {val_tpr}, Validation FPR: {val_fpr}, Validation TNR: {val_tnr}, Validation FNR: {val_fnr}")
+            print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
+            print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
+            print(f"Validation F1: {val_f1:.4f}")
 
         # Create a dataframe with the AASeq, embedding, label and set_origin as columns
         if INFERENCE_TO_RANDOM_FOREST:
@@ -1289,6 +1363,12 @@ if __name__ == '__main__':
             inference_classification_model(trained_model, args, df_bld, df_hlt,
                                            test_patient_inds, valid_patient_inds, unique_patient_ids,
                                            valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device)
+        elif combine_classification:
+            from inference.inference_classification import inference_classification_model_combined
+            inference_classification_model_combined(trained_model, args, df_bld, df_hlt,
+                                                    test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                                                    aaseq_to_ratio, device)
 
         # from inference.inference_testing import inference_ratio_distance
         # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,

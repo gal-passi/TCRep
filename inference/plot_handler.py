@@ -179,7 +179,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
     ax1.set_ylim(0, 1.1)
-    ax1.legend()
+    # ax1.legend()
 
     # Subplot 2: Healthy Patients Distributions
     ax2.set_title("Healthy vs Ill Patients")
@@ -223,7 +223,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
     ax2.set_ylim(0, 1.1)
-    ax2.legend()
+    # ax2.legend()
     # Save the plot
     os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
     plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution_per_patients_{get_model_config_str(args)}.png")

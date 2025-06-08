@@ -1,5 +1,8 @@
 import os
 import pickle
+from cProfile import label
+
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import pandas as pd
@@ -31,7 +34,9 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 
 
 class DatasetLoader:
-    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0, dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10):
+    def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
+                 dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
+                 filter_num_of_patients=3, filter_to_inflate=False, remove_seqs_by_len=False):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -113,17 +118,77 @@ class DatasetLoader:
         if dataset_type == 'article_sle':
             num_of_patients = 2
         else:
-            num_of_patients = 3
+            num_of_patients = filter_num_of_patients
 
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
+        # # TODO: DELETE:
+        # temp_df_h = df_hlt
+        # grouped_h = temp_df_h.groupby('patient_id')['AASeq'].unique()
+        # aa_seq_counter_h = Counter()
+        # for aa_seqs in grouped_h:
+        #     aa_seq_counter_h.update(aa_seqs)
+        # valid_aa_seqs_h = set({aa_seq for aa_seq, count in aa_seq_counter_h.items() if count >= 2})
+        # common_seqs_healthy_and_disease = []
+        # total_num_of_positives = []
+        # for i in range(2, 17):
+        #     num_of_patients = i
+        #     train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata,
+        #                                                          train_patient_ids,
+        #                                                          dataset_type, cell_type,
+        #                                                          num_of_patients=num_of_patients,
+        #                                                          filter_to_inflate=filter_to_inflate)
+        #     # Calculate positive valid sequences
+        #     train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
+        #     valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata,
+        #                                                          train_and_valid_ids,
+        #                                                          dataset_type, cell_type,
+        #                                                          num_of_patients=num_of_patients,
+        #                                                          filter_to_inflate=filter_to_inflate)
+        #     valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
+        #     valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
+        #     # Calculate positive test sequences
+        #     train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
+        #     test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata,
+        #                                                         train_and_test_ids,
+        #                                                         dataset_type, cell_type,
+        #                                                         num_of_patients=num_of_patients,
+        #                                                         filter_to_inflate=filter_to_inflate)
+        #     test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
+        #     test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
+        #
+        #     # make sure that there is no intersection between train, valid and test sequences
+        #     train_pos_seqs = np.array(list(set(train_pos_seqs) - set(np.concatenate((valid_pos_seqs, test_pos_seqs)))))
+        #     if len(set(valid_pos_seqs) & set(test_pos_seqs)) > 0:
+        #         if len(valid_pos_seqs) > len(test_pos_seqs):
+        #             valid_pos_seqs = np.array(list(set(valid_pos_seqs) - set(test_pos_seqs)))
+        #         else:
+        #             test_pos_seqs = np.array(list(set(test_pos_seqs) - set(valid_pos_seqs)))
+        #
+        #     positive_seqs = np.concatenate((train_pos_seqs, valid_pos_seqs, test_pos_seqs))
+        #
+        #     common_seqs_healthy_and_disease.append(len(set(positive_seqs).intersection(valid_aa_seqs_h)))
+        #     total_num_of_positives.append(len(positive_seqs))
+        # # Plot common_seqs_healthy_and_disease in a simple plot
+        # import matplotlib.pyplot as plt
+        # plt.figure(figsize=(10, 6))
+        # plt.plot(range(3, 17), common_seqs_healthy_and_disease[1:], label='Common Sequences of Healthy and Positive Disease')
+        # plt.plot(range(3, 17), total_num_of_positives[1:], label='Total Positives')
+        # plt.xticks(range(3, 17))
+        # plt.xlabel("Number of Patients")
+        # plt.ylabel("Number of Common Sequences with Healthy")
+        # plt.title("Common Sequences with Healthy vs Number of Patients")
+        # plt.legend()
+        # plt.grid()
+        # plt.show()
+
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -251,9 +316,50 @@ class DatasetLoader:
             else:
                 neg_seqs = new_neg_seqs
 
-
         if use_similar_negatives:
             neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition)
+
+        # # TODO: REMOVE AFTER TESTING:
+        if remove_seqs_by_len:
+            df_bld = df_bld[df_bld['AASeq'].str.len() > 11]  # remove sequences that are too short
+            df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 11]  # remove sequences that are too short
+            df_bld = df_bld[df_bld['AASeq'].str.len() < 18]  # remove sequences that are too long
+            df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 18]  # remove sequences that are too long
+            test_pos_seqs = np.array([seq for seq in test_pos_seqs if 11 < len(seq) < 18])
+            test_neg_seqs = np.array([seq for seq in test_neg_seqs if 11 < len(seq) < 18])
+            valid_pos_seqs = np.array([seq for seq in valid_pos_seqs if 11 < len(seq) < 18])
+            valid_neg_seqs = np.array([seq for seq in valid_neg_seqs if 11 < len(seq) < 18])
+            train_pos_seqs = np.array([seq for seq in train_pos_seqs if 11 < len(seq) < 18])
+            neg_seqs = np.array([seq for seq in neg_seqs if 11 < len(seq) < 18])
+            # Calculate the masks for each patient
+            masks = []
+            for patient in unique_patient_ids:
+                # Get sequences that belong to the current patient
+                patient_seqs = set(df_bld.loc[df_bld["patient_id"] == patient, "AASeq"])
+                # Create a mask for sequences
+                mask = np.array([1 if seq in patient_seqs else 0 for seq in positive_seqs])
+                if 1 in mask:
+                    masks.append(mask)
+                else:
+                    print(f"Patient {patient} has NO positive sequences! Look into this case!")
+                    masks.append(mask)
+            # Convert to ndarray
+            patient_id_masks = np.array(masks)  # Shape: (num_unique_patients, len(positive_seqs))
+            # Get the masks for the test and train patients
+            test_masks = patient_id_masks[test_patient_inds]
+            valid_masks = patient_id_masks[valid_patient_inds]
+            train_masks = patient_id_masks[train_patient_inds]
+            test_inds = test_masks.any(axis=0)
+            valid_inds = valid_masks.any(axis=0)
+            valid_test_inds = test_inds & valid_inds
+            if sum(valid_inds) > sum(test_inds):
+                test_inds = test_inds | valid_test_inds
+                valid_inds = valid_inds & ~valid_test_inds
+            else:
+                valid_inds = valid_inds | valid_test_inds
+                test_inds = test_inds & ~valid_test_inds
+            train_inds = (~test_inds) & (~valid_inds)
+        # # TODO: END OF - REMOVE AFTER TESTING.
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -284,6 +390,29 @@ class DatasetLoader:
         self.df_hlt = df_hlt
         self.aaseq_to_ratio = aaseq_to_ratio
         self.aaseq_to_distance = aaseq_to_distance
+        # [set(positive_seqs).intersection(set(df_hlt[df_hlt['patient_id'] == p]['AASeq'].values)) for p in df_hlt['patient_id'].unique()]
+
+        # Note: looks like when we have less sequences in the set and when we take only seqs that appear in i patients,
+        # and not in i healthy people, then when i rises the variance lowers.
+        if False:
+            import matplotlib.pyplot as plt
+            def plot_lev(seqs, title_info=''):
+                pwc_mat = pairwise_scores(seqs, seqs, score=levenshtein_dist_non_bin)
+                similarities = np.mean(pwc_mat, axis=0)
+                # similarities = np.min(pwc_mat + np.eye(len(pwc_mat)) * 100, axis=0)
+                plt.hist(similarities, bins=10, edgecolor='black')
+                plt.xlabel('Minimum Levenshtein Distance')
+                plt.ylabel('Frequency')
+                plt.title(f'Histogram of Minimum Levenshtein Distances - {title_info}\nMean: {similarities.mean():.3f}')
+                plt.grid(axis='y', linestyle='--', alpha=0.7)
+                plt.tight_layout()
+                plt.show()
+            plot_lev(positive_seqs, 'Normal')
+            for i in range(3, 12, 2):
+                pos_seqs, _ =self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids,
+                                                              dataset_type, cell_type, num_of_patients=i, special_test=True)
+                plot_lev(pos_seqs, f'num_of_patients f{i}')
+
 
     def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
         similar_neg_cache_path = 'cache/ms'
@@ -473,14 +602,34 @@ class DatasetLoader:
         df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
         self.df_aaseq_to_ratio = df_unique
 
-    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3):
-        df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
-        positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients)
-        all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
-        valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
-        all_common_seqs = all_common_seqs - valid_seqs_healthy
-        positive_seqs.update(all_common_seqs)
-        return positive_seqs, negative_seqs
+    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, filter_to_inflate=True):
+        # TODO: CHANGE THIS BACK TO THE NORMAL IMPLEMENTATION AFTER TESTING!!!
+        if filter_to_inflate:
+            df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
+            positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients)
+            all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
+            valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
+            all_common_seqs = all_common_seqs - valid_seqs_healthy
+            positive_seqs.update(all_common_seqs)
+            return positive_seqs, negative_seqs
+        else:
+            temp_df = df_bld[df_bld['patient_id'].isin(patient_ids)]
+            grouped = temp_df.groupby('patient_id')['AASeq'].unique()
+            aa_seq_counter = Counter()
+            for aa_seqs in grouped:
+                aa_seq_counter.update(aa_seqs)
+            valid_aa_seqs = {aa_seq for aa_seq, count in aa_seq_counter.items() if count >= num_of_patients}
+
+            temp_df_h = df_hlt
+            grouped_h = temp_df_h.groupby('patient_id')['AASeq'].unique()
+            aa_seq_counter_h = Counter()
+            for aa_seqs in grouped_h:
+                aa_seq_counter_h.update(aa_seqs)
+            valid_aa_seqs_h = {aa_seq for aa_seq, count in aa_seq_counter_h.items() if count >= num_of_patients}
+
+            positive_seqs = np.array(list(set(valid_aa_seqs) - set(valid_aa_seqs_h)))
+            negative_seqs = np.array(list(set(valid_aa_seqs_h) - set(valid_aa_seqs)))
+            return positive_seqs, negative_seqs
 
     def get_aaseq_to_ratio_func(self):
         return self.aaseq_to_ratio

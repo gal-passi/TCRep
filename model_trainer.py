@@ -145,7 +145,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, args, masking=False, ratio=False, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, args, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -230,9 +230,10 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
 
     # Setting up training negative sequences for this run
-    if len(neg_seqs) < num_pos_samples * neg_pos_ratio:
-        raise ValueError(f"Not enough negative samples. Need at least {num_pos_samples * neg_pos_ratio}, but got {len(neg_seqs)}.")
-    train_neg_seqs = np.random.choice(neg_seqs, size=num_pos_samples * neg_pos_ratio, replace=False)
+    if not change_negatives:
+        if len(neg_seqs) < num_pos_samples * neg_pos_ratio:
+            raise ValueError(f"Not enough negative samples. Need at least {num_pos_samples * neg_pos_ratio}, but got {len(neg_seqs)}.")
+        train_neg_seqs = np.random.choice(neg_seqs, size=num_pos_samples * neg_pos_ratio, replace=False)
 
     # Training loop
     for epoch in range(epochs):
@@ -253,8 +254,9 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         pos_indices = np.arange(num_pos_samples)
         np.random.shuffle(pos_indices)
         # Shuffle negative samples for this epoch
-        neg_indices = np.arange(len(train_neg_seqs))
-        np.random.shuffle(neg_indices)
+        if not change_negatives:
+            neg_indices = np.arange(len(train_neg_seqs))
+            np.random.shuffle(neg_indices)
 
 
         for batch_idx in range(num_batches):
@@ -265,15 +267,16 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             batch_pos_samples = train_pos_seqs[batch_pos_indices]
 
             # Get negative samples for this batch
-            neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
-            start_idx = batch_idx * neg_batch_size
-            end_idx = min((batch_idx + 1) * neg_batch_size, len(train_neg_seqs))
-            batch_neg_indices = neg_indices[start_idx:end_idx]
-            batch_neg_samples = train_neg_seqs[batch_neg_indices]
-
-            # # Get negative samples for this batch (without repetition)
-            # neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
-            # batch_neg_samples = np.random.choice(neg_seqs, size=neg_batch_size, replace=False)
+            if not change_negatives:
+                neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
+                start_idx = batch_idx * neg_batch_size
+                end_idx = min((batch_idx + 1) * neg_batch_size, len(train_neg_seqs))
+                batch_neg_indices = neg_indices[start_idx:end_idx]
+                batch_neg_samples = train_neg_seqs[batch_neg_indices]
+            else:
+                # Get negative samples for this batch (without repetition)
+                neg_batch_size = len(batch_pos_samples) * neg_pos_ratio
+                batch_neg_samples = np.random.choice(neg_seqs, size=neg_batch_size, replace=False)
 
             # Combine positive and negative samples
             batch_samples = np.concatenate([batch_pos_samples, batch_neg_samples])

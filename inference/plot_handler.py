@@ -358,7 +358,6 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
 
     # Prepare combined test and validation indices
     test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
-    test_masks = np.concatenate((test_masks, valid_masks), axis=0)
 
     # Collect distributions
     healthy_dists = []

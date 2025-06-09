@@ -226,14 +226,14 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         'val_f1': []  # F1 Score
     }
 
-    # Starting training
-    print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
-
     # Setting up training negative sequences for this run
     if not change_negatives:
         if len(neg_seqs) < num_pos_samples * neg_pos_ratio:
             raise ValueError(f"Not enough negative samples. Need at least {num_pos_samples * neg_pos_ratio}, but got {len(neg_seqs)}.")
         train_neg_seqs = np.random.choice(neg_seqs, size=num_pos_samples * neg_pos_ratio, replace=False)
+        print(f"Training on {num_pos_samples} positive samples and {len(train_neg_seqs)} negative samples...")
+    else:
+        print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
 
     # Training loop
     for epoch in range(epochs):

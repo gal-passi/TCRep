@@ -832,7 +832,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset_filter_num_of_patients', type=int, default=3, help='Number of patients to filter the dataset by (take positive from this num of patients)')
     parser.add_argument('--dataset_filter_dont_inflate', '-no_inflate', action='store_true', help='Do not inflate the dataset when filtering positives and negatives')
     parser.add_argument('--changing_negatives', '-change_neg', action='store_true', help='Whether to run sample the negatives each epoch or not')
-    parser.add_argument('--remove_seqs_by_len', action='store_true', help='Whether to remove sequences from valid/test sets by length or not')
+    parser.add_argument('--remove_seqs_by_len', type=int, default=False, help='Whether to remove sequences from valid/test sets by length or not')
 
     args = parser.parse_args()
 
@@ -874,6 +874,9 @@ if __name__ == '__main__':
     changing_negatives = args.changing_negatives
     remove_seqs_by_len = args.remove_seqs_by_len
 
+    if combine_classification and not dont_plot:
+        dont_plot = True  # If combining classification, we don't plot the individual results
+
     assert model_type in model_types, f"Model type must be one of {model_types}"
     assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
     assert scheduler_type in [x.lower() for x in scheduler_types], f"Scheduler type must be one of {scheduler_types}"
@@ -887,9 +890,7 @@ if __name__ == '__main__':
     assert not (loss_type == 'ce' and dataset_type in ['article', 'article_sle']), "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
     assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
     assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
-    # assert not ((neg_partition > 0) and to_k_fold), "Cannot use negative partitioning and k-fold cross-validation at the same time"  # Problem with cache for example
     assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
-    assert not (combine_classification and to_k_fold), "Cannot combine classification and k-fold cross-validation at the same time"
 
 
     print("RUN CONFIGURATION:")
@@ -993,11 +994,6 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
-
-    # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
-    for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
-        if not (seq.startswith('C') and seq.endswith('F')):
-            raise ValueError(f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
 
     # # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
     # article2_data_folder = 'db/test_db/data_tcrb'
@@ -1199,6 +1195,7 @@ if __name__ == '__main__':
         #     trained_model = TrainedModelWrapper(trained_model, aaseq_to_ratio)
 
         # New distribution plot
+        np.random.seed(42)
         print("Plotting the output distributions per patient (New)")
         plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
@@ -1283,7 +1280,6 @@ if __name__ == '__main__':
             print(f"Validation Positive Accuracy: {val_pos_acc:.4f}, Validation Negative Accuracy: {val_neg_acc:.4f}")
             print(f"Validation Precision: {val_precision:.4f}, Validation Recall: {val_recall:.4f}")
             print(f"Validation F1: {val_f1:.4f}")
-            exit(0)
 
         if neg_partition > 0:
             from model_trainer import evaluate_model, CustomLossCriterion
@@ -1358,23 +1354,15 @@ if __name__ == '__main__':
                                                     df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
 
         # Inference classification model
-        if k_fold > 0 or INFERENCE_CLASSIFICATION_MODEL:
-            from inference.inference_classification import inference_classification_model
-            inference_classification_model(trained_model, args, df_bld, df_hlt,
-                                           test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device)
-        elif combine_classification:
+        if k_fold == 0 and combine_classification:
             from inference.inference_classification import inference_classification_model_combined
             inference_classification_model_combined(trained_model, args, df_bld, df_hlt,
                                                     test_patient_inds, valid_patient_inds, unique_patient_ids,
                                                     valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-                                                    aaseq_to_ratio, device)
-
-        # from inference.inference_testing import inference_ratio_distance
-        # inference_ratio_distance(df_bld, df_hlt, trained_model, train_pos_seqs, valid_pos_seqs, valid_neg_seqs,
-        #                          test_pos_seqs, test_neg_seqs, aaseq_to_ratio, dataset_loader)
-
-        # from inference.inference_testing import my_dist_inference # background_dist_inference  # dina_inference_suggestion
-        # dina_inference_suggestion(df_bld, df_hlt, trained_model, valid_patient_ids)
-        # background_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids)
-        # my_dist_inference(df_bld, df_hlt, trained_model, valid_patient_ids, test_patient_ids, args)
+                                                    aaseq_to_ratio, to_ensemble, device)
+        else:
+            from inference.inference_classification import inference_classification_model
+            inference_classification_model(trained_model, args, df_bld, df_hlt,
+                                           test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                                           aaseq_to_ratio, to_ensemble, device)

@@ -111,6 +111,12 @@ class DatasetLoader:
         valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
         train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
 
+        # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
+        for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
+            if not (seq.startswith('C') and seq.endswith('F')):
+                raise ValueError(
+                    f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
+
         if k_fold > 0:
             name_metadata = f"_fold_{k_fold}"
         else:
@@ -319,18 +325,17 @@ class DatasetLoader:
         if use_similar_negatives:
             neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition)
 
-        # # TODO: REMOVE AFTER TESTING:
         if remove_seqs_by_len:
             df_bld = df_bld[df_bld['AASeq'].str.len() > 11]  # remove sequences that are too short
             df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 11]  # remove sequences that are too short
-            df_bld = df_bld[df_bld['AASeq'].str.len() < 18]  # remove sequences that are too long
-            df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 18]  # remove sequences that are too long
-            test_pos_seqs = np.array([seq for seq in test_pos_seqs if 11 < len(seq) < 18])
-            test_neg_seqs = np.array([seq for seq in test_neg_seqs if 11 < len(seq) < 18])
-            valid_pos_seqs = np.array([seq for seq in valid_pos_seqs if 11 < len(seq) < 18])
-            valid_neg_seqs = np.array([seq for seq in valid_neg_seqs if 11 < len(seq) < 18])
-            train_pos_seqs = np.array([seq for seq in train_pos_seqs if 11 < len(seq) < 18])
-            neg_seqs = np.array([seq for seq in neg_seqs if 11 < len(seq) < 18])
+            df_bld = df_bld[df_bld['AASeq'].str.len() < remove_seqs_by_len]  # remove sequences that are too long
+            df_hlt = df_hlt[df_hlt['AASeq'].str.len() < remove_seqs_by_len]  # remove sequences that are too long
+            test_pos_seqs = np.array([seq for seq in test_pos_seqs if 11 < len(seq) < remove_seqs_by_len])
+            test_neg_seqs = np.array([seq for seq in test_neg_seqs if 11 < len(seq) < remove_seqs_by_len])
+            valid_pos_seqs = np.array([seq for seq in valid_pos_seqs if 11 < len(seq) < remove_seqs_by_len])
+            valid_neg_seqs = np.array([seq for seq in valid_neg_seqs if 11 < len(seq) < remove_seqs_by_len])
+            train_pos_seqs = np.array([seq for seq in train_pos_seqs if 11 < len(seq) < remove_seqs_by_len])
+            neg_seqs = np.array([seq for seq in neg_seqs if 11 < len(seq) < remove_seqs_by_len])
             # Calculate the masks for each patient
             masks = []
             for patient in unique_patient_ids:
@@ -359,7 +364,6 @@ class DatasetLoader:
                 valid_inds = valid_inds | valid_test_inds
                 test_inds = test_inds & ~valid_test_inds
             train_inds = (~test_inds) & (~valid_inds)
-        # # TODO: END OF - REMOVE AFTER TESTING.
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -705,7 +709,7 @@ class DatasetLoader:
             df = study.read_sample(usable_samples)
             if not get_all:
                 df = df[df['condition'] == disease]
-            df['study_id'] = study_id
+            df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
             studies.append(df)
 
         return pd.concat(studies, ignore_index=True)

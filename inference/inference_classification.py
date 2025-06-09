@@ -19,6 +19,7 @@ from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance, ks_2samp
 from multiprocessing import Pool, cpu_count
 from cache_handler import load_model_state
+from models.cvc_ensemble_model import CVCEnsembleModel
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
@@ -224,7 +225,7 @@ def plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to
 
 
 def inference_classification_model(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
+                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
                                    add_ratio_to_vector=False, start_vec_from=20,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
@@ -233,10 +234,13 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     os.makedirs(INFERENCE_VECTOR_PLOTS_DIR, exist_ok=True)
 
     # Creating a caching model of the trained model
-    trained_model.eval()
-    caching_model = CVCCachingModel(trained_model, args, device)
-    caching_model.to(device)
-    caching_model.eval()
+    if to_ensemble:
+        caching_model = trained_model
+    else:
+        trained_model.eval()
+        caching_model = CVCCachingModel(trained_model, args, device)
+        caching_model.to(device)
+        caching_model.eval()
 
     # patient vectors helping data
     possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
@@ -583,14 +587,35 @@ def display_enhanced_results(all_classifiers, args):
         print(f"F1-Score:          {F1:.4f}")
 
     # Create comprehensive visualization
-    create_comprehensive_visualization(all_classifiers, args)
+    create_comprehensive_visualization(all_classifiers, results_summary, args)
 
     # Create summary comparison
-    create_summary_comparison(results_summary, args)
+    # create_summary_comparison(results_summary, args)
 
 
-def create_comprehensive_visualization(all_classifiers, args):
+def create_comprehensive_visualization(all_classifiers, results_summary, args):
     """Create comprehensive visualization of all classifiers"""
+
+    classifiers = list(results_summary.keys())
+    metrics = ['Sensitivity-TPR', 'Specificity-TNR', 'Precision', 'F1-Score', 'Accuracy']
+
+    # Calculate metrics for each classifier
+    metric_values = {metric: [] for metric in metrics}
+
+    for classifier_name in classifiers:
+        avg_rates = results_summary[classifier_name]['avg_rates']
+
+        TPR = avg_rates[1, 1]  # Sensitivity
+        TNR = avg_rates[0, 0]  # Specificity
+        PPV = TPR / (TPR + avg_rates[0, 1]) if (TPR + avg_rates[0, 1]) > 0 else 0  # Precision
+        F1 = 2 * (PPV * TPR) / (PPV + TPR) if (PPV + TPR) > 0 else 0
+        accuracy = (avg_rates[0, 0] + avg_rates[1, 1]) / np.sum(avg_rates) if np.sum(avg_rates) > 0 else 0
+
+        metric_values['Sensitivity-TPR'].append(TPR)
+        metric_values['Specificity-TNR'].append(TNR)
+        metric_values['Precision'].append(PPV)
+        metric_values['F1-Score'].append(F1)
+        metric_values['Accuracy'].append(accuracy)
 
     n_classifiers = len(all_classifiers)
     cols = 3
@@ -611,7 +636,18 @@ def create_comprehensive_visualization(all_classifiers, args):
                     xticklabels=['Predicted Healthy', 'Predicted Disease'],
                     yticklabels=['Actual Healthy', 'Actual Disease'],
                     ax=axes[idx])
-        axes[idx].set_title(f'{classifier_name}')
+
+        # Clean title with just classifier name
+        axes[idx].set_title(f'{classifier_name}', fontsize=12, fontweight='bold')
+
+        # Option 1: Add metrics as text box in corner
+        metrics_text = (f'Acc: {metric_values["Accuracy"][idx]:.3f}\n'
+                        f'F1: {metric_values["F1-Score"][idx]:.3f}\n'
+                        f'Prec: {metric_values["Precision"][idx]:.3f}')
+
+        axes[idx].text(0.02, 0.98, metrics_text, transform=axes[idx].transAxes,
+                       fontsize=9, verticalalignment='top', horizontalalignment='left',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     # Hide unused subplots
     for idx in range(n_classifiers, len(axes)):
@@ -688,7 +724,7 @@ def create_summary_comparison(results_summary, args):
 
 
 def inference_classification_model_combined(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, device,
+                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
                                    add_ratio_to_vector=False, start_vec_from=20,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
@@ -697,16 +733,21 @@ def inference_classification_model_combined(trained_model, args, df_bld, df_hlt,
     for fold_ind in range(1, 6):
         # Load the model state for the current fold
         args.k_fold = fold_ind
-        trained_model = load_model_state(trained_model, args, args.epochs - 1, device)
-        if trained_model is None:
-            print(f"Model for fold {fold_ind} not found. Skipping this fold.")
-            continue
+        if to_ensemble:
+            from cache_handler import get_model_dir
+            cache_dir = get_model_dir(args)
+            trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return=trained_model.default_to_return)
+        else:
+            trained_model = load_model_state(trained_model, args, args.epochs - 1, device)
+            if trained_model is None:
+                print(f"Model for fold {fold_ind} not found. Skipping this fold.")
+                continue
 
         # Run inference for the current fold
         fold_classifier = inference_classification_model(
             trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds,
             unique_patient_ids, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-            aaseq_to_ratio, device, add_ratio_to_vector=add_ratio_to_vector,
+            aaseq_to_ratio, to_ensemble, device, add_ratio_to_vector=add_ratio_to_vector,
             start_vec_from=start_vec_from, vector_representation_bins=vector_representation_bins,
             num_of_healthy_patients=num_of_healthy_patients,
             num_of_healthy_test_patients=num_of_healthy_test_patients,

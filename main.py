@@ -786,6 +786,69 @@ def sweep_model():
                                           df_hlt, model_type, log_wandb, args, device)
 
 
+def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=None,
+                        use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None,
+                        filter_to_inflate=False, remove_seqs_by_len=None, verbose=True):
+    np.random.seed(42)
+    # Load data
+    unique_patient_ids = None
+    if to_k_fold:
+        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True)
+        df_bld, df_hlt = dataset_loader.get_dfs()
+        unique_patient_ids = df_bld["patient_id"].unique()
+        unique_patient_ids = np.random.permutation(unique_patient_ids)
+        def generate_shifted_lists(patient_ids):
+            """
+            Generate altered lists by shifting the original list of patient IDs.
+            Each altered list is shifted by increments of 8 positions to the right.
+            Stops generating lists when any element from the first 8 positions would reappear.
+
+            Args:
+                patient_ids: List of unique patient ID strings
+
+            Returns:
+                A list of altered lists
+            """
+            n = len(patient_ids)
+
+            # If the list has 8 or fewer elements, we can only create one list
+            if n <= 8:
+                return [patient_ids.copy()]
+
+            # Calculate how many shifts we can make without bringing back elements from first 8 positions
+            first_eight = set(patient_ids[:8])
+            max_shifts = (n // 8) - 1
+
+            # Create the altered lists
+            altered_lists = []
+
+            for shift_count in range(max_shifts + 1):
+                # Calculate the shift amount
+                shift = (shift_count * 8) % n
+
+                # Create a new shifted list
+                shifted_list = patient_ids[shift:] + patient_ids[:shift]
+
+                # Check if any of the first 8 elements are in the shifted list
+                if len(first_eight.intersection(set(shifted_list[:8]))) > 0 and shift_count > 0:
+                    print(shifted_list[:8], patient_ids[:8])
+
+                # Add to our collection of altered lists
+                altered_lists.append(shifted_list)
+
+            return np.array(altered_lists)
+
+        altered_lists = generate_shifted_lists(list(unique_patient_ids))
+        unique_patient_ids = altered_lists[k_fold]
+
+    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
+                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                   use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                   filter_num_of_patients=filter_num_of_patients, filter_to_inflate=filter_to_inflate,
+                                   remove_seqs_by_len=remove_seqs_by_len, verbose=verbose)
+    return dataset_loader
+
+
 if __name__ == '__main__':
     # get program arguments
     model_types = ['ff', 'cvc', 'esmc']
@@ -924,65 +987,69 @@ if __name__ == '__main__':
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
-    np.random.seed(42)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    # Load data
-    unique_patient_ids = None
-    if to_k_fold:
-        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True)
-        df_bld, df_hlt = dataset_loader.get_dfs()
-        unique_patient_ids = df_bld["patient_id"].unique()
-        unique_patient_ids = np.random.permutation(unique_patient_ids)
-        def generate_shifted_lists(patient_ids):
-            """
-            Generate altered lists by shifting the original list of patient IDs.
-            Each altered list is shifted by increments of 8 positions to the right.
-            Stops generating lists when any element from the first 8 positions would reappear.
-
-            Args:
-                patient_ids: List of unique patient ID strings
-
-            Returns:
-                A list of altered lists
-            """
-            n = len(patient_ids)
-
-            # If the list has 8 or fewer elements, we can only create one list
-            if n <= 8:
-                return [patient_ids.copy()]
-
-            # Calculate how many shifts we can make without bringing back elements from first 8 positions
-            first_eight = set(patient_ids[:8])
-            max_shifts = (n // 8) - 1
-
-            # Create the altered lists
-            altered_lists = []
-
-            for shift_count in range(max_shifts + 1):
-                # Calculate the shift amount
-                shift = (shift_count * 8) % n
-
-                # Create a new shifted list
-                shifted_list = patient_ids[shift:] + patient_ids[:shift]
-
-                # Check if any of the first 8 elements are in the shifted list
-                if len(first_eight.intersection(set(shifted_list[:8]))) > 0 and shift_count > 0:
-                    print(shifted_list[:8], patient_ids[:8])
-
-                # Add to our collection of altered lists
-                altered_lists.append(shifted_list)
-
-            return np.array(altered_lists)
-
-        altered_lists = generate_shifted_lists(list(unique_patient_ids))
-        unique_patient_ids = altered_lists[k_fold]
-
-    dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
-                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
-                                   use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
-                                   filter_num_of_patients=filter_num_of_patients, filter_to_inflate=filter_to_inflate,
-                                   remove_seqs_by_len=remove_seqs_by_len)
+    #
+    # # Load data
+    # unique_patient_ids = None
+    # if to_k_fold:
+    #     dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True)
+    #     df_bld, df_hlt = dataset_loader.get_dfs()
+    #     unique_patient_ids = df_bld["patient_id"].unique()
+    #     unique_patient_ids = np.random.permutation(unique_patient_ids)
+    #     def generate_shifted_lists(patient_ids):
+    #         """
+    #         Generate altered lists by shifting the original list of patient IDs.
+    #         Each altered list is shifted by increments of 8 positions to the right.
+    #         Stops generating lists when any element from the first 8 positions would reappear.
+    #
+    #         Args:
+    #             patient_ids: List of unique patient ID strings
+    #
+    #         Returns:
+    #             A list of altered lists
+    #         """
+    #         n = len(patient_ids)
+    #
+    #         # If the list has 8 or fewer elements, we can only create one list
+    #         if n <= 8:
+    #             return [patient_ids.copy()]
+    #
+    #         # Calculate how many shifts we can make without bringing back elements from first 8 positions
+    #         first_eight = set(patient_ids[:8])
+    #         max_shifts = (n // 8) - 1
+    #
+    #         # Create the altered lists
+    #         altered_lists = []
+    #
+    #         for shift_count in range(max_shifts + 1):
+    #             # Calculate the shift amount
+    #             shift = (shift_count * 8) % n
+    #
+    #             # Create a new shifted list
+    #             shifted_list = patient_ids[shift:] + patient_ids[:shift]
+    #
+    #             # Check if any of the first 8 elements are in the shifted list
+    #             if len(first_eight.intersection(set(shifted_list[:8]))) > 0 and shift_count > 0:
+    #                 print(shifted_list[:8], patient_ids[:8])
+    #
+    #             # Add to our collection of altered lists
+    #             altered_lists.append(shifted_list)
+    #
+    #         return np.array(altered_lists)
+    #
+    #     altered_lists = generate_shifted_lists(list(unique_patient_ids))
+    #     unique_patient_ids = altered_lists[k_fold]
+    #
+    # dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
+    #                                k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+    #                                use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+    #                                filter_num_of_patients=filter_num_of_patients, filter_to_inflate=filter_to_inflate,
+    #                                remove_seqs_by_len=remove_seqs_by_len)
+    dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=to_k_fold,
+                                        dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                        use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                        filter_num_of_patients=filter_num_of_patients,
+                                        filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1137,12 +1204,12 @@ if __name__ == '__main__':
         # load the model if possible
         trained_model = None
         if not force_retrain:
-            if to_ensemble:
+            if combine_classification:
+                trained_model = model
+            elif to_ensemble:
                 from cache_handler import get_model_dir
                 cache_dir = get_model_dir(args)
                 trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='min')  # or 'weighted_sum'
-            elif combine_classification:
-                trained_model = model
             elif test_mode_epoch >= 0:
                 trained_model = load_model_state(model, args, test_mode_epoch, device)
                 if trained_model is None:
@@ -1225,7 +1292,7 @@ if __name__ == '__main__':
         print("\nInference:")
 
         # Inference ensemble model
-        if to_ensemble:
+        if to_ensemble and not combine_classification:
             # TODO: Added this inference: remove later!!!
             # def plot_histogram_of_lengths(all_seqs, title_extra=''):
             #     lengths = [len(seq) for seq in all_seqs]
@@ -1356,10 +1423,13 @@ if __name__ == '__main__':
         # Inference classification model
         if k_fold == 0 and combine_classification:
             from inference.inference_classification import inference_classification_model_combined
-            inference_classification_model_combined(trained_model, args, df_bld, df_hlt,
-                                                    test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-                                                    aaseq_to_ratio, to_ensemble, device)
+            def get_data_loader_wrapper(k_fold_index):
+                return get_dataset_loader(dataset_type, k_fold=k_fold_index, to_k_fold=True,
+                                          dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                          use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                          filter_num_of_patients=filter_num_of_patients,
+                                          filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len, verbose=False)
+            inference_classification_model_combined(trained_model, args, to_ensemble, get_data_loader_wrapper, device)
         else:
             from inference.inference_classification import inference_classification_model
             inference_classification_model(trained_model, args, df_bld, df_hlt,

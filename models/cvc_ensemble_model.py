@@ -22,6 +22,7 @@ class CVCEnsembleModel(nn.Module):
         self.default_to_return = default_to_return
         self.verbose = verbose
         args.to_ensemble = False
+        old_neg_partition = args.negative_partition
         for i in range(1, NUM_OF_MODELS + 1):
             args.negative_partition = i
             model = CVCClassifierModel(batch_size=args.batch_size, ch_dropout=args.classification_dropout,
@@ -34,6 +35,7 @@ class CVCEnsembleModel(nn.Module):
             else:
                 raise ValueError(
                     f"Model for negative partition {i} could not be loaded. Check the model path or training process.")
+        args.negative_partition = old_neg_partition
         args.to_ensemble = True
         self.weights = models_weights if models_weights is not None else [1.0 / NUM_OF_MODELS] * len(self.models)
 

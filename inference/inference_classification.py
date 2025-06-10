@@ -408,7 +408,8 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
             total_cm_ks.append(cm_ks)
 
     # Print feature importance for Random Forest
-    plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to_vector, args)
+    if not only_all_classifiers:
+        plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to_vector, args)
 
     # Dictionary of all classifiers and their results
     all_classifiers = {
@@ -723,20 +724,26 @@ def create_summary_comparison(results_summary, args):
               f"{metric_values['F1-Score'][i]:<12.4f}")
 
 
-def inference_classification_model_combined(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
+def inference_classification_model_combined(trained_model, args, to_ensemble, get_data_loader_wrapper, device,
                                    add_ratio_to_vector=False, start_vec_from=20,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28):
     all_classifiers = []
-
     for fold_ind in range(1, 6):
-        # Load the model state for the current fold
+        # Load the dataset for the current fold
         args.k_fold = fold_ind
+        dataset_loader = get_data_loader_wrapper(fold_ind)
+        df_bld, df_hlt = dataset_loader.get_dfs()
+        train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
+        train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
+        unique_patient_ids = dataset_loader.unique_patient_ids
+        aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
+
+        # Load the model state for the current fold
         if to_ensemble:
             from cache_handler import get_model_dir
             cache_dir = get_model_dir(args)
-            trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return=trained_model.default_to_return)
+            trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='min')
         else:
             trained_model = load_model_state(trained_model, args, args.epochs - 1, device)
             if trained_model is None:

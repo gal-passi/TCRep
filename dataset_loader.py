@@ -36,7 +36,7 @@ STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUD
 class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
-                 filter_num_of_patients=3, filter_to_inflate=False, remove_seqs_by_len=False):
+                 filter_num_of_patients=3, filter_to_inflate=False, remove_seqs_by_len=False, verbose=True):
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
@@ -186,15 +186,15 @@ class DatasetLoader:
         # plt.grid()
         # plt.show()
 
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -237,13 +237,14 @@ class DatasetLoader:
             valid_inds = valid_inds | valid_test_inds
             test_inds = test_inds & ~valid_test_inds
         train_inds = (~test_inds) & (~valid_inds)
-        print(f"Number of Positive Sequences in General: {len(positive_seqs)}")
-        print(f"Number of Positive Sequences in Test: {sum(test_inds)}, Percentage: {sum(test_inds) / len(positive_seqs) * 100:.2f}%")
-        print(f"Number of Positive Sequences in Valid: {sum(valid_inds)}, Percentage: {sum(valid_inds) / len(positive_seqs) * 100:.2f}%")
-        print(f"Number of Positive Sequences in Train: {sum(train_inds)}, Percentage: {sum(train_inds) / len(positive_seqs) * 100:.2f}%\n")
-        print(f"Number of patients in General: {df_bld['patient_id'].nunique() + df_hlt['patient_id'].nunique()}")
-        print(f"Number of Disease patients: {df_bld['patient_id'].nunique()}")
-        print(f"Number of Healthy patients: {df_hlt['patient_id'].nunique()}")
+        if verbose:
+            print(f"Number of Positive Sequences in General: {len(positive_seqs)}")
+            print(f"Number of Positive Sequences in Test: {sum(test_inds)}, Percentage: {sum(test_inds) / len(positive_seqs) * 100:.2f}%")
+            print(f"Number of Positive Sequences in Valid: {sum(valid_inds)}, Percentage: {sum(valid_inds) / len(positive_seqs) * 100:.2f}%")
+            print(f"Number of Positive Sequences in Train: {sum(train_inds)}, Percentage: {sum(train_inds) / len(positive_seqs) * 100:.2f}%\n")
+            print(f"Number of patients in General: {df_bld['patient_id'].nunique() + df_hlt['patient_id'].nunique()}")
+            print(f"Number of Disease patients: {df_bld['patient_id'].nunique()}")
+            print(f"Number of Healthy patients: {df_hlt['patient_id'].nunique()}")
 
         # Get the positive sequences for the test and train sets
         test_pos_seqs = np.array(positive_seqs)[test_inds]
@@ -606,11 +607,11 @@ class DatasetLoader:
         df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
         self.df_aaseq_to_ratio = df_unique
 
-    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, filter_to_inflate=True):
+    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, filter_to_inflate=True, verbose=True):
         # TODO: CHANGE THIS BACK TO THE NORMAL IMPLEMENTATION AFTER TESTING!!!
         if filter_to_inflate:
             df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
-            positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients)
+            positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients, verbose=verbose)
             all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
             valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
             all_common_seqs = all_common_seqs - valid_seqs_healthy
@@ -657,7 +658,7 @@ class DatasetLoader:
         return self.train_masks, self.valid_masks, self.test_masks
 
     # Loading all valid sequences for disease and healthy samples
-    def get_positive_negative(self, df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=3):
+    def get_positive_negative(self, df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=3, verbose=True):
         all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=num_of_patients)
         valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=num_of_patients)
         all_common_seqs = all_common_seqs - valid_seqs_healthy
@@ -669,7 +670,8 @@ class DatasetLoader:
                                                                  all_common_seqs=all_common_seqs)
 
         positive_seqs = set(valid_seqs_disease)
-        print(f"Valid Disease Sequence (num of common = {num_of_patients}): {len(positive_seqs)}")
+        if verbose:
+            print(f"Valid Disease Sequence (num of common = {num_of_patients}): {len(positive_seqs)}")
 
         # Extract valid letters
         valid_letters = set(''.join(valid_seqs_healthy))

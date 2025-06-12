@@ -229,6 +229,7 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
                                    add_ratio_to_vector=False, start_vec_from=20,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
+    np.random.seed(42)
     # make sure that plot dirs exists
     os.makedirs(INFERENCE_CONFUSION_MATRIX_DIR, exist_ok=True)
     os.makedirs(INFERENCE_VECTOR_PLOTS_DIR, exist_ok=True)

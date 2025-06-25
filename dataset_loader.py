@@ -31,6 +31,7 @@ HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
 HEALTHY_STUDY_ID4 = STUDY_ID6  # Other healthy study
 HEALTHY_STUDY_ID5 = STUDY_ID7  # Other healthy study
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
+TCRDB2_PATH = 'db/tcrdb2'
 
 
 class DatasetLoader:
@@ -40,7 +41,9 @@ class DatasetLoader:
         self.dataset_type = dataset_type
 
         disease = 'Multiple sclerosis'
+        print('Loading Disease:')
         df = self.get_all_usable_disease_data(disease=disease)
+        print('Loading Healthy:')
         df_h = self.get_all_usable_healthy_data()
 
         # Choosing cell type
@@ -53,6 +56,38 @@ class DatasetLoader:
         else:
             if dataset_type == 'ms':
                 df_bld, df_hlt = df, df_h
+            elif dataset_type == 'ms_hlt_article':
+                df_bld, df_hlt = df, df_h
+                # Only Healthy df from article
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+            elif dataset_type == 'ms_plus_hlt_article':
+                df_bld, df_hlt = df, df_h
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+            elif dataset_type == 'ms_extra':
+                df_bld, df_hlt = df, df_h
+                # Add to Blood df
+                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+            elif dataset_type == 'ms_extra_hlt_article':
+                df_bld, df_hlt = df, df_h
+                # Add to Blood df
+                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+                # Only Healthy df from article
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+            elif dataset_type == 'ms_extra_plus_hlt_article':
+                df_bld, df_hlt = df, df_h
+                # Add to Blood df
+                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+                # Add to Healthy df
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
             elif dataset_type == 'article':
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
@@ -699,19 +734,24 @@ class DatasetLoader:
         elif disease == 'HIV':
             study_ids = [STUDY_ID4]
         elif disease == 'Multiple sclerosis':
-            study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]
+            study_ids = [STUDY_ID8, STUDY_ID6, STUDY_ID7]
+            # study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]  # TODO: Change back to this order!
         elif disease == 'CMV':  # Cytomegalovirus
             study_ids = [STUDY_ID9, STUDY_ID10, STUDY_ID11]
         else:
             raise ValueError(f"Invalid disease: {disease}")
 
         for study_id in study_ids:
+            # df = self.load_study_df(study_id, disease)
+            # studies.append(df)
+            # continue
+
             study = Study(study_id)
             usable_samples = study._samples['usable']
-            df = study.read_sample(usable_samples)
-            if not get_all:
-                df = df[df['condition'] == disease]
-            df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
+            df = study.read_sample(usable_samples, condition=disease if not get_all else None)
+            # if not get_all:
+            #     df = df[df['condition'] == disease]
+            # df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
             studies.append(df)
 
         return pd.concat(studies, ignore_index=True)
@@ -721,15 +761,95 @@ class DatasetLoader:
                              HEALTHY_STUDY_ID5]
         healthy_studies = []
         for study_id in healthy_study_ids:
+            # df = self.load_study_df(study_id, disease)
+            # healthy_studies.append(df)
+            # continue
+
             study = Study(study_id)
             usable_samples = study._samples['usable']
-            df = study.read_sample(usable_samples)
-            df = df[df['condition'] == 'Healthy']
-            df['study_id'] = study_id
+            df = study.read_sample(usable_samples, condition='Healthy')
+            # df = df[df['condition'] == 'Healthy']
+            # df['study_id'] = study_id
             healthy_studies.append(df)
         df_concat = pd.concat(healthy_studies, ignore_index=True)
         df_concat = df_concat.dropna(subset=['AASeq'])
         return df_concat
+
+    def load_study_df(self, study_id, disease):
+        # Note: cols that should always be in the returned df (in this order):
+        # ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion', 'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+
+        # check if there is a folder under TCRDB2_PATH named study_id:
+        study_folder = os.path.join(TCRDB2_PATH, study_id)
+        if not os.path.isdir(study_folder):
+            assert False, f"Study folder not found: {study_folder}"
+
+        csv_files = [f for f in os.listdir(study_folder) if f.endswith(".csv")]
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV files found in {study_folder}")
+
+        # # Get study metadata per patient:
+        # metadata_path = os.path.join(study_folder, f"{study_id}.txt")
+        # if not os.path.isfile(metadata_path):
+        #     raise FileNotFoundError(f"Did not find {study_id}.txt in {study_folder}")
+
+        # Read all .csv files from the dir and append to study_dfs
+        study_dfs = []
+        for filename in csv_files:
+            file_path = os.path.join(study_folder, filename)
+            df = pd.read_csv(file_path)
+            df = self.tcrdb2_filtering(df, study_id, disease)
+            study_dfs.append(df)
+
+        return pd.concat(study_dfs, ignore_index=True)
+
+    def tcrdb2_filtering(self, df, study_id, disease):
+        df = df.drop(columns=['Unnamed: 0', 'cloneCount', 'Length', 'NNSeq'])  # will also drop 'Chain' later
+
+        df['condition'] = disease
+        df['study_id'] = study_id
+        # TODO!!!!!
+        #  1. ADD: 'patient_id', 'tissue', 'cell_type' (and remove the temporary solution...)
+
+        df['patient_id'] = df['RunId'].unique()[0]
+        df['tissue'] = 'Unknown'
+        df['cell_type'] = 'Unknown'
+
+        # Keep only beta chains
+        df = df[df['Chain'] == 'TRB'].copy()
+        df = df.drop(columns=['Chain'])
+
+        # Keep only complete sequences with valid V, J, and in-frame CDR3
+        df = df.dropna(subset=['AASeq', 'Vregion', 'Jregion'])
+
+        # Keep only CDR3 sequences that start with C and end with F and don't contain stop codons (*)
+        df = df[df['AASeq'].str.match(r'^C[^*]*F$')]
+
+        # Normalize V and J region by removing alleles (e.g., TRBV7-9*01 → TRBV7-9)
+        df['Vregion'] = df['Vregion'].str.extract(r'^(TRBV[\d\-]+)')
+        df['Jregion'] = df['Jregion'].str.extract(r'^(TRBJ[\d\-]+)')
+
+        # Group by AASeq and take the most frequent V and J gene
+        df_grouped = (
+            df.groupby('AASeq')
+            .apply(lambda g: g.loc[g['cloneFraction'].idxmax()])
+            .reset_index(drop=True)
+        )
+
+        # Filter by cloneFraction ratio threshold (> 0.00001%)
+        df_grouped = df_grouped[df_grouped['cloneFraction'] > 0.00001]
+        # df_grouped = df_grouped[df_grouped['cloneFraction'] > 0.0000001]  # 0.00001% = 0.0000001
+
+        # Ensure column order and presence
+        required_cols = ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion',
+                         'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+        for col in required_cols:
+            if col not in df_grouped.columns:
+                df_grouped[col] = pd.NA
+
+        df_grouped = df_grouped[required_cols]
+
+        return df_grouped
 
     # This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
     def get_full_healthy_synapse_mal_id_dataframe(self, to_recalculate=False, get_all=False):
@@ -1028,3 +1148,156 @@ class DatasetLoader:
         std_percent_of_total = np.std(percent_of_total_values)  # Calculate std for percent_of_total
 
         return mean_results, std_percent_of_total
+
+    # TODO: This code does not contain the filtering of the data! that should be when loading data from TCRdb2!
+    def get_ms_extra_bld_dataframe(self, df_bld=None):
+        # TODO: Changed from .tsv to .csv (downloaded from TCRdb2)
+        extra_ms_path = 'db/tcrdb/special2'
+        extra_ms_files = [x for x in os.listdir(extra_ms_path) if x.endswith('Pre.csv')]
+        extra_ms_dfs = []
+
+        def print_names_and_tags():
+            extra_ms_path = 'db/tcrdb/special'
+            file_path = os.path.join(extra_ms_path, 'information/names_and_tags.txt')
+            output_path = os.path.join(extra_ms_path, 'information/parsed_names_and_tags/pairs.pickle')
+
+            pairs = []
+
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = [line.strip() for line in f if line.strip()]  # remove empty lines
+
+            def parse_tags(tag_line):
+                tag_dict = {}
+                for item in tag_line.split(','):
+                    if ':' in item:
+                        key, value = item.split(':', 1)  # only split on first ':'
+                        tag_dict[key.strip()] = value.strip()
+                return tag_dict
+
+            # group lines into pairs and parse tags as dicts
+            for i in range(0, len(lines), 2):
+                tsv = lines[i]
+                tag_line = lines[i + 1] if i + 1 < len(lines) else ''
+                tag_dict = parse_tags(tag_line)
+                pairs.append((tsv, tag_dict))
+
+            # Save to pickle
+            with open(output_path, 'wb') as f:
+                pickle.dump(pairs, f)
+
+            # print the pairs
+            for tsv, tag_dict in pairs:
+                print(f"Filename: {tsv}")
+                print("Tags:")
+                for k, v in tag_dict.items():
+                    print(f"  {k}: {v}")
+                print()
+
+        # print_names_and_tags()
+
+        # Ensure every sequence starts with 'C' and ends with 'F'
+        def enforce_start_end(seq):
+            if not seq.startswith('C'):
+                seq = 'C' + seq
+            if not seq.endswith('F'):
+                seq = seq + 'F'
+            return seq
+
+        for file_name in tqdm(extra_ms_files):
+            file_path = os.path.join(extra_ms_path, file_name)
+            df = pd.read_csv(file_path, sep=',', low_memory=False)
+            # df = pd.read_csv(file_path, sep='\t', low_memory=False)  # FOR .tsv (and not for csv!)
+            # Possible cols: ['sample_name' 'species' 'locus' 'product_subtype' 'kit_pool' 'sku', 'test_name' 'sample_catalog_tags' 'sample_rich_tags', 'sample_rich_tags_json' 'hla_class_i' 'hla_class_ii' 'kit_control', 'total_templates' 'productive_templates' 'outofframe_templates', 'stop_templates' 'dj_templates' 'total_rearrangements', 'productive_rearrangements' 'outofframe_rearrangements', 'stop_rearrangements' 'dj_rearrangements' 'total_reads', 'total_productive_reads' 'total_outofframe_reads' 'total_stop_reads', 'total_dj_reads' 'productive_simpson_clonality' 'productive_clonality', 'productive_entropy' 'sample_simpson_clonality' 'sample_clonality', 'sample_entropy' 'sample_amount_ng' 'sample_cells_mass_estimate', 'fraction_productive_of_cells_mass_estimate' 'sample_cells', 'fraction_productive_of_cells' 'max_productive_frequency' 'max_frequency', 'counting_method' 'primer_set' 'sequence_result_status' 'release_date', 'upload_date' 'sample_tags' 'fraction_productive' 'order_name' 'kit_id', 'total_t_cells' 'total_templates_agg' 'rearrangement' 'amino_acid', 'frame_type' 'rearrangement_type' 'templates' 'seq_reads' 'frequency', 'productive_frequency' 'cdr3_length' 'v_family' 'v_gene' 'v_allele', 'd_family' 'd_gene' 'd_allele' 'j_family' 'j_gene' 'j_allele', 'v_deletions' 'd5_deletions' 'd3_deletions' 'j_deletions' 'n2_insertions', 'n1_insertions' 'v_index' 'n1_index' 'n2_index' 'd_index' 'j_index', 'v_family_ties' 'v_gene_ties' 'v_allele_ties' 'd_family_ties', 'd_gene_ties' 'd_allele_ties' 'j_family_ties' 'j_gene_ties', 'j_allele_ties' 'sequence_tags' 'v_shm_count' 'v_shm_indexes' 'antibody', 'bio_identity' 'rearrangement_trunc' 'v_resolved' 'd_resolved', 'j_resolved' 'extended_rearrangement' 'cdr1_rearrangement', 'cdr1_amino_acid' 'cdr1_start_index' 'cdr1_rearrangement_length', 'cdr2_rearrangement' 'cdr2_amino_acid' 'cdr2_start_index', 'cdr2_rearrangement_length' 'cdr3_rearrangement' 'cdr3_amino_acid', 'cdr3_start_index' 'cdr3_rearrangement_length' 'chosen_v_family', 'chosen_v_gene' 'chosen_v_allele' 'chosen_j_family' 'chosen_j_gene', 'chosen_j_allele']
+            # what we need: ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion', 'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+            # Important cols:
+            # 1. 'AASeq' is 'cdr3_amino_acid' (remove rows with sequences that have non-standard amino acids)
+            # 2. 'cloneFraction' is 'productive_frequency' (fill nans with 0)
+            # 3. 'Vregion' is 'v_gene' (fill nans with 'None')
+            # 4. 'Dregion' is 'd_gene' (fill nans with 'None')
+            # 5. 'Jregion' is 'j_gene' (fill nans with 'None')
+            # 6. 'RunId' is 'sample_name' (without the '_Pre' suffix)
+            # 7. 'patient_id' is 'sample_name' (split by '_' and take first element)
+            # 8. 'tissue' is 'locus'
+            # 9. 'cell_type' is 'sample_name' (split by '_' and take second element)
+            # 10. 'condition' is 'Multiple Sclerosis'
+            # 11. 'study_id' is 'immunoSEQ33'
+
+            df_filtered = df[['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion']]
+            df_filtered = df_filtered[df_filtered['AASeq'].str.contains('^C[ACDEFGHIKLMNPQRSTVWY]*F$', na=False)]
+            df_filtered.loc[:, 'RunId'] = file_name.split('_')[2]
+            df_filtered.loc[:, 'patient_id'] = file_name.split('_')[0]
+            df_filtered.loc[:, 'tissue'] = 'Blood'
+            df_filtered.loc[:, 'cell_type'] = file_name.split('_')[1] if file_name.split('_')[1] in ['CD4', 'CD8'] else 'Unknown'
+            df_filtered.loc[:, 'condition'] = 'Multiple Sclerosis'
+            df_filtered.loc[:, 'study_id'] = 'immunoSEQ33'
+
+            # df_filtered = df.rename(columns={
+            #     'cdr3_amino_acid': 'AASeq',
+            #     'productive_frequency': 'cloneFraction',
+            #     'v_gene': 'Vregion',
+            #     'd_gene': 'Dregion',
+            #     'j_gene': 'Jregion',
+            #     'sample_name': 'RunId',
+            #     'locus': 'tissue',
+            # })
+            # # drop rows with NaN in 'AASeq' or 'cloneFraction'
+            # df_filtered = df_filtered.dropna(subset=['AASeq'])
+            # df_filtered = df_filtered[df_filtered['AASeq'].str.contains('^C[ACDEFGHIKLMNPQRSTVWY]*F$', na=False)]
+            # # make sure that every sequence in AASeq starts with 'C' and ends with 'F'
+            # # df_filtered['AASeq'] = df_filtered['AASeq'].apply(enforce_start_end)  # Note: This will add 'C' and 'F' to the sequence, but we want to just remove it instead.
+            # df_filtered['cloneFraction'] = df_filtered['cloneFraction'].fillna(0.0)
+            # df_filtered['Vregion'] = df_filtered['Vregion'].fillna('unresolved')
+            # df_filtered['Dregion'] = df_filtered['Dregion'].fillna('unresolved')
+            # df_filtered['Jregion'] = df_filtered['Jregion'].fillna('unresolved')
+            # df_filtered['RunId'] = df_filtered['RunId'].str.replace('_Pre', '')
+            # df_filtered['RunId'] = df_filtered['RunId'].str.replace('_', '-')
+            # df_filtered['patient_id'] = df_filtered['RunId'].apply(lambda x: x.split('-')[0])
+            # df_filtered['tissue'] = df_filtered['tissue'].str.replace(' ', '-')
+            # df_filtered['tissue'] = df_filtered['tissue'].replace({'TCRB': 'PBMC'})
+            # df_filtered['cell_type'] = df_filtered['RunId'].apply(lambda x: x.split('-')[1] if len(x.split('-')) > 1 else 'Unknown')
+            # df_filtered['condition'] = 'Multiple Sclerosis'
+            # df_filtered['study_id'] = 'immunoSEQ33'
+            # df_filtered = df_filtered[['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion', 'RunId', 'patient_id',
+            #                            'tissue', 'cell_type', 'condition', 'study_id']]
+            extra_ms_dfs.append(df_filtered)
+
+        # concatenate all dataframes
+        extra_ms_df = pd.concat(extra_ms_dfs, ignore_index=True)
+
+        def print_groups_info():
+            overlap_sizes = []
+            grouped = extra_ms_df.groupby('patient_id')
+            for patient_id, group in grouped:
+                cd4_seqs = set(group.loc[group['cell_type'].str.contains('CD4', na=False), 'AASeq'])
+                cd8_seqs = set(group.loc[group['cell_type'].str.contains('CD8', na=False), 'AASeq'])
+                pbmc_seqs = set(group.loc[group['cell_type'].str.contains('PBMC', na=False), 'AASeq'])
+
+                combined_cd4_cd8 = cd4_seqs.union(cd8_seqs)
+                overlap_with_pbmc = combined_cd4_cd8.intersection(pbmc_seqs)
+
+                print(f"Patient ID: {patient_id}")
+                print(f"  CD4 unique AASeqs: {len(cd4_seqs)}")
+                print(f"  CD8 unique AASeqs: {len(cd8_seqs)}")
+                print(f"  PBMC unique AASeqs: {len(pbmc_seqs)}")
+                print(f"  CD4+CD8 combined unique AASeqs: {len(combined_cd4_cd8)}")
+                print(f"  Overlap with PBMC: {len(overlap_with_pbmc)}\n")
+                overlap_sizes.append(len(overlap_with_pbmc))
+            print(f"Overlap Mean: {np.mean(overlap_sizes):.3f}")
+
+        # print number of AASeqs per patient_id (before filtering/sampling)
+        # aa_counts = extra_ms_df.groupby('patient_id')['AASeq'].count()
+        # print("AASeq counts per patient_id:\n", aa_counts.sort_values(ascending=False))
+
+        # limit to at most 20,000 unique AASeqs per patient
+        # def sample_unique_seqs(group):
+        #     group_unique = group.drop_duplicates(subset='AASeq')
+        #     if len(group_unique) > 20000:
+        #         group_unique = group_unique.sample(n=20000, random_state=42)
+        #     return group_unique
+        # extra_ms_df = extra_ms_df.groupby('patient_id', group_keys=False).apply(sample_unique_seqs)
+
+        # remove all samples with 'cell_type' of PBMC
+        extra_ms_df = extra_ms_df[extra_ms_df['cell_type'] != 'Unknown']
+        extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'])
+
+        return extra_ms_df

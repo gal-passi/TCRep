@@ -10,7 +10,7 @@ warnings.filterwarnings("ignore", category=FutureWarning, module="torch")
 #  SETUP PARAMETERS
 BASE_DIRECTORY = os.getcwd()
 STUDIES_DATABASE = 'db'
-TCR_DATABASES = {'tcrdb': 'tcrdb'}
+TCR_DATABASES = {'tcrdb': 'tcrdb', 'tcrdb2': 'tcrdb2'}
 OBJECTS_DATABASE = 'objects'
 OBJECTS_TYPES = ['studies']
 INIT_STUDIES = ["PRJNA393498", "immunoSEQ47", "immunoSEQ77", "PRJNA258001", "PRJNA390125", "PRJNA495603", "PRJNA579190", "PRJNA280417"]
@@ -29,5 +29,6 @@ TCRDB_DOWNLOAD_URL = "https://guolab.wchscu.cn/TCRdb/Download/"
 
 #  DIRECTORIES
 TCR_DB_PATH = pjoin(STUDIES_DATABASE, TCR_DATABASES['tcrdb'])
+TCR_DB2_PATH = pjoin(STUDIES_DATABASE, TCR_DATABASES['tcrdb2'])
 STUDY_SAVE_DIR = pjoin(OBJECTS_DATABASE, 'studies')
 INDEX = 'index.json'

@@ -49,7 +49,7 @@ from dataset_loader import DatasetLoader
 # Constants
 VALID_SEQ_CACHE = "cache/valid_sequences"
 TO_DISPLAY_LENGTHS_HIST = False
-TO_DISPLAY_COMMON_SEQUENCES = False
+TO_DISPLAY_COMMON_SEQUENCES = True
 TO_DISPLAY_ACCURACY_BIN_BY_DIST = False
 TO_DISPLAY_RESULTS = False
 TO_DISPLAY_RESULTS_PLOT_TSNE = False
@@ -855,10 +855,10 @@ if __name__ == '__main__':
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
-    dataset_types = ['ms', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
+    dataset_types = ['ms', 'ms_hlt_article', 'ms_plus_hlt_article', 'ms_extra', 'ms_extra_hlt_article', 'ms_extra_plus_hlt_article', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
-    dataset_filter_types = ['none', 'num_of_patients=3,to_inflate=False', 'num_of_patients=4,to_inflate=False']
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')

@@ -228,10 +228,14 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
     # Setting up training negative sequences for this run
     if not change_negatives:
+        # print the percentage of positives out of the full all negatives set: (only in training)
+        percent_positives = (num_pos_samples / (num_pos_samples + len(neg_seqs))) * 100
+        print(f"Percentage of positives out of all training data: {percent_positives:.2f}%")
         if len(neg_seqs) < num_pos_samples * neg_pos_ratio:
-            raise ValueError(f"Not enough negative samples. Need at least {num_pos_samples * neg_pos_ratio}, but got {len(neg_seqs)}.")
+            raise ValueError(f"Not enough negative samples. Need at least {num_pos_samples * neg_pos_ratio}, but have only {len(neg_seqs)}.")
         train_neg_seqs = np.random.choice(neg_seqs, size=num_pos_samples * neg_pos_ratio, replace=False)
-        print(f"Training on {num_pos_samples} positive samples and {len(train_neg_seqs)} negative samples...")
+        print(f"Training on {num_pos_samples} positive samples and {len(train_neg_seqs)} negative samples (out of {len(neg_seqs)} all negatives)...")
+
     else:
         print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
 

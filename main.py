@@ -787,13 +787,13 @@ def sweep_model():
 
 
 def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=None,
-                        use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None,
-                        filter_to_inflate=False, remove_seqs_by_len=None, verbose=True):
+                        use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
+                        filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
     if to_k_fold:
-        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True)
+        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent, top_n_seqs=top_n_seqs)
         df_bld, df_hlt = dataset_loader.get_dfs()
         unique_patient_ids = df_bld["patient_id"].unique()
         unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -844,8 +844,9 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
     dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
                                    k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
                                    use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
-                                   filter_num_of_patients=filter_num_of_patients, filter_to_inflate=filter_to_inflate,
-                                   remove_seqs_by_len=remove_seqs_by_len, verbose=verbose)
+                                   filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
+                                   ratio=ratio, filter_to_inflate=filter_to_inflate,
+                                   remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, verbose=verbose)
     return dataset_loader
 
 
@@ -855,10 +856,16 @@ if __name__ == '__main__':
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
-    dataset_types = ['ms', 'ms_hlt_article', 'ms_plus_hlt_article', 'ms_extra', 'ms_extra_hlt_article', 'ms_extra_plus_hlt_article', 'article', 'article2', 'cmv', 'article_sle', 'ms_plus_article2_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
+    dataset_types = ['ms', 'ms_hlt_article', 'ms_plus_hlt_article',
+                     'ms_extra', 'ms_extra_hlt_article', 'ms_extra_plus_hlt_article',
+                     'ms_no_healthy_ms',
+                     'article', 'article2',
+                     'cmv',
+                     'article_sle', 'ms_plus_article2_ms',
+                     'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
-    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
     parser.add_argument('--loss_type', type=str, choices=loss_types, default='ce', help='Type of loss function to use')
@@ -893,10 +900,13 @@ if __name__ == '__main__':
     parser.add_argument('--use_similar_negatives', action='store_true', help='Use similar negatives to training positives for training (similar according to Levenstein distance)')
     parser.add_argument('--combine_classification', '-comb_class', action='store_true', help='Combine classification model results (Only applicable after first training with all 1..5 k-folds)')
     parser.add_argument('--dataset_filter_num_of_patients', type=int, default=3, help='Number of patients to filter the dataset by (take positive from this num of patients)')
+    parser.add_argument('--dataset_filter_num_of_healthy', type=int, default=3, help='Number of healthy subjects to filter the dataset with (remove from positives from this num of patients)')
     parser.add_argument('--dataset_filter_dont_inflate', '-no_inflate', action='store_true', help='Do not inflate the dataset when filtering positives and negatives')
     parser.add_argument('--changing_negatives', '-change_neg', action='store_true', help='Whether to run sample the negatives each epoch or not')
     parser.add_argument('--remove_seqs_by_len', type=int, default=False, help='Whether to remove sequences from valid/test sets by length or not')
-
+    parser.add_argument('--train_vae', action='store_true', default=False, help='Train ControlVAE on positive sequences instead of classification model')
+    parser.add_argument('--top_percent', type=int, default=None, help='The top percent of sequences take when loading data from TCRdb2')
+    parser.add_argument('--top_n_seqs', type=int, default=None, help='The top n*1000 sequences take when loading data from TCRdb2')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -933,9 +943,12 @@ if __name__ == '__main__':
     use_similar_negatives = args.use_similar_negatives
     combine_classification = args.combine_classification
     filter_num_of_patients = args.dataset_filter_num_of_patients
+    filter_num_of_healthy = args.dataset_filter_num_of_healthy
     filter_to_inflate = not args.dataset_filter_dont_inflate
     changing_negatives = args.changing_negatives
     remove_seqs_by_len = args.remove_seqs_by_len
+    top_percent = args.top_percent
+    top_n_seqs = args.top_n_seqs
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -954,7 +967,13 @@ if __name__ == '__main__':
     assert not (dist_loss_type != 'none' and ratio), "Cannot use dist_loss_type and ratio at the same time"
     assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
     assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
+    assert not (top_percent is not None and 'tcrdb2' not in dataset_type), "Cannot use top_percent when dataset_type does not contain 'tcrdb2'"
+    assert not (top_n_seqs is not None and 'tcrdb2' not in dataset_type), "Cannot use top_n_seqs when dataset_type does not contain 'tcrdb2'"
+    assert not (top_percent is not None and top_n_seqs is not None), "Cannot use both top_percent and top_n_seqs at the same time"
 
+    if 'ms_tcrdb2' in dataset_type:
+        dataset_type += f'_top_{top_percent}' if top_percent is not None else ''
+        dataset_type += f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -981,6 +1000,7 @@ if __name__ == '__main__':
     print(f"\tDist Loss Type: {args.dist_loss_type}")
     print(f"\tClassification Head Type: {args.ch_type}")
     print(f"\tDataset Filter Number of Patients: {args.dataset_filter_num_of_patients}")
+    print(f"\tDataset Filter Number of Healthy: {args.dataset_filter_num_of_healthy}")
     print(f"\tDataset Filter Inflate: {not args.dataset_filter_dont_inflate}")
     print(f"\tNegative Partition Index: {args.negative_partition}")
     print(f"\tChanging Negatives: {args.changing_negatives}")
@@ -992,8 +1012,10 @@ if __name__ == '__main__':
     dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=to_k_fold,
                                         dist_loss_type=dist_loss_type, neg_partition=neg_partition,
                                         use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
-                                        filter_num_of_patients=filter_num_of_patients,
-                                        filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len)
+                                        filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
+                                        ratio=ratio,
+                                        filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
+                                        top_percent=top_percent, top_n_seqs=top_n_seqs)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1005,6 +1027,18 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
+
+    # TODO: Adding VAE training here! dont just leave it here!
+    # Training VAE
+    train_vae = args.train_vae
+    if train_vae:
+        from vae.vae_training import run_vae_training_and_inference
+        run_vae_training_and_inference(args, dataset_loader, device)
+
+        # Note: we won't get to this part because there is an exit command in the previous vae line
+        from vae.vae_training_dynamic import train_and_inference_vae
+        train_and_inference_vae(args, dataset_loader, device)
+
 
     # # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
     # article2_data_folder = 'db/test_db/data_tcrb'

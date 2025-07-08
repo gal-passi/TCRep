@@ -8,10 +8,14 @@ import numpy as np
 import pandas as pd
 from collections import Counter
 from itertools import combinations
+
+from networkx import all_neighbors
 from tqdm import tqdm
 from Curation import Study
 from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
 import hashlib
+from itertools import chain
+from collections import defaultdict
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -37,14 +41,21 @@ TCRDB2_PATH = 'db/tcrdb2'
 class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
-                 filter_num_of_patients=3, filter_to_inflate=False, remove_seqs_by_len=False, verbose=True):
+                 filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
+                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, verbose=True):
         self.dataset_type = dataset_type
+        self.top_percent = top_percent
+        self.top_n_seqs = top_n_seqs
+
+        # Plotting top p inference if needed
+        if top_percent is not None and False:  # Setting this to false because it takes too much time to plot in regular runs!
+            self.top_p_inference_plotting('Multiple sclerosis', dataset_type)
 
         disease = 'Multiple sclerosis'
         print('Loading Disease:')
         df = self.get_all_usable_disease_data(disease=disease)
         print('Loading Healthy:')
-        df_h = self.get_all_usable_healthy_data()
+        df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
         # Choosing cell type
         cell_type = ['DC8', 'CD4', 'ALL'][2]
@@ -54,12 +65,13 @@ class DatasetLoader:
             # reading healthy study:
             df_hlt = df_h[df_h['cell_type'] == cell_type]
         else:
-            if dataset_type == 'ms':
+            if dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
                 df_bld, df_hlt = df, df_h
             elif dataset_type == 'ms_hlt_article':
                 df_bld, df_hlt = df, df_h
                 # Only Healthy df from article
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=True, get_all=True)
+                # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
             elif dataset_type == 'ms_plus_hlt_article':
                 df_bld, df_hlt = df, df_h
@@ -116,6 +128,20 @@ class DatasetLoader:
                 df_hlt = df_h
             else:
                 raise ValueError("Invalid dataset type")
+        if verbose:
+            print('Done loading datasets.')
+
+        required_cols = ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion',
+                         'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+        # Check that the required columns are in the dataframes
+        for col in required_cols:
+            if col not in df_bld.columns or col not in df_hlt.columns:
+                raise ValueError(f"Column '{col}' is missing from one of the dataframes!")
+        df_bld = df_bld[required_cols]
+        df_hlt = df_hlt[required_cols]
+
+        # Displaying the figure of common sequences if needed
+        self.display_common_sequences_figure(df_bld, df_hlt, dataset_type)
 
         if get_only_unique_patient_ids:
             self.df_bld, self.df_hlt = df_bld, df_hlt
@@ -158,78 +184,24 @@ class DatasetLoader:
             name_metadata = ""
         if dataset_type == 'article_sle':
             num_of_patients = 2
+            num_of_healthy = 2
         else:
             num_of_patients = filter_num_of_patients
+            num_of_healthy = filter_num_of_healthy
+        if not filter_to_inflate:
+            name_metadata += "_no_inflate"
 
-        # # TODO: DELETE:
-        # temp_df_h = df_hlt
-        # grouped_h = temp_df_h.groupby('patient_id')['AASeq'].unique()
-        # aa_seq_counter_h = Counter()
-        # for aa_seqs in grouped_h:
-        #     aa_seq_counter_h.update(aa_seqs)
-        # valid_aa_seqs_h = set({aa_seq for aa_seq, count in aa_seq_counter_h.items() if count >= 2})
-        # common_seqs_healthy_and_disease = []
-        # total_num_of_positives = []
-        # for i in range(2, 17):
-        #     num_of_patients = i
-        #     train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata,
-        #                                                          train_patient_ids,
-        #                                                          dataset_type, cell_type,
-        #                                                          num_of_patients=num_of_patients,
-        #                                                          filter_to_inflate=filter_to_inflate)
-        #     # Calculate positive valid sequences
-        #     train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        #     valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata,
-        #                                                          train_and_valid_ids,
-        #                                                          dataset_type, cell_type,
-        #                                                          num_of_patients=num_of_patients,
-        #                                                          filter_to_inflate=filter_to_inflate)
-        #     valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
-        #     valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
-        #     # Calculate positive test sequences
-        #     train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        #     test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata,
-        #                                                         train_and_test_ids,
-        #                                                         dataset_type, cell_type,
-        #                                                         num_of_patients=num_of_patients,
-        #                                                         filter_to_inflate=filter_to_inflate)
-        #     test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
-        #     test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
-        #
-        #     # make sure that there is no intersection between train, valid and test sequences
-        #     train_pos_seqs = np.array(list(set(train_pos_seqs) - set(np.concatenate((valid_pos_seqs, test_pos_seqs)))))
-        #     if len(set(valid_pos_seqs) & set(test_pos_seqs)) > 0:
-        #         if len(valid_pos_seqs) > len(test_pos_seqs):
-        #             valid_pos_seqs = np.array(list(set(valid_pos_seqs) - set(test_pos_seqs)))
-        #         else:
-        #             test_pos_seqs = np.array(list(set(test_pos_seqs) - set(valid_pos_seqs)))
-        #
-        #     positive_seqs = np.concatenate((train_pos_seqs, valid_pos_seqs, test_pos_seqs))
-        #
-        #     common_seqs_healthy_and_disease.append(len(set(positive_seqs).intersection(valid_aa_seqs_h)))
-        #     total_num_of_positives.append(len(positive_seqs))
-        # # Plot common_seqs_healthy_and_disease in a simple plot
-        # import matplotlib.pyplot as plt
-        # plt.figure(figsize=(10, 6))
-        # plt.plot(range(3, 17), common_seqs_healthy_and_disease[1:], label='Common Sequences of Healthy and Positive Disease')
-        # plt.plot(range(3, 17), total_num_of_positives[1:], label='Total Positives')
-        # plt.xticks(range(3, 17))
-        # plt.xlabel("Number of Patients")
-        # plt.ylabel("Number of Common Sequences with Healthy")
-        # plt.title("Common Sequences with Healthy vs Number of Patients")
-        # plt.legend()
-        # plt.grid()
-        # plt.show()
-
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        if verbose:
+            print('Calculating positive and negative sequences...')
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -304,6 +276,9 @@ class DatasetLoader:
         # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
         neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
 
+        if verbose:
+            print('Done.')
+
         # get the dataframes for the test and train sets to convert AASeqs to ratios
         if dataset_type not in ['article', 'article_sle']:
             # concat df_bld and df_hlt to get the dataframes
@@ -327,7 +302,8 @@ class DatasetLoader:
             result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
             return result if dont_use_function else f(torch.tensor(result))
 
-        self.build_distance_df(df_bld, train_pos_seqs, dataset_type)
+        if dist_loss_type != 'none':
+            self.build_distance_df(df_bld, train_pos_seqs, dataset_type)
 
         def distance_func(x, a=2.0, k=3.5, x_0=2.0, b=1.0):
             sig = 1 - 1 / (1 + torch.exp(-k * (x - x_0)))
@@ -428,8 +404,8 @@ class DatasetLoader:
         # set dataframes as class attributes
         self.df_bld = df_bld
         self.df_hlt = df_hlt
-        self.aaseq_to_ratio = aaseq_to_ratio
-        self.aaseq_to_distance = aaseq_to_distance
+        self.aaseq_to_ratio = aaseq_to_ratio if ratio else None
+        self.aaseq_to_distance = aaseq_to_distance if dist_loss_type != 'none' else None
         # [set(positive_seqs).intersection(set(df_hlt[df_hlt['patient_id'] == p]['AASeq'].values)) for p in df_hlt['patient_id'].unique()]
 
         # Note: looks like when we have less sequences in the set and when we take only seqs that appear in i patients,
@@ -642,16 +618,40 @@ class DatasetLoader:
         df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
         self.df_aaseq_to_ratio = df_unique
 
-    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, filter_to_inflate=True, verbose=True):
-        # TODO: CHANGE THIS BACK TO THE NORMAL IMPLEMENTATION AFTER TESTING!!!
+    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
         if filter_to_inflate:
-            df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
-            positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients, verbose=verbose)
-            all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
-            valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
-            all_common_seqs = all_common_seqs - valid_seqs_healthy
-            positive_seqs.update(all_common_seqs)
+            lev_dist_accept = 1  # for now its always lev distance 1
+            save_folder = "cache/valid_sequences/multiple_sclerosis"
+            save_name = f"{df_name}_disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}"
+            if num_of_healthy != 3:
+                save_name += f"_healthy{num_of_healthy}"
+            if self.top_percent is not None:
+                save_name += f"_top_{self.top_percent}"
+            if self.top_n_seqs is not None:
+                save_name += f"_top_n_{self.top_n_seqs}"
+            save_file = os.path.join(save_folder, f"{save_name}_valid_seqs_dist_{lev_dist_accept}.pkl")
+            # Check if the file already exists
+            if os.path.exists(save_file):
+                with open(save_file, 'rb') as f:
+                    positive_seqs, negative_seqs = pickle.load(f)
+                if verbose:
+                    print(f"Loaded valid sequences from {save_file}")
+                return positive_seqs, negative_seqs
+            else:
+                df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
+                positive_seqs, negative_seqs = self.get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, verbose=verbose)
+                # Save the positive and negative sequences to a file
+                os.makedirs(save_folder, exist_ok=True)
+                with open(save_file, 'wb') as f:
+                    pickle.dump((positive_seqs, negative_seqs), f)
             return positive_seqs, negative_seqs
+
+            # TODO: This is the old code:
+            # all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=3)
+            # valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=3)
+            # all_common_seqs = all_common_seqs - valid_seqs_healthy
+            # positive_seqs.update(all_common_seqs)
+            # return positive_seqs, negative_seqs
         else:
             temp_df = df_bld[df_bld['patient_id'].isin(patient_ids)]
             grouped = temp_df.groupby('patient_id')['AASeq'].unique()
@@ -665,7 +665,7 @@ class DatasetLoader:
             aa_seq_counter_h = Counter()
             for aa_seqs in grouped_h:
                 aa_seq_counter_h.update(aa_seqs)
-            valid_aa_seqs_h = {aa_seq for aa_seq, count in aa_seq_counter_h.items() if count >= num_of_patients}
+            valid_aa_seqs_h = {aa_seq for aa_seq, count in aa_seq_counter_h.items() if count >= num_of_healthy}
 
             positive_seqs = np.array(list(set(valid_aa_seqs) - set(valid_aa_seqs_h)))
             negative_seqs = np.array(list(set(valid_aa_seqs_h) - set(valid_aa_seqs)))
@@ -693,35 +693,71 @@ class DatasetLoader:
         return self.train_masks, self.valid_masks, self.test_masks
 
     # Loading all valid sequences for disease and healthy samples
-    def get_positive_negative(self, df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=3, verbose=True):
+    def get_positive_negative(self, df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=3, num_of_healthy=3, verbose=True):
         all_common_seqs = self.find_all_common_sequences(df_bld, num_of_patients=num_of_patients)
-        valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=num_of_patients)
+        valid_seqs_healthy = self.find_all_common_sequences(df_hlt, num_of_patients=num_of_healthy)
         all_common_seqs = all_common_seqs - valid_seqs_healthy
-        # choosing valid samples according to their re-occurrence in different patients and a given distance
-        valid_seqs_disease = self.calculate_valid_near_sequences(df_bld,
-                                                                 save_name=f'{df_name}_disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}',
-                                                                 lev_dist_accept=1,
-                                                                 num_of_patients=num_of_patients,
-                                                                 all_common_seqs=all_common_seqs)
 
-        positive_seqs = set(valid_seqs_disease)
+        # TODO: The following code was added to try to speed up the process of finding valid sequences!
+        #  Check that it works the same!
+        # Faster way to get the same results (ONLY WHEN LEV DISTANCE IS 1):
+        valid_seqs_disease = set(all_common_seqs)  # D*
+        valid_seqs_healthy = set(valid_seqs_healthy)  # H*
+
+        seqs_disease_neighbours = self.generate_full_neighbors(valid_seqs_disease, valid_letters=set(''.join(valid_seqs_disease)))  # Id (unfiltered)
+        seqs_disease_neighbours = set(seqs_disease_neighbours).intersection(set(df_bld['AASeq'].unique()))  # Id
+        seqs_healthy_neighbours = self.generate_full_neighbors(valid_seqs_healthy, valid_letters=set(''.join(valid_seqs_healthy)))  # Ih
+
+        # return (D* \ H*) U (Id \ Ih), H*
+        positive_seqs = set(valid_seqs_disease) - set(valid_seqs_healthy)
+        positive_seqs = positive_seqs.union(seqs_disease_neighbours - seqs_healthy_neighbours)
+        negative_seqs = set(valid_seqs_healthy)
         if verbose:
             print(f"Valid Disease Sequence (num of common = {num_of_patients}): {len(positive_seqs)}")
 
-        # Extract valid letters
-        valid_letters = set(''.join(valid_seqs_healthy))
-        # Group healthy sequences by length
+        return positive_seqs, negative_seqs
+
+
+
+        # TODO: This is old code:
+        # # choosing valid samples according to their re-occurrence in different patients and a given distance
+        # valid_seqs_disease = self.calculate_valid_near_sequences(df_bld,
+        #                                                          save_name=f'{df_name}_disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}',
+        #                                                          lev_dist_accept=1,
+        #                                                          num_of_patients=num_of_patients,
+        #                                                          all_common_seqs=all_common_seqs)
+        #
+        # positive_seqs = set(valid_seqs_disease)
+        # if verbose:
+        #     print(f"Valid Disease Sequence (num of common = {num_of_patients}): {len(positive_seqs)}")
+        #
+        # # Extract valid letters
+        # valid_letters = set(''.join(valid_seqs_healthy))
+        # # Group healthy sequences by length
+        # length_groups = {}
+        # for seq in valid_seqs_healthy:
+        #     length_groups.setdefault(len(seq), set()).add(seq)
+        # # Process each length group separately
+        # for seq_len, seq_group in length_groups.items():
+        #     # Generate neighbors for this group
+        #     neighbors = self.generate_neighbors(seq_group, valid_letters)
+        #     # Remove neighbors from positive_seqs immediately
+        #     positive_seqs -= neighbors  # This prevents storing all neighbors
+        # negative_seqs = set(valid_seqs_healthy)  # Negative sequences remain unchanged
+        # return positive_seqs, negative_seqs
+
+    def generate_full_neighbors(self, seqs, valid_letters):
+        all_neighbors = set()
         length_groups = {}
-        for seq in valid_seqs_healthy:
+        for seq in seqs:
             length_groups.setdefault(len(seq), set()).add(seq)
         # Process each length group separately
         for seq_len, seq_group in length_groups.items():
             # Generate neighbors for this group
             neighbors = self.generate_neighbors(seq_group, valid_letters)
-            # Remove neighbors from positive_seqs immediately
-            positive_seqs -= neighbors  # This prevents storing all neighbors
-        negative_seqs = set(valid_seqs_healthy)  # Negative sequences remain unchanged
-        return positive_seqs, negative_seqs
+            all_neighbors.update(neighbors)
+        return all_neighbors
+
 
     def get_all_usable_disease_data(self, disease='Multiple sclerosis', get_all=False):
         studies = []
@@ -748,7 +784,8 @@ class DatasetLoader:
 
             study = Study(study_id)
             usable_samples = study._samples['usable']
-            df = study.read_sample(usable_samples, condition=disease if not get_all else None)
+            df = study.read_sample(usable_samples, condition=disease if not get_all else None,
+                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs)
             # if not get_all:
             #     df = df[df['condition'] == disease]
             # df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
@@ -756,9 +793,12 @@ class DatasetLoader:
 
         return pd.concat(studies, ignore_index=True)
 
-    def get_all_usable_healthy_data(self):
-        healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4,
-                             HEALTHY_STUDY_ID5]
+    def get_all_usable_healthy_data(self, dataset_type='ms'):
+        if 'no_healthy_ms' in dataset_type:
+            healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3]
+        else:
+            healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4,
+                                 HEALTHY_STUDY_ID5]
         healthy_studies = []
         for study_id in healthy_study_ids:
             # df = self.load_study_df(study_id, disease)
@@ -767,7 +807,8 @@ class DatasetLoader:
 
             study = Study(study_id)
             usable_samples = study._samples['usable']
-            df = study.read_sample(usable_samples, condition='Healthy')
+            df = study.read_sample(usable_samples, condition='Healthy',
+                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs)
             # df = df[df['condition'] == 'Healthy']
             # df['study_id'] = study_id
             healthy_studies.append(df)
@@ -845,7 +886,7 @@ class DatasetLoader:
                          'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
         for col in required_cols:
             if col not in df_grouped.columns:
-                df_grouped[col] = pd.NA
+                df_grouped[col] = np.nan
 
         df_grouped = df_grouped[required_cols]
 
@@ -883,7 +924,7 @@ class DatasetLoader:
             condition = metadata['disease'].values[0]
             if get_all or 'Healthy' in condition:
                 data = pd.read_csv(datafile_path, sep='\t', compression='bz2')
-                data = data.loc[:, ['cdr3_seq_aa_q', 'participant_label', 'specimen_tissue']]
+                data = data.loc[:, ['v_segment', 'd_segment', 'j_segment', 'run_id', 'cdr3_seq_aa_q', 'participant_label', 'specimen_tissue']]
                 data['cdr3_seq_aa_q'] = data['cdr3_seq_aa_q'].str.replace(' ', '')
                 # add the condition to the metadata
                 if 'Healthy' in condition:
@@ -896,15 +937,38 @@ class DatasetLoader:
         df = df.dropna(subset=['cdr3_seq_aa_q'])
         # rename columns
         df = df.rename(
-            columns={'cdr3_seq_aa_q': 'AASeq', 'participant_label': 'patient_id', 'specimen_tissue': 'tissue'})
-
+            columns={'v_segment' : 'Vregion', 'd_segment' : 'Dregion', 'j_segment' : 'Jregion', 'run_id' : 'RunId',
+                     'cdr3_seq_aa_q': 'AASeq', 'participant_label': 'patient_id', 'specimen_tissue': 'tissue'})
         df = df[~df['AASeq'].str.contains('[^ACDEFGHIKLMNPQRSTVWY]', regex=True)]
-        df['AASeq'] = 'C' + df['AASeq'] + 'F'
+        df['AASeq'] = 'C' + df['AASeq'] + 'F'  # This is needed: because with this line we get a large set of seqs that also appear in the ms blood df
+
+        # Step 1: Count how many times each AASeq appears per patient → cloneCount
+        df['cloneCount'] = df.groupby(['patient_id', 'AASeq'])['AASeq'].transform('count')
+        # Step 2: Drop duplicates so you have one row per unique (patient_id, AASeq)
+        df_unique = df.drop_duplicates(subset=['patient_id', 'AASeq']).copy()
+        # Step 3: Compute cloneFraction per patient
+        df_unique['cloneFraction'] = df_unique.groupby('patient_id')['cloneCount'].transform(lambda x: x / x.sum())
+        # Step 4: Drop the cloneCount column
+        df_unique = df_unique.drop(columns=['cloneCount'])
+
+        # Normalize V and J regions
+        df_unique['Vregion'] = df_unique['Vregion'].str.extract(r'^(TRBV[\d\-]+)')
+        df_unique.loc[df_unique['Dregion'].apply(lambda x: isinstance(x, str)), 'Dregion'] = \
+            df_unique.loc[df_unique['Dregion'].apply(lambda x: isinstance(x, str)), 'Dregion'].str.extract(r'^(TRBD[\d\-]+)')
+        df_unique['Jregion'] = df_unique['Jregion'].str.extract(r'^(TRBJ[\d\-]+)')
+
+        df_unique['study_id'] = 'synapse_mal_id'
+        required_cols = ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion',
+                         'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+        for col in required_cols:
+            if col not in df_unique.columns:
+                df_unique[col] = np.nan
+        df_unique = df_unique[required_cols]
 
         # Save the DataFrame for future use
-        df.to_pickle(df_filename)
+        df_unique.to_pickle(df_filename)
 
-        return df
+        return df_unique
 
     # TODO: There is a major problem with loading this dataset. The current way doesn't use information from "file_key" so its unusable now..
     def get_full_article2_dataframe(self):
@@ -1301,3 +1365,297 @@ class DatasetLoader:
         extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'])
 
         return extra_ms_df
+
+    def average_dicts(self, outer_list):
+        # The number of inner lists
+        num_inner_lists = len(outer_list)
+
+        # Initialize a list to store the averaged dictionaries
+        averaged_list = []
+
+        # Iterate through each inner list
+        for i in range(len(outer_list[0])):  # assuming all inner lists have the same length
+            # Initialize a defaultdict to accumulate values for each key
+            accumulator = defaultdict(int)
+
+            # Iterate through the outer list and accumulate the sum for each key in each dict
+            for inner_list in outer_list:
+                accumulator_dict = inner_list[i][0]  # Get the dict at index i
+                for key, value in accumulator_dict.items():
+                    accumulator[key] += value
+
+            # Now average the values by dividing by the number of inner lists
+            averaged_dict = {key: value / num_inner_lists for key, value in accumulator.items()}
+
+            # Add the averaged dict to the result list
+            averaged_list.append(averaged_dict)
+
+        return averaged_list
+
+    def combine_to_dataframe(self, metrics_data, additional_values):
+        """
+        Combines two variables into a single pandas DataFrame.
+
+        Parameters:
+        metrics_data (list): List of dictionaries containing metrics
+        additional_values (list): List of additional values to be added as a column
+
+        Returns:
+        pandas.DataFrame: Combined DataFrame with all data
+        """
+        # Convert the first variable (list of dictionaries) to a DataFrame
+        df = pd.DataFrame(metrics_data)
+
+        # Add the second variable as a new column
+        df['std'] = additional_values
+
+        # Ensure the length of additional_values matches the number of rows in the DataFrame
+        if len(additional_values) != len(df):
+            raise ValueError(
+                f"Length mismatch: metrics_data has {len(df)} entries but additional_values has {len(additional_values)} entries")
+
+        return df
+
+    def generate_patient_samples(self, df1, all_seqs_h: np.ndarray, patient_seqs_len: int) -> pd.DataFrame:
+        """
+        Generate a DataFrame where 'patient_id' ranges from H1 to H10, and 'AASeq' contains
+        randomly sampled sequences from all_seqs_h for each patient.
+
+        Parameters:
+        - all_seqs_h (np.ndarray): Unique sequences.
+        - patient_seqs_len (int): Number of sequences to sample per patient.
+
+        Returns:
+        - pd.DataFrame: DataFrame with 'patient_id' and 'AASeq' columns.
+        """
+        data = []
+        for i in range(1, 15):  # Generate 10 samples
+            sampled_seqs = np.random.choice(all_seqs_h, patient_seqs_len, replace=False)
+            for seq in sampled_seqs:
+                data.append((f"H{i}", seq))
+
+        dfh = pd.DataFrame(data, columns=["patient_id", "AASeq"])
+        return pd.concat([df1, dfh], ignore_index=True)
+
+    def display_common_sequences_figure(self, df, df_h, dataset_type, l=8, log_space=True):
+        base_plot_save_path = f"plots/common_seqs/{dataset_type}"
+        os.makedirs(base_plot_save_path, exist_ok=True)
+
+        if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
+            print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
+            return
+        else:
+            print(f"Generating Common Sequences plot for dataset {dataset_type}...")
+
+        # find max len of uniques patient_id
+        if l == None:
+            l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
+
+        # check if study_id is in the df
+        if dataset_type == 'cmv':
+            study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+            rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
+            rand_patients = list(chain(*rand_patients))
+        elif 'study_id' in df.columns and df.iloc[0]['study_id'] == 'article2':
+            rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
+        elif 'study_id' in df.columns:
+            study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+            rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
+            rand_patients = list(chain(*rand_patients))
+        else:
+            # random patients from the df
+            rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 15), replace=False)
+        df = df[df['patient_id'].isin(rand_patients)]
+
+        # calculate common sequences in disease and healthy samples
+        value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
+        x_disease_list = [self.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
+        x_disease = np.array([x[0][value_to_take] for x in x_disease_list])
+        x_disease_std = np.array([x[1] for x in x_disease_list])
+
+        def calculate_common_healthy(patient_id_bld, option=1):
+            df1 = df[df["patient_id"] == patient_id_bld]
+            if option == 1:
+                # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
+                random_patients = np.random.choice(df_h['patient_id'].unique(), size=15, replace=False)
+                df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
+                df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)
+            else:
+                # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
+                patient_seqs_len = len(df1)
+                all_seqs_h = df_h["AASeq"]
+                df_h_comb = self.generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
+            x_healthy = [self.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in
+                         range(2, l)]
+            return x_healthy
+
+        # Average the results of all patients with disease
+        x_healthy_list_all = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df['patient_id'].unique()]
+        x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
+        x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
+        x_healthy = np.array(x_healthy_list).mean(axis=0)
+        x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
+
+        # Average the results of all patients with disease and healthy then save them to a csv file
+        x_avg_hlt = self.average_dicts(x_healthy_list_all)
+        disease_df = self.combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
+        healthy_df = self.combine_to_dataframe(x_avg_hlt, x_healthy_std)
+        # Save the dfs
+        # disease_df.to_csv("cache/disease_df.csv", index=False)
+        # healthy_df.to_csv("cache/healthy_df.csv", index=False)
+
+        if log_space:
+            x_disease = np.log(x_disease)
+            x_healthy = np.log(x_healthy)
+
+        # Figure without legend
+        plt.figure(figsize=(6, 6), dpi=600)
+        ax = plt.gca()
+        for spine in ax.spines.values():
+            spine.set_edgecolor('black')
+            spine.set_linewidth(0.75)
+        plt.plot(range(2, len(x_disease) + 2), x_disease, label="Patients", color="#FFA500")
+        plt.plot(range(2, len(x_healthy) + 2), x_healthy, label="Healthy", color="#7BC8F6")
+        plt.fill_between(range(2, len(x_disease) + 2), x_disease - x_disease_std, x_disease + x_disease_std,
+                         color="#FFA500", alpha=0.2)
+        plt.fill_between(range(2, len(x_healthy) + 2), x_healthy - x_healthy_std, x_healthy + x_healthy_std,
+                         color="#7BC8F6", alpha=0.2)
+        # add the percentage of common sequences in the plot with rounded values
+        for i, txt in enumerate(x_disease):
+            plt.annotate(f"{txt:.2f}", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+        for i, txt in enumerate(x_healthy):
+            plt.annotate(f"{txt:.2f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+        plt.xlabel("Number of Patients")
+        plt.ylabel("Percentage of Common Sequences")
+        plt.title("Percentage of Common Sequences in Patients" + (" (Log Scale)" if log_space else ""))
+        plt.ylim(min(min(x_disease), min(x_healthy)),
+                 max(max(x_disease + x_disease_std), max(x_healthy + x_healthy_std)) * 1.)
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
+        plt.tight_layout()
+        plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences_nolegend.png'))
+        plt.legend(framealpha=1.0)
+        plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
+        plt.show()
+
+    def top_p_inference_plotting(self, disease, dataset_type):
+        old_top_percent = self.top_percent
+
+        seqs_per_patient_disease = []
+        seqs_per_patient_disease_min = []
+        seqs_per_patient_disease_max = []
+        seqs_per_patient_healthy = []
+        seqs_per_patient_healthy_min = []
+        seqs_per_patient_healthy_max = []
+
+        top_p_list = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
+        for top_p in tqdm(top_p_list):
+            # get data with top percent of top_p
+            self.top_percent = top_p * 100
+            self.dataset_type = f"ms_tcrdb2_top_{int(self.top_percent)}"
+
+            # Disease
+            df_d = self.get_all_usable_disease_data(disease=disease)
+            counts_per_patient_d = df_d.groupby("patient_id")["AASeq"].nunique()
+            seqs_per_patient_disease.append(counts_per_patient_d.mean())
+            seqs_per_patient_disease_min.append(counts_per_patient_d.min())
+            seqs_per_patient_disease_max.append(counts_per_patient_d.max())
+
+            # Healthy
+            df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
+            counts_per_patient_h = df_h.groupby("patient_id")["AASeq"].nunique()
+            seqs_per_patient_healthy.append(counts_per_patient_h.mean())
+            seqs_per_patient_healthy_min.append(counts_per_patient_h.min())
+            seqs_per_patient_healthy_max.append(counts_per_patient_h.max())
+
+            # Extra Figure: displaying common sequence figure with this loaded data:
+            self.display_common_sequences_figure(df_d, df_h, dataset_type)
+
+            # create a bar graph of the following vals:
+            self.plot_per_patient_histogram(
+                dfs=[df_d, df_h],
+                labels=['Disease', 'Healthy'],
+                colors=['salmon', 'lightblue'],
+                disease=disease,
+                to_add_top_percent=True
+            )
+
+        # Convert top percentages to strings for x-axis labels
+        x_labels = [f"{int(p * 100)}%" for p in top_p_list]
+        x = np.arange(len(top_p_list))
+
+        # Disease Figure
+        plt.figure(figsize=(12, 6))
+        bars_d = plt.bar(x, seqs_per_patient_disease, capsize=5, color="salmon")
+        plt.xticks(x, x_labels)
+        plt.xlabel("Top % CloneFraction")
+        plt.ylabel("Avg Unique AASeqs per Patient")
+        plt.title("Disease: Avg Unique AASeqs per Patient with Min/Max Range")
+
+        for i, bar in enumerate(bars_d):
+            height = bar.get_height()
+            min_val = seqs_per_patient_disease_min[i]
+            max_val = seqs_per_patient_disease_max[i]
+
+            # Display mean value on top of bar
+            plt.text(bar.get_x() + bar.get_width() / 2., height,
+                     f"μ: {height:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+            # Display min/max range below the mean
+            plt.text(bar.get_x() + bar.get_width() / 2., height + 1500,
+                     f"({min_val:.0f}-{max_val:.0f})", ha='center', va='bottom', fontsize=8,
+                     style='italic', color='darkred')
+
+        # plt.tight_layout()
+        plt.show()
+
+        # Healthy Figure
+        plt.figure(figsize=(12, 6))
+        bars_h = plt.bar(x, seqs_per_patient_healthy, capsize=5, color="lightblue")
+        plt.xticks(x, x_labels)
+        plt.xlabel("Top % CloneFraction")
+        plt.ylabel("Avg Unique AASeqs per Patient")
+        plt.title("Healthy: Avg Unique AASeqs per Patient with Min/Max Range")
+
+        for i, bar in enumerate(bars_h):
+            height = bar.get_height()
+            min_val = seqs_per_patient_healthy_min[i]
+            max_val = seqs_per_patient_healthy_max[i]
+
+            # Display mean value on top of bar
+            plt.text(bar.get_x() + bar.get_width() / 2., height,
+                     f"μ: {height:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold')
+
+            # Display min/max range below the mean
+            plt.text(bar.get_x() + bar.get_width() / 2., height + 1000,
+                     f"({min_val:.0f}-{max_val:.0f})", ha='center', va='bottom', fontsize=8,
+                     style='italic', color='darkblue')
+
+        # plt.tight_layout()
+        plt.show()
+
+        # Reset the top percent to the old value
+        self.top_percent = old_top_percent
+
+    def plot_per_patient_histogram(self, dfs, labels, colors, disease, to_add_top_percent=False, to_add_bar_vals=False):
+        bar_vals = []
+        # Get the number of unique AASeqs per patient
+        for df in dfs:
+            counts_per_patient = df.groupby("patient_id")["AASeq"].nunique()
+            bar_vals.append(sorted(counts_per_patient))
+        # Plotting the bar graph
+        plt.figure(figsize=(12, 6))
+        for bar_val, label, color in zip(bar_vals, labels, colors):
+            plt.bar(np.arange(len(bar_val)), bar_val, label=label, alpha=0.7, color=color)
+        if to_add_bar_vals:
+            for i, val in enumerate(bar_vals[0]):
+                plt.text(i, val + 50, str(val), rotation=-45, ha='center', va='bottom', fontsize=8)
+        plt.xlabel('Patient ID')
+        plt.ylabel('Number of Unique AASeqs')
+        title = f'Unique AASeqs per Patient for {disease} and Healthy'
+        if to_add_top_percent:
+            title += f" - Top {int(self.top_percent)}%"
+        plt.title(title)
+        plt.xticks(rotation=90)
+        plt.legend()
+        plt.show()

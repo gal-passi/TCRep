@@ -94,13 +94,32 @@ class Study:
         samples = [Sample(self._id, sample_id) for sample_id in sample_ids]
         samples_df = pd.DataFrame([s.__dict__ for s in samples])
         if is_immunoseq_data:
-            merged_df = df.merge(samples_df, left_on='patient_id', right_on='patient_id', how='left')
-            merged_df['RunId'] = merged_df['sample_id']
-            merged_df = merged_df[merged_df[self._columns['study']].isin(sample_ids)]
+            if 'immunoSEQ21' == self._id:
+                df['tissue'] = samples_df['tissue'][0]
+                df['cell_type'] = samples_df['cell_type'][0]
+                df['condition'] = samples_df['condition'][0]
+                # make runid as patient id but split by '_' and take [1]
+                df['RunId'] = df['patient_id'].apply(lambda x: x.split('_')[1] if '_' in x else x)
+                df['patient_id'] = df['patient_id'].apply(lambda x: f"patient{x.split('_')[0]}" if '_' in x else x)
+                merged_df = df
+            elif 'immunoSEQ54' == self._id:
+                df = df[df['patient_id'].str.contains('healthy_control_')]
+                df['tissue'] = samples_df['tissue'][0]
+                df['cell_type'] = df['patient_id'].apply(lambda x: 'CD8' if 'CD8' in x else ('CD4' if 'CD4' in x else 'Unknown'))
+                df = df[df['cell_type'] != 'Unknown']
+                df['condition'] = samples_df['condition'][0]
+                # make runid as patient id but split by '_' and take [1]
+                df['RunId'] = df['patient_id']
+                df['patient_id'] = df['patient_id'].apply(lambda x: f"control{x.split('_')[2]}" if '_' in x else x)
+                merged_df = df
+            else:
+                merged_df = df.merge(samples_df, left_on='patient_id', right_on='patient_id', how='left')
+                merged_df['RunId'] = merged_df['sample_id']
+                merged_df = merged_df[merged_df[self._columns['study']].isin(sample_ids)]
         else:
             temp = df[df[self._columns['study']].isin(sample_ids)]
             merged_df = temp.merge(samples_df, left_on='RunId', right_on='sample_id', how='left')
-        merged_df.drop(columns=['study_id', 'sample_id'], inplace=True)
+        merged_df.drop(columns=[col for col in ['study_id', 'sample_id'] if col in merged_df.columns], inplace=True)
         if condition:
             merged_df = merged_df[merged_df['condition'] == condition]
         merged_df['study_id'] = self._id
@@ -201,7 +220,14 @@ class Study:
             file_path = os.path.join(study_folder, filename)
             df = pd.read_csv(file_path)
             if is_immunoseq_data:
-                df['patient_id'] = filename[:-4].split('-')[0].split('_')[0]
+                if self._id == 'immunoSEQ139':
+                    df['patient_id'] = filename[:-4]
+                elif self._id == 'immunoSEQ21':
+                    df['patient_id'] = filename[:-4]
+                elif self._id == 'immunoSEQ54':
+                    df['patient_id'] = filename[:-4]  # TODO: This does not work here!
+                else:
+                    df['patient_id'] = filename[:-4].split('-')[0].split('_')[0]
             study_dfs.append(df)
         concat_df = pd.concat(study_dfs, ignore_index=True)
 
@@ -266,8 +292,8 @@ class Study:
             if os.path.exists(save_path):
                 cached_df = pd.read_parquet(save_path)  # TODO: Fix this part of the code!
                 # Check that all AASeqs in cached_df exist in current df
-                input_aaseqs = set(df['AASeq'].unique())
-                cached_aaseqs = set(cached_df['AASeq'].unique())
+                # input_aaseqs = set(df['AASeq'].unique())
+                # cached_aaseqs = set(cached_df['AASeq'].unique())
                 # if not cached_aaseqs.issubset(input_aaseqs):
                     # print("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
                     # raise ValueError("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
@@ -285,7 +311,6 @@ class Study:
 
         df = df[required_cols]
 
-        # TODO: This is a different way to load the dataset, but it is probably less scientifically accurate.
         # calculate the topxk sequences by cloneFraction
         if top_n_seqs is not None:
             topk = int(top_n_seqs * 1000)
@@ -299,8 +324,9 @@ class Study:
                 #     return df.nlargest(topk + 10000, 'cloneFraction')
                 return threshold_df
 
-        threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
-        df = df[df['cloneFraction'] >= threshold]
+        if 100 > top_percent > 0:
+            threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+            df = df[df['cloneFraction'] >= threshold]
 
         # Save to disk
         if to_save and top_n_seqs is None:
@@ -401,12 +427,19 @@ class Study:
 class Sample:
     """holds data about individual samples in a study"""
     # def __init__(self, id, study_id, origin=''):
-    def __init__(self, study_id, sample_id, patient_id='', tissue='', cell_type='', condition=''):
+    def __init__(self, study_id, sample_id, patient_id='', tissue='', cell_type='', condition='', to_rebuild=False):
         # set sample_id from variable sample_id. http://stackoverflow.com/questions/1690400/getting-an-instance-name-inside-class-init
         self.study_id = study_id
         self.sample_id = sample_id
         try:
-            self.load()
+            if not to_rebuild:
+                self.load()
+            else:
+                self.patient_id = patient_id
+                self.tissue = tissue
+                self.cell_type = cell_type
+                self.condition = condition
+                self.save()
         except:
             self.patient_id = patient_id
             self.tissue = tissue
@@ -417,6 +450,10 @@ class Sample:
     def save(self):
         """save class as self.study_id.txt"""
         save_dir = os.path.join(STUDY_SAVE_DIR, self.study_id, f"{self.sample_id}.txt")
+        if os.path.exists(save_dir):
+            os.remove(save_dir)
+        if not os.path.exists(os.path.dirname(save_dir)):
+            os.makedirs(os.path.dirname(save_dir))
         with open(save_dir, 'w') as file:
             json.dump(self.__dict__, file)
 
@@ -458,6 +495,14 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_PRJNA318421(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'PRJNA473147':
         return build_study_PRJNA473147(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'PRJNA273698':
+        return build_study_PRJNA273698(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ139':
+        return build_study_immunoSEQ139(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ21':
+        return build_study_immunoSEQ21(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ54':
+        return build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -479,25 +524,25 @@ def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, b
             patient_id = comment.split(' ')[-1].split('_')[0]
             if comment[-1] == '4' or comment[-1] == '8':
                 cell_type = "CD" + comment[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
                 study += sample
                 found_usable.append(sample_id)
             elif comment.endswith('TRBV9'):
                 cell_type = "Other (TRBV9)"
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
                 study ^= sample
                 found_usable.append(sample_id)
             else:
                 # adding to uncertain if there is no cell type (we want only CD4 or CD8)
                 cell_type = "Other"
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
                 study += sample
                 found_uncertain.append(sample_id)
         else:
             if comment[-2:] == '_4' or comment[-2:] == '_8':
                 patient_id = comment.split(' ')[-1].split('_')[0]
                 cell_type = "CD" + comment[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
                 study += sample
                 found_background.append(sample_id)
             else:
@@ -509,7 +554,7 @@ def build_study_PRJNA393498(study_id, study_df, study_desc, usable, uncertain, b
                     cell_type = f"Other ({comment.split('_')[-1]})"
                 else:
                     patient_id = comment.split(' ')[-1]
-                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+                sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
                 study += sample
                 found_background.append(sample_id)
 
@@ -534,7 +579,7 @@ def build_study_immunoSEQ47(study_id, study_df, study_desc, usable, uncertain, b
         patient_id = comment.split('_')[0]
         condition = row['Condition']
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -564,7 +609,7 @@ def build_study_immunoSEQ77(study_id, study_df, study_desc, usable, uncertain, b
             patient_id = comment.split('-')[0]
         condition = row['Condition']
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -596,7 +641,7 @@ def build_study_PRJNA258001(study_id, study_df, study_desc, usable, uncertain, b
         if 'v' in patient_id:
             patient_id = patient_id.split('v')[0]
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -621,7 +666,7 @@ def build_study_PRJNA390125(study_id, study_df, study_desc, usable, uncertain, b
         condition = row['Condition']
 
         patient_id = comment.split('_')[0]
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -653,7 +698,7 @@ def build_study_PRJNA495603(study_id, study_df, study_desc, usable, uncertain, b
             return match.group(1) if match else None
         patient_id = extract_pattern(comment)
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -685,7 +730,7 @@ def build_study_PRJNA579190(study_id, study_df, study_desc, usable, uncertain, b
             return match.group(1) if match else None
         patient_id = extract_pattern(comment)
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -710,7 +755,7 @@ def build_study_PRJNA280417(study_id, study_df, study_desc, usable, uncertain, b
         condition = row['Condition']
         patient_id = comment
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -742,7 +787,7 @@ def build_study_PRJNA427746(study_id, study_df, study_desc, usable, uncertain, b
 
         patient_id = f"p{comment_counter[comment]}_{study_id}"
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -767,7 +812,7 @@ def build_study_PRJNA318421(study_id, study_df, study_desc, usable, uncertain, b
         condition = row['Condition']
         patient_id = comment.split('-')[0]
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -799,7 +844,118 @@ def build_study_PRJNA473147(study_id, study_df, study_desc, usable, uncertain, b
         else:
             assert False, f"Pattern not found in comment: {comment}"
 
-        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition)
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_PRJNA273698(study_id, study_df, study_desc, usable, uncertain, background):
+    columns = ['study_id', 'sample_id', 'patient_id', 'tissue', 'cell_type']
+
+    found_usable = []
+    found_uncertain = []
+    found_background = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+
+        # Regex pattern to extract the substring between ' P' and '_'
+        match = re.search(r'Individual_[\d]+', comment)
+        if match:
+            patient_id = match.group(0)
+        else:
+            continue
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_immunoSEQ139(study_id, study_df, study_desc, usable, uncertain, background):
+    found_usable = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        patient_id = comment
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_immunoSEQ21(study_id, study_df, study_desc, usable, uncertain, background):
+    found_usable = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        condition = row['Condition']
+        patient_id = comment
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, background):
+    found_usable = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source']
+        cell_type = row['Cell Type']
+        if cell_type[-1] == '+':
+            cell_type = cell_type[:-1]
+        condition = row['Condition']
+
+        if 'Control' in comment and 'T cells' in comment:
+            patient_id = sample_id
+        elif 'Subject' in comment and 'T cells' in comment:
+            continue
+            # match = re.search(r'Subject [\d]+', comment)
+            # if match:
+            #     patient_id = match.group(0)
+            # else:
+            #     continue
+        else:
+            continue
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
         study += sample
         found_usable.append(sample_id)
 
@@ -817,10 +973,3 @@ if __name__ == '__main__':
     # train_test = calculate_distance_matrix(list(train_sequences), list(test_sequences), chunks=34000, name_to_save='PRJNA330606_test_identity')
     # train_validation = calculate_distance_matrix(list(train_sequences), list(validation_sequences), chunks=34000, name_to_save='PRJNA330606_validation_identity')
 
-'''
-    build_study('PRJNA273698', "T-cell Receptor Beta Chain sequences from blood of systemically healthy individuals of various ages", ['AASeq', 'Vregion', 'Dregion', 'Jregion', 'RunId'],
-                [],
-                [],
-                [['SRR1777800', 'blood'], ['SRR1777798', 'blood'], ['SRR1777796', 'blood'], ['SRR1777792', 'blood'], ['SRR1777788', 'blood'], ['SRR1777784', 'blood'], ['SRR1777779', 'blood'], ['SRR1777776', 'blood'], ['SRR1777775', 'blood'], ['SRR1777774', 'blood'], ['SRR1777772', 'blood'], ['SRR1777770', 'blood'], ['SRR1777769', 'blood'], ['SRR1777765', 'blood'], ['SRR1777764', 'blood'], ['SRR1777766', 'blood'], ['SRR1777767', 'blood'], ['SRR1777768', 'blood'], ['SRR1777771', 'blood'], ['SRR1777778', 'blood'], ['SRR1777781', 'blood'], ['SRR1777785', 'blood'], ['SRR1777786', 'blood'], ['SRR1777787', 'blood'], ['SRR1777789', 'blood'], ['SRR1777790', 'blood'], ['SRR1777791', 'blood'], ['SRR1777795', 'blood'], ['SRR1777797', 'blood'], ['SRR1777799', 'blood'], ['SRR1777801', 'blood'], ['SRR1777802', 'blood'], ['SRR1777803', 'blood'], ['SRR1777773', 'blood'], ['SRR1777777', 'blood'], ['SRR1777793', 'blood'], ['SRR1777794', 'blood'], ['SRR1777804', 'blood']]
-)
-'''

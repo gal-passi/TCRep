@@ -7,15 +7,15 @@ import torch
 import numpy as np
 import pandas as pd
 from collections import Counter
-from itertools import combinations
+from itertools import combinations, chain
 
 from networkx import all_neighbors
 from tqdm import tqdm
 from Curation import Study
 from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
 import hashlib
-from itertools import chain
 from collections import defaultdict
+import random
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -29,11 +29,19 @@ STUDY_ID8 = 'PRJNA280417'  #  Multiple sclerosis study
 STUDY_ID9 = 'PRJNA427746'  #  Cytomegalovirus (plus healthy)
 STUDY_ID10 = 'PRJNA318421'  #  Cytomegalovirus
 STUDY_ID11 = 'PRJNA473147'  #  Cytomegalovirus
+STUDY_ID12 = 'PRJNA273698'  # Healthy
+STUDY_ID13 = 'immunoSEQ139'  # Cancer and Healthy
+STUDY_ID14 = 'immunoSEQ21'  # Healthy
+STUDY_ID15 = 'immunoSEQ54'  # Alopecia Areata and Healthy
 HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
 HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
 HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
 HEALTHY_STUDY_ID4 = STUDY_ID6  # Other healthy study
 HEALTHY_STUDY_ID5 = STUDY_ID7  # Other healthy study
+HEALTHY_STUDY_ID6 = STUDY_ID12
+HEALTHY_STUDY_ID7 = STUDY_ID13
+HEALTHY_STUDY_ID8 = STUDY_ID14
+HEALTHY_STUDY_ID9 = STUDY_ID15
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
 TCRDB2_PATH = 'db/tcrdb2'
 
@@ -42,7 +50,7 @@ class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
-                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, verbose=True):
+                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, display_extra_plots=False, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -141,7 +149,33 @@ class DatasetLoader:
         df_hlt = df_hlt[required_cols]
 
         # Displaying the figure of common sequences if needed
-        self.display_common_sequences_figure(df_bld, df_hlt, dataset_type)
+        if filter_num_of_patients == 4:  # TODO: Remove this condition after running once!
+            self.display_common_sequences_figure(df_bld, df_hlt, dataset_type, to_replot=display_extra_plots)  # TODO: Return log-space to default! and set to_replot to False!
+
+        # Display extra plots if needed
+        if display_extra_plots:
+            # For disease group
+            for study_id in df_bld['study_id'].unique():
+                df_study = df_bld[df_bld['study_id'] == study_id]
+                self.plot_per_patient_histogram(
+                    dfs=[df_study],
+                    labels=[f"Disease ({study_id})"],
+                    colors=["salmon"],
+                    disease=f"Disease - study: {study_id}",  # or replace with actual disease name if known
+                    to_add_top_percent=False,
+                    to_add_bar_vals=True
+                )
+            # For healthy group
+            for study_id in df_hlt['study_id'].unique():
+                df_study = df_hlt[df_hlt['study_id'] == study_id]
+                self.plot_per_patient_histogram(
+                    dfs=[df_study],
+                    labels=[f"Healthy ({study_id})"],
+                    colors=["lightblue"],
+                    disease=f"Healthy - study: {study_id}",
+                    to_add_top_percent=False,
+                    to_add_bar_vals=True
+                )
 
         if get_only_unique_patient_ids:
             self.df_bld, self.df_hlt = df_bld, df_hlt
@@ -794,11 +828,12 @@ class DatasetLoader:
         return pd.concat(studies, ignore_index=True)
 
     def get_all_usable_healthy_data(self, dataset_type='ms'):
-        if 'no_healthy_ms' in dataset_type:
-            healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3]
-        else:
-            healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3, HEALTHY_STUDY_ID4,
-                                 HEALTHY_STUDY_ID5]
+        healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3]
+        if not 'no_healthy_ms' in dataset_type:
+            healthy_study_ids += [HEALTHY_STUDY_ID4, HEALTHY_STUDY_ID5]
+        if 'tcrdb2' in dataset_type:
+            healthy_study_ids += [HEALTHY_STUDY_ID6, HEALTHY_STUDY_ID7, HEALTHY_STUDY_ID8, HEALTHY_STUDY_ID9]
+
         healthy_studies = []
         for study_id in healthy_study_ids:
             # df = self.load_study_df(study_id, disease)
@@ -1150,7 +1185,7 @@ class DatasetLoader:
         masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
         return masks
 
-    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1):
+    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=300):
         # Select the unique patients
         unique_patients = df['patient_id'].unique()
 
@@ -1163,13 +1198,18 @@ class DatasetLoader:
         results = []
         if mode == 1:
             # Mode 1: All combinations
-            patient_combinations = combinations(unique_patients, num_of_patients)
+            patient_combinations = list(combinations(unique_patients, num_of_patients))
         elif mode == 2:
             # Mode 2: Always include the first patient
             patient_combinations = [tuple([unique_patients[0]] + list(comb)) for comb in
                                     combinations(unique_patients[1:], num_of_patients - 1)]
         else:
             raise ValueError("Mode must be 1 (All combinations) or 2 (Always include the first patient).")
+
+        # Pick max_combinations at random from patient_combinations, if it is too large
+        if len(patient_combinations) > max_combinations:
+
+            patient_combinations = random.sample(patient_combinations, max_combinations)
 
         percent_of_total_values = []
         for combination in patient_combinations:
@@ -1437,11 +1477,11 @@ class DatasetLoader:
         dfh = pd.DataFrame(data, columns=["patient_id", "AASeq"])
         return pd.concat([df1, dfh], ignore_index=True)
 
-    def display_common_sequences_figure(self, df, df_h, dataset_type, l=8, log_space=True):
+    def display_common_sequences_figure(self, df, df_h, dataset_type, l=8, log_space=True, to_replot=False):
         base_plot_save_path = f"plots/common_seqs/{dataset_type}"
         os.makedirs(base_plot_save_path, exist_ok=True)
 
-        if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
+        if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')) and not to_replot:
             print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
             return
         else:
@@ -1460,11 +1500,11 @@ class DatasetLoader:
             rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
         elif 'study_id' in df.columns:
             study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-            rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
+            rand_patients = [np.random.choice(x, size=min(10, len(x)), replace=False) for x in study_groups]
             rand_patients = list(chain(*rand_patients))
         else:
             # random patients from the df
-            rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 15), replace=False)
+            rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 40), replace=False)
         df = df[df['patient_id'].isin(rand_patients)]
 
         # calculate common sequences in disease and healthy samples
@@ -1477,7 +1517,7 @@ class DatasetLoader:
             df1 = df[df["patient_id"] == patient_id_bld]
             if option == 1:
                 # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
-                random_patients = np.random.choice(df_h['patient_id'].unique(), size=15, replace=False)
+                random_patients = np.random.choice(df_h['patient_id'].unique(), size=50, replace=False)
                 df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
                 df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)
             else:
@@ -1485,8 +1525,7 @@ class DatasetLoader:
                 patient_seqs_len = len(df1)
                 all_seqs_h = df_h["AASeq"]
                 df_h_comb = self.generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-            x_healthy = [self.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in
-                         range(2, l)]
+            x_healthy = [self.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]
             return x_healthy
 
         # Average the results of all patients with disease

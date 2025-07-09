@@ -900,7 +900,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_similar_negatives', action='store_true', help='Use similar negatives to training positives for training (similar according to Levenstein distance)')
     parser.add_argument('--combine_classification', '-comb_class', action='store_true', help='Combine classification model results (Only applicable after first training with all 1..5 k-folds)')
     parser.add_argument('--dataset_filter_num_of_patients', type=int, default=3, help='Number of patients to filter the dataset by (take positive from this num of patients)')
-    parser.add_argument('--dataset_filter_num_of_healthy', type=int, default=3, help='Number of healthy subjects to filter the dataset with (remove from positives from this num of patients)')
+    parser.add_argument('--dataset_filter_num_of_healthy', type=int, default=-1, help='Number of healthy subjects to filter the dataset with (remove from positives from this num of patients)')
     parser.add_argument('--dataset_filter_dont_inflate', '-no_inflate', action='store_true', help='Do not inflate the dataset when filtering positives and negatives')
     parser.add_argument('--changing_negatives', '-change_neg', action='store_true', help='Whether to run sample the negatives each epoch or not')
     parser.add_argument('--remove_seqs_by_len', type=int, default=False, help='Whether to remove sequences from valid/test sets by length or not')
@@ -943,7 +943,7 @@ if __name__ == '__main__':
     use_similar_negatives = args.use_similar_negatives
     combine_classification = args.combine_classification
     filter_num_of_patients = args.dataset_filter_num_of_patients
-    filter_num_of_healthy = args.dataset_filter_num_of_healthy
+    filter_num_of_healthy = args.dataset_filter_num_of_healthy if args.dataset_filter_num_of_healthy >= 0 else filter_num_of_patients
     filter_to_inflate = not args.dataset_filter_dont_inflate
     changing_negatives = args.changing_negatives
     remove_seqs_by_len = args.remove_seqs_by_len

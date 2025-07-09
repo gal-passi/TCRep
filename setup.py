@@ -42,7 +42,13 @@ def download_studies():
 
 def get_study_df(study_id, columns):
     # Read the file (e.x. "db/tcrdb/PRJNA393498.txt")
-    with open(os.path.join(STUDIES_DATABASE, TCR_DATABASES['tcrdb'], f"{study_id}.txt"), "r") as f:
+    if os.path.exists(os.path.join(STUDIES_DATABASE, TCR_DATABASES['tcrdb'], f"{study_id}.txt")):
+        tcrdb_database = TCR_DATABASES['tcrdb']
+    elif os.path.exists(os.path.join(STUDIES_DATABASE, TCR_DATABASES['tcrdb2'], study_id, f"{study_id}.txt")):
+        tcrdb_database = os.path.join(TCR_DATABASES['tcrdb2'], study_id)
+    else:
+        raise FileNotFoundError(f"No TCR database found in {STUDIES_DATABASE}. Please download the studies first.")
+    with open(os.path.join(STUDIES_DATABASE, tcrdb_database, f"{study_id}.txt"), "r") as f:
         lines = [line.strip() for line in f if line.strip()]  # Remove empty lines
 
     # Parse the data in chunks of len(lines)+1 lines (1 line per attribute)
@@ -167,3 +173,29 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "Antigen-specific T-cell receptor signatures of cytomegalovirus infection (human)",
                 [], [], [])
+
+    study_id = "PRJNA273698"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Homo sapiens Targeted Locus (Loci)",
+                [], [], [])
+
+    study_id = "immunoSEQ139"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "immunoSEQ hsTCRB-V4b Control Data",
+                [], [], [])
+
+    study_id = "immunoSEQ21"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Model to improve specificity for identification of clinically-relevant expanded T cells in peripheral blood",
+                [], [], [])
+
+    study_id = "immunoSEQ54"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "High throughput T cell receptor sequencing identifies clonally expanded CD8+ T cell populations in Alopecia Areata",
+                [], [], [])
+
+

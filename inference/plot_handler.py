@@ -1067,3 +1067,74 @@ def display_ratio_figures_kde(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, d
     os.makedirs("plots/ratio_figures", exist_ok=True)
     plt.savefig(f"plots/ratio_figures/ratios_{dataset_type}.png", dpi=dpi)
     plt.show()
+
+
+def plot_embedding_mappings(trained_model, valid_pos_seqs, test_pos_seqs, device='cuda', use_only_val=True):
+    from sklearn.decomposition import PCA
+    from sklearn.manifold import TSNE
+    import umap.umap_ as umap
+
+    # Concatenate validation and test sequences and get embeddings
+    pos_seqs = np.concatenate([valid_pos_seqs, test_pos_seqs]) if not use_only_val else valid_pos_seqs
+    trained_model.to(device)
+    trained_model.eval()
+    with torch.no_grad():
+        pos_embeddings = trained_model.get_embeddings(pos_seqs).cpu()
+
+    # Convert to numpy for sklearn compatibility
+    embeddings_np = pos_embeddings.numpy()
+
+    # Use single color for all embeddings
+    colors = ['blue'] * len(embeddings_np)
+
+    # Apply dimensionality reduction techniques
+    print("Applying PCA...")
+    pca = PCA(n_components=2, random_state=42)
+    pca_result = pca.fit_transform(embeddings_np)
+
+    print("Applying t-SNE...")
+    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+    tsne_result = tsne.fit_transform(embeddings_np)
+
+    print("Applying UMAP...")
+    umap_reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+    umap_result = umap_reducer.fit_transform(embeddings_np)
+
+    # Create the figure with 3 subplots
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    # Plot PCA
+    axes[0].scatter(pca_result[:, 0], pca_result[:, 1], c=colors, alpha=0.6, s=20)
+    axes[0].set_title(f'PCA\nExplained Variance: {pca.explained_variance_ratio_.sum():.3f}')
+    axes[0].set_xlabel('PC1')
+    axes[0].set_ylabel('PC2')
+    axes[0].grid(True, alpha=0.3)
+
+    # Plot t-SNE
+    axes[1].scatter(tsne_result[:, 0], tsne_result[:, 1], c=colors, alpha=0.6, s=20)
+    axes[1].set_title('t-SNE')
+    axes[1].set_xlabel('t-SNE 1')
+    axes[1].set_ylabel('t-SNE 2')
+    axes[1].grid(True, alpha=0.3)
+
+    # Plot UMAP
+    axes[2].scatter(umap_result[:, 0], umap_result[:, 1], c=colors, alpha=0.6, s=20)
+    axes[2].set_title('UMAP')
+    axes[2].set_xlabel('UMAP 1')
+    axes[2].set_ylabel('UMAP 2')
+    axes[2].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    # Print some statistics
+    print(f"\nEmbedding Statistics:")
+    print(f"Original embedding dimension: {embeddings_np.shape[1]}")
+    print(f"Number of samples: {embeddings_np.shape[0]}")
+    print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
+
+    return {
+        'pca': pca_result,
+        'tsne': tsne_result,
+        'umap': umap_result
+    }

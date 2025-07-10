@@ -33,6 +33,7 @@ from models.ff_model import FeedForwardClassifier
 from models.esmc_ff_model import ESMCFeedForwardClassifier
 from models.cvc_ensemble_model import CVCEnsembleModel
 from models.cvc_cacheing_model import CVCCachingModel
+from models.cvc_full_model import CVCClassifierModelFullEmbed
 from torch.utils.data import Dataset, DataLoader
 import time
 import random
@@ -60,6 +61,7 @@ INFERENCE_TO_RANDOM_FOREST = False
 INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
 INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 INFERENCE_CLASSIFICATION_MODEL = False
+INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = False
 
 dataset_loader = None
 
@@ -744,6 +746,9 @@ def sweep_model():
                                    cvc_layers_to_train=cvc_layers_to_train, lora=lora, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
+    elif model_type == 'cvc_full':
+        model = CVCClassifierModelFullEmbed(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
+                                            freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
     else:
         raise ValueError(f"Model type {model_type} is not supported")
 
@@ -852,7 +857,7 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
 
 if __name__ == '__main__':
     # get program arguments
-    model_types = ['ff', 'cvc', 'esmc']
+    model_types = ['ff', 'cvc', 'esmc', 'cvc_full']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
@@ -862,7 +867,8 @@ if __name__ == '__main__':
                      'article', 'article2',
                      'cmv',
                      'article_sle', 'ms_plus_article2_ms',
-                     'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
+                     'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms',
+                     'ms_tcrdb2_no_healthy_ms_plus_hlt_article']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
 
@@ -918,7 +924,7 @@ if __name__ == '__main__':
     pos_weights = args.pos_weights
     learning_rate = args.learning_rate
     reg_coef = args.regularization_coefficient if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
-    freeze_embed_model = args.freeze_embed_model if model_type == 'cvc' else False  # Only CVC model can freeze the embedding model
+    freeze_embed_model = args.freeze_embed_model if 'cvc' in model_type else False  # Only CVC model can freeze the embedding model
     special_criterion = args.special_criterion
     embedding_lr = args.embedding_lr if special_criterion else 0  # Only used when special_criterion is True
     log_wandb = not args.no_wandb_log
@@ -932,12 +938,12 @@ if __name__ == '__main__':
     cvc_layers_to_train = args.cvc_layers_to_train if not freeze_embed_model else 0  # No layers to train if embedding model is frozen
     k_fold = args.k_fold if args.k_fold >= 0 else 0  # Set to 0 if negative
     to_k_fold = k_fold > 0
-    lora = args.lora if model_type == 'cvc' else False  # LoRA is only applicable for CVC model
+    lora = args.lora if 'cvc' in model_type else False  # LoRA is only applicable for CVC model
     sweep_version = args.sweep_version
-    masking = args.masking if model_type == 'cvc' else False  # Masking is only applicable for CVC model
+    masking = args.masking if 'cvc' in model_type else False  # Masking is only applicable for CVC model
     ratio = args.ratio
     dist_loss_type = args.dist_loss_type
-    ch_type = args.ch_type.lower() if model_type == 'cvc' else 'none'  # Only CVC model can use dist loss
+    ch_type = args.ch_type.lower() if 'cvc' in model_type else 'none'  # Only CVC model can use dist loss
     neg_partition = args.negative_partition
     to_ensemble = args.to_ensemble
     use_similar_negatives = args.use_similar_negatives
@@ -1038,7 +1044,6 @@ if __name__ == '__main__':
         # Note: we won't get to this part because there is an exit command in the previous vae line
         from vae.vae_training_dynamic import train_and_inference_vae
         train_and_inference_vae(args, dataset_loader, device)
-
 
     # # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
     # article2_data_folder = 'db/test_db/data_tcrb'
@@ -1176,6 +1181,9 @@ if __name__ == '__main__':
                                        freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
         elif model_type == 'esmc':
             model = ESMCFeedForwardClassifier(device=device)
+        elif model_type == 'cvc_full':
+            model = CVCClassifierModelFullEmbed(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
+                                       freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
         else:
             raise ValueError(f"Model type {model_type} is not supported")
 
@@ -1397,6 +1405,10 @@ if __name__ == '__main__':
             display_distributions_on_different_sets(trained_model, dataset_type, other_dataset_type,
                                                     unique_patient_ids, test_patient_inds, valid_patient_inds,
                                                     df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
+
+        if INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS:
+            from inference.plot_handler import plot_embedding_mappings
+            plot_embedding_mappings(trained_model, valid_pos_seqs, test_pos_seqs, device=device)
 
         # Inference classification model
         if k_fold == 0 and combine_classification:

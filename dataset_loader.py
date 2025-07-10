@@ -61,7 +61,7 @@ class DatasetLoader:
 
         disease = 'Multiple sclerosis'
         print('Loading Disease:')
-        df = self.get_all_usable_disease_data(disease=disease)
+        df = self.get_all_usable_disease_data(disease=disease, dataset_type=dataset_type)
         print('Loading Healthy:')
         df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
@@ -73,7 +73,23 @@ class DatasetLoader:
             # reading healthy study:
             df_hlt = df_h[df_h['cell_type'] == cell_type]
         else:
-            if dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
+            if 'ms_tcrdb2_no_healthy_ms_plus_hlt_article' in dataset_type:
+                df_bld, df_hlt = df, df_h
+                # add healthy from article
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+                if top_n_seqs is not None:
+                    topk = int(top_n_seqs * 1000)
+                    if len(df_article_hlt) >= topk:
+                        df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
+                        threshold = df_top['cloneFraction'].min()
+                        threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
+                        df_article_hlt = threshold_df
+                elif top_percent is not None and 100 > top_percent > 0:
+                    threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+                    df = df[df['cloneFraction'] >= threshold]
+                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+            elif dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
                 df_bld, df_hlt = df, df_h
             elif dataset_type == 'ms_hlt_article':
                 df_bld, df_hlt = df, df_h
@@ -149,8 +165,8 @@ class DatasetLoader:
         df_hlt = df_hlt[required_cols]
 
         # Displaying the figure of common sequences if needed
-        if filter_num_of_patients == 4:  # TODO: Remove this condition after running once!
-            self.display_common_sequences_figure(df_bld, df_hlt, dataset_type, to_replot=display_extra_plots)  # TODO: Return log-space to default! and set to_replot to False!
+        # if filter_num_of_patients == 4:  # TODO: Remove this condition after running once!
+        #     self.display_common_sequences_figure(df_bld, df_hlt, dataset_type, to_replot=False)  # TODO: Return log-space to default! and set to_replot to False!
 
         # Display extra plots if needed
         if display_extra_plots:
@@ -793,7 +809,18 @@ class DatasetLoader:
         return all_neighbors
 
 
-    def get_all_usable_disease_data(self, disease='Multiple sclerosis', get_all=False):
+    def get_all_usable_disease_data(self, disease='Multiple sclerosis', dataset_type=None, get_all=False):
+        disease_clean = disease.lower().replace(' ', '_')
+        cache_dir = os.path.join("cache", "valid_sequences", disease_clean)
+        os.makedirs(cache_dir, exist_ok=True)
+
+        cache_path = None
+        if dataset_type is not None:
+            cache_path = os.path.join(cache_dir, f"{dataset_type}.pkl")
+            if os.path.exists(cache_path):
+                print(f"Loading cached data from {cache_path}")
+                return pd.read_pickle(cache_path)
+
         studies = []
         if disease == 'Ankylosing spondylitis':
             study_ids = [STUDY_ID]
@@ -825,9 +852,24 @@ class DatasetLoader:
             # df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
             studies.append(df)
 
-        return pd.concat(studies, ignore_index=True)
+        all_df = pd.concat(studies, ignore_index=True)
+        # Save to cache if applicable
+        if cache_path is not None:
+            print(f"Saving data to cache at {cache_path}")
+            all_df.to_pickle(cache_path)
+        return all_df
 
     def get_all_usable_healthy_data(self, dataset_type='ms'):
+        # Set up cache path
+        cache_dir = os.path.join("cache", "valid_sequences", "healthy")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = None
+        if dataset_type is not None:
+            cache_path = os.path.join(cache_dir, f"{dataset_type}.pkl")
+            if os.path.exists(cache_path):
+                print(f"Loading cached healthy data from {cache_path}")
+                return pd.read_pickle(cache_path)
+
         healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3]
         if not 'no_healthy_ms' in dataset_type:
             healthy_study_ids += [HEALTHY_STUDY_ID4, HEALTHY_STUDY_ID5]
@@ -849,6 +891,11 @@ class DatasetLoader:
             healthy_studies.append(df)
         df_concat = pd.concat(healthy_studies, ignore_index=True)
         df_concat = df_concat.dropna(subset=['AASeq'])
+
+        # Save to cache
+        if cache_path is not None:
+            print(f"Saving healthy data to cache at {cache_path}")
+            df_concat.to_pickle(cache_path)
         return df_concat
 
     def load_study_df(self, study_id, disease):
@@ -1185,7 +1232,7 @@ class DatasetLoader:
         masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
         return masks
 
-    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=300):
+    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=250):
         # Select the unique patients
         unique_patients = df['patient_id'].unique()
 
@@ -1512,6 +1559,8 @@ class DatasetLoader:
         x_disease_list = [self.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
         x_disease = np.array([x[0][value_to_take] for x in x_disease_list])
         x_disease_std = np.array([x[1] for x in x_disease_list])
+        # Extract total sequences for disease
+        x_disease_total = np.array([x[0]['num_total_seqs'] for x in x_disease_list])
 
         def calculate_common_healthy(patient_id_bld, option=1):
             df1 = df[df["patient_id"] == patient_id_bld]
@@ -1532,8 +1581,11 @@ class DatasetLoader:
         x_healthy_list_all = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df['patient_id'].unique()]
         x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
         x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
+        # Extract total sequences for healthy
+        x_healthy_list_total = [[y[0]['num_total_seqs'] for y in x] for x in x_healthy_list_all]
         x_healthy = np.array(x_healthy_list).mean(axis=0)
         x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
+        x_healthy_total = np.array(x_healthy_list_total).mean(axis=0)
 
         # Average the results of all patients with disease and healthy then save them to a csv file
         x_avg_hlt = self.average_dicts(x_healthy_list_all)
@@ -1559,11 +1611,11 @@ class DatasetLoader:
                          color="#FFA500", alpha=0.2)
         plt.fill_between(range(2, len(x_healthy) + 2), x_healthy - x_healthy_std, x_healthy + x_healthy_std,
                          color="#7BC8F6", alpha=0.2)
-        # add the percentage of common sequences in the plot with rounded values
+        # add the percentage of common sequences in the plot with rounded values and total sequences
         for i, txt in enumerate(x_disease):
-            plt.annotate(f"{txt:.2f}", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+            plt.annotate(f"{txt:.3f}\n(n={int(x_disease_total[i])})", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
         for i, txt in enumerate(x_healthy):
-            plt.annotate(f"{txt:.2f}", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
+            plt.annotate(f"{txt:.3f}\n(n={int(x_healthy_total[i])})", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
         plt.xlabel("Number of Patients")
         plt.ylabel("Percentage of Common Sequences")
         plt.title("Percentage of Common Sequences in Patients" + (" (Log Scale)" if log_space else ""))

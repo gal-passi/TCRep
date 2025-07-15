@@ -161,7 +161,8 @@ class Study:
             df_filtered = []
             for patient_id in patient_ids:
                 df_per_patient = merged_df[merged_df['patient_id'] == patient_id]
-                df_per_patient = self.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs)
+                df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs,
+                                                                  data_path=self._data_path, id=self._id)
                 # df_per_patient = self.tcrdb2_filtering(df_per_patient, patient_id)
                 df_filtered.append(df_per_patient)
             merged_df = pd.concat(df_filtered, ignore_index=True)
@@ -201,6 +202,18 @@ class Study:
         else:
             ret_columns = merged_df.columns
         return merged_df[ret_columns]
+
+    @staticmethod
+    def do_tcrdb2_threshold_filtering(df, top_percent, top_n_seqs, data_path='', id='', to_save=False):
+        patient_ids = df['patient_id'].unique()
+        df_filtered = []
+        for patient_id in patient_ids:
+            df_per_patient = df[df['patient_id'] == patient_id]
+            df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs,
+                                                              data_path=data_path, id=id, to_save=to_save)
+            df_filtered.append(df_per_patient)
+        df = pd.concat(df_filtered, ignore_index=True)
+        return df
 
     def load_study_df_tcrdb2(self, is_immunoseq_data):
         last_col = 'patient_id' if is_immunoseq_data else 'RunId'
@@ -282,11 +295,15 @@ class Study:
         df_grouped.to_parquet(save_path, index=False)
         return df_grouped
 
-    def tcrdb2_threshold_filtering(self, df, patient_id, top_percent, top_n_seqs, to_save=True):
-        study_folder = os.path.join(self._data_path, self._id, "cache")
-        os.makedirs(study_folder, exist_ok=True)
+    @staticmethod
+    def tcrdb2_threshold_filtering(df, patient_id, top_percent, top_n_seqs, data_path='', id='', to_save=True):
+        if data_path != '' and id != '':
+            study_folder = os.path.join(data_path, id, "cache")
+            os.makedirs(study_folder, exist_ok=True)
+        else:
+            to_save = False
         if to_save and top_n_seqs is None:
-            save_path = os.path.join(study_folder, f"{self._id}_{patient_id}_top_{top_percent}.parquet")
+            save_path = os.path.join(study_folder, f"{id}_{patient_id}_top_{top_percent}.parquet")
 
             # If file exists, load and validate it
             if os.path.exists(save_path):

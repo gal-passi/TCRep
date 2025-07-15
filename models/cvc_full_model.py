@@ -18,10 +18,11 @@ warnings.simplefilter("ignore", category=FutureWarning)
 
 
 class CVCModel(nn.Module):
-    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, dropout_rate: float = 0.0, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False):
+    def __init__(self, model_dir: str = TRANSFORMER, method: str = 'mean', device: str = 'cuda', batch_size: int = 256, dropout_rate: float = 0.0, freeze_embed_model: bool = False, cvc_layers_to_train: int = 3, lora: bool = False, max_seq_length: int = 64):
         super().__init__()
         self.device = device
         self.model = BertModel.from_pretrained(model_dir, add_pooling_layer=method == "pool", output_hidden_states=True).to(device)
+        self.max_seq_length = max_seq_length
 
         # TODO: Add option to go do with / without PEFT !!! (And any other options if needed, like lora_dropout, etc.)
         #  Also: Changed lora_dropout to 0.0 in the original code!
@@ -47,9 +48,14 @@ class CVCModel(nn.Module):
 
         self.tok = ft.get_pretrained_bert_tokenizer(model_dir)
         self.freeze_bert_layers(freeze_embed_model, cvc_layers_to_train)
-        self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool", "full"
+        self.method = method  # Options: "mean", "max", "attn_mean", "cls", "pool", "full", "weighted"
         self.batch_size = batch_size
         self.mask_tokens = False  # Set to True if you want to mask tokens during training
+
+        # Initialize learned weights for the 'weighted' method
+        if method == 'weighted':
+            self.position_weights = nn.Parameter(torch.ones(max_seq_length))
+            self.weight_activation = nn.Softmax(dim=0)  # Ensure weights sum to 1
 
     def get_transformer_embeddings(
             self,
@@ -181,6 +187,14 @@ class CVCModel(nn.Module):
                         e.append(seq_hidden.mean(axis=0))
                     elif method == "max":
                         e.append(seq_hidden.max(axis=0))
+                    elif method == "weighted":
+                        # Apply learned position weights
+                        actual_seq_len = seq_hidden.shape[0]
+                        # Get the appropriate weights for this sequence length
+                        weights = self.weight_activation(self.position_weights[:actual_seq_len])
+                        # Apply weights and sum
+                        weighted_embedding = torch.sum(seq_hidden * weights.unsqueeze(-1), dim=0)
+                        e.append(weighted_embedding)
                     elif method == "full":
                         # Return the full sequence embeddings (per-token)
                         e.append(seq_hidden)
@@ -236,7 +250,7 @@ class CVCClassifierModelFullEmbed(nn.Module):
                    ch_type: str = 'none', max_seq_length: int = 20):
         super().__init__()
         self.device = device
-        self.model = CVCModel(model_dir, method, device, batch_size, ch_dropout, freeze_embed_model, cvc_layers_to_train, lora)
+        self.model = CVCModel(model_dir, method, device, batch_size, ch_dropout, freeze_embed_model, cvc_layers_to_train, lora, max_seq_length)
         self.batch_size = batch_size
         self.method = method
         self.dropout_rate = ch_dropout
@@ -253,6 +267,8 @@ class CVCClassifierModelFullEmbed(nn.Module):
 
         # Add linear layers
         hidden_dim, num_classes = (768 // 2), 2
+        if method == 'full':
+            hidden_dim = input_dim // 2
         if ch_type == 'none':
             self.linear = nn.Sequential(
                 nn.Linear(input_dim, hidden_dim),
@@ -334,11 +350,17 @@ class CVCClassifierModelFullEmbed(nn.Module):
         return embeddings
 
     def forward(self, seqs: List[str]):
+        # Pad each string to max_seq_length using the PAD token
+        if self.method == 'full':
+            max_len_in_batch = max(len(s) for s in seqs)
+            seqs = np.array([s.ljust(max_len_in_batch, ft.PAD) for s in seqs])
         embeddings = self.model(seqs)  # Get transformer embeddings
 
         if self.method == 'full':
             # For full embeddings, we need to pad/truncate and flatten
             embeddings = self._pad_and_truncate_embeddings(embeddings)
+            # Flatten the embeddings to (batch_size, max_seq_length * hidden_dim)
+            embeddings = embeddings.view(embeddings.size(0), -1)
 
         logits = self.linear(embeddings.to(torch.float32))  # Pass through linear layer
         return logits

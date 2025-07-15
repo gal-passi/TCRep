@@ -311,6 +311,10 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             loss.backward()
             optimizer.step()
 
+            # remove from gpu
+            logits = logits.detach()
+            batch_labels = batch_labels.detach()
+
             # For accuracy calculation, we need to get predictions from logits
             probabilities = torch.softmax(logits, dim=1)
             _, predicted = torch.max(probabilities, 1)

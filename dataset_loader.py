@@ -2,7 +2,6 @@ import os
 import pickle
 from cProfile import label
 
-import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import pandas as pd
@@ -16,6 +15,7 @@ from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
 import hashlib
 from collections import defaultdict
 import random
+import matplotlib.pyplot as plt
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -50,7 +50,7 @@ class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
-                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, display_extra_plots=False, verbose=True):
+                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False, display_extra_plots=False, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -91,6 +91,52 @@ class DatasetLoader:
                 df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
             elif dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
                 df_bld, df_hlt = df, df_h
+
+                # Special case for TCRDB2 datasets!
+                if 'tcrdb2' in dataset_type:
+                    if 'plus_hlt_article' in dataset_type:
+                        # add healthy from article
+                        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                        df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+                        if top_n_seqs is not None:
+                            topk = int(top_n_seqs * 1000)
+                            if len(df_article_hlt) >= topk:
+                                df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
+                                threshold = df_top['cloneFraction'].min()
+                                threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
+                                df_article_hlt = threshold_df
+                        elif top_percent is not None and 100 > top_percent > 0:
+                            threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+                            df = df[df['cloneFraction'] >= threshold]
+                        df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+                    if 'extra_ms' in dataset_type:
+                        # Add to Blood df
+                        df_extra_bld = self.get_ms_extra_bld_dataframe(top_percent=top_percent, top_n_seqs=top_n_seqs, df_bld=df_bld)
+                        df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+                    if 'hlt_as_ms' in dataset_type:
+                        # take 1 patient from each healthy study_id
+                        chosen_patient_ids = []
+                        for study_id in df_hlt['study_id'].unique():
+                            patient_ids = df_hlt[df_hlt['study_id'] == study_id]['patient_id'].unique()
+                            if len(patient_ids) > 0:
+                                chosen_patient_ids.append(np.random.choice(patient_ids))
+                        df_excess_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                        df_excess_hlt['patient_id'] = df_excess_hlt['patient_id'].astype(str) + '_hlt_as_ms'
+                        # remove from hlt those patients that were picked
+                        df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
+                    if extra_filter:
+                        # Filtering sequences by length
+                        df_bld = df_bld[df_bld['AASeq'].str.len() > 10]  # remove sequences that are too short
+                        df_bld = df_bld[df_bld['AASeq'].str.len() < 20]  # remove sequences that are too long
+                        df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 10]  # remove sequences that are too short
+                        df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 20]  # remove sequences that are too long
+
+                        # Filtering patients with 5k sequences less than top_n_seqs (if it exists)
+                        if top_n_seqs is not None:
+                            # Each patient with unique AASeqs less than 1000 * top_n_seqs should be completely removed:
+                            min_seq_count = 1000 * top_n_seqs - 5000
+                            df_bld = df_bld.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
+                            df_hlt = df_hlt.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
             elif dataset_type == 'ms_hlt_article':
                 df_bld, df_hlt = df, df_h
                 # Only Healthy df from article
@@ -223,10 +269,10 @@ class DatasetLoader:
         train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
 
         # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
-        for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
-            if not (seq.startswith('C') and seq.endswith('F')):
-                raise ValueError(
-                    f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
+        # for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
+        #     if not (seq.startswith('C') and seq.endswith('F')):
+        #         raise ValueError(
+        #             f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
 
         if k_fold > 0:
             name_metadata = f"_fold_{k_fold}"
@@ -240,6 +286,8 @@ class DatasetLoader:
             num_of_healthy = filter_num_of_healthy
         if not filter_to_inflate:
             name_metadata += "_no_inflate"
+        if extra_filter:
+            name_metadata += "_extra_filter"
 
         if verbose:
             print('Calculating positive and negative sequences...')
@@ -255,6 +303,10 @@ class DatasetLoader:
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
+        if 'tcrdb2' in dataset_type and '_hlt_as_ms' in dataset_type:
+            # append df_excess_hlt to the df_bld set and add positives to train accordingly:
+            df_bld = pd.concat([df_bld, df_excess_hlt], axis=0, ignore_index=True)
+
         # make sure that there is no intersection between train, valid and test sequences
         train_pos_seqs = np.array(list(set(train_pos_seqs) - set(np.concatenate((valid_pos_seqs, test_pos_seqs)))))
         if len(set(valid_pos_seqs) & set(test_pos_seqs)) > 0:
@@ -264,6 +316,52 @@ class DatasetLoader:
                 test_pos_seqs = np.array(list(set(test_pos_seqs) - set(valid_pos_seqs)))
 
         positive_seqs = np.concatenate((train_pos_seqs, valid_pos_seqs, test_pos_seqs))
+
+        if display_extra_plots:
+            # Train-positive AASeqs (assumed to be a set for speed)
+            train_pos_seqs = set(train_pos_seqs)
+
+            hlt_patient_ids = df_hlt['patient_id'].unique()
+            res = []
+            for p in hlt_patient_ids:
+                patient_seqs = set(df_hlt[df_hlt['patient_id'] == p].AASeq)
+                shared_seqs = patient_seqs.intersection(train_pos_seqs)
+                if len(patient_seqs) > 0:
+                    percent = 100 * len(shared_seqs) / len(patient_seqs)
+                else:
+                    percent = 0
+                res.append(percent)
+
+            all_bld_ids = df_bld['patient_id'].unique()
+            filtered_bld_ids = all_bld_ids[:-8]  # exclude last 8
+
+            res_d = []
+            for p in filtered_bld_ids:
+                patient_seqs = set(df_bld[df_bld['patient_id'] == p].AASeq)
+                shared_seqs = patient_seqs.intersection(train_pos_seqs)
+                if len(patient_seqs) > 0:
+                    percent = 100 * len(shared_seqs) / len(patient_seqs)
+                else:
+                    percent = 0
+                res_d.append(percent)
+
+            # Sort by descending percentage
+            res = sorted(res, reverse=True)
+            res_d = sorted(res_d, reverse=True)
+
+            x_hlt = np.arange(len(res))
+            x_bld = np.arange(len(res_d))
+
+            plt.figure(figsize=(12, 6))
+            plt.bar(x_bld, res_d, color='salmon', label='Disease', alpha=0.5)
+            plt.bar(x_hlt, res, color='skyblue', label='Healthy', alpha=0.5)
+
+            plt.xlabel("Patient index (sorted by % overlap)")
+            plt.ylabel("Percentage of patient's unique AASeqs in train_pos_seqs (%)")
+            plt.title("Patient Overlap with Positive Training Sequences")
+            plt.legend()
+            plt.tight_layout()
+            plt.show()
 
         # Calculate the masks for each patient
         masks = []
@@ -461,7 +559,6 @@ class DatasetLoader:
         # Note: looks like when we have less sequences in the set and when we take only seqs that appear in i patients,
         # and not in i healthy people, then when i rises the variance lowers.
         if False:
-            import matplotlib.pyplot as plt
             def plot_lev(seqs, title_info=''):
                 pwc_mat = pairwise_scores(seqs, seqs, score=levenshtein_dist_non_bin)
                 similarities = np.mean(pwc_mat, axis=0)
@@ -491,7 +588,6 @@ class DatasetLoader:
             neg_seqs = np.load(similar_neg_seqs_path, allow_pickle=True)
             min_dist = np.load(similar_neg_min_dists_path, allow_pickle=True)
         else:
-            import matplotlib.pyplot as plt
             # Calculate the similar negatives
             def batched_min_dist(neg_seqs, train_pos_seqs, score_func, num_batches=4):
                 batch_size = len(neg_seqs) // num_batches
@@ -694,6 +790,8 @@ class DatasetLoader:
                 os.makedirs(save_folder, exist_ok=True)
                 with open(save_file, 'wb') as f:
                     pickle.dump((positive_seqs, negative_seqs), f)
+                if not os.path.exists(save_file):
+                    print(f"Failed to save valid sequences to {save_file}")
             return positive_seqs, negative_seqs
 
             # TODO: This is the old code:
@@ -1301,7 +1399,7 @@ class DatasetLoader:
         return mean_results, std_percent_of_total
 
     # TODO: This code does not contain the filtering of the data! that should be when loading data from TCRdb2!
-    def get_ms_extra_bld_dataframe(self, df_bld=None):
+    def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):
         # TODO: Changed from .tsv to .csv (downloaded from TCRdb2)
         extra_ms_path = 'db/tcrdb/special2'
         extra_ms_files = [x for x in os.listdir(extra_ms_path) if x.endswith('Pre.csv')]
@@ -1448,8 +1546,13 @@ class DatasetLoader:
         # extra_ms_df = extra_ms_df.groupby('patient_id', group_keys=False).apply(sample_unique_seqs)
 
         # remove all samples with 'cell_type' of PBMC
-        extra_ms_df = extra_ms_df[extra_ms_df['cell_type'] != 'Unknown']
-        extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'])
+        extra_ms_df = extra_ms_df.sort_values('cloneFraction', ascending=False)
+        extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'], keep='first')
+
+        # extra_ms_df = extra_ms_df[extra_ms_df['cell_type'] != 'Unknown']
+        # extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'])
+
+        extra_ms_df = Study.do_tcrdb2_threshold_filtering(extra_ms_df, top_percent, top_n_seqs)
 
         return extra_ms_df
 

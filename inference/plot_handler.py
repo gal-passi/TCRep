@@ -124,9 +124,29 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         plt.show()
 
 
+def get_model_predictions_batched(model, sequences, batch_size=50000, device='cuda', threshold=None):
+    """Helper function to get model predictions in batches"""
+    model.to(device)
+    model.eval()
+
+    all_probs = []
+
+    with torch.no_grad():
+        for i in range(0, len(sequences), batch_size):
+            batch_seqs = sequences[i:i + batch_size]
+            batch_logits = model(batch_seqs)
+            batch_probs = torch.softmax(batch_logits, dim=1)[:, 1].cpu().numpy()
+            all_probs.append(batch_probs)
+
+    probs = np.concatenate(all_probs)
+    if threshold is None:
+        return probs
+    else:
+        return probs[probs >= threshold]
+
 def plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                           test_masks, valid_masks, positive_seqs, df_bld,
-                                          df_hlt, model_type, log_wandb, args, device='cuda'):
+                                          df_hlt, model_type, log_wandb, args, device='cuda', threshold=None):
     """
     Create a comprehensive visualization of model output distributions across validation,
     training, and healthy patient sets.
@@ -134,6 +154,22 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     - trained_model: The trained neural network model
     - Various data-related parameters to extract sequences and patient sets
     """
+    def create_kde_from_histogram(probs, ax, color, label):
+        """Helper function to create KDE plot from histogram of rounded probabilities"""
+        # Round probabilities to 2 decimal places
+        rounded_probs = np.round(probs, 2)
+
+        # Create histogram (counts for each unique rounded value)
+        unique_vals, counts = np.unique(rounded_probs, return_counts=True)
+
+        # Create expanded array based on counts for KDE
+        expanded_probs = np.repeat(unique_vals, counts)
+
+        # Plot KDE
+        kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
+        kde_normalizer(kde)
+        return kde
+
     # Set up the figure with three subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     fig.suptitle(f"Model Output Distributions for {model_type} Model", fontsize=16)
@@ -162,24 +198,31 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         assert np.all(np.isin(pos_seqs, neg_seqs)), f"Positives are not in negatives for patient {patient_ind}"
         # Make sure that there are no sequences in the negative set that are in the positive set
         neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            pos_logits = trained_model(pos_seqs)
-            neg_logits = trained_model(neg_seqs)
-        # Convert to probabilities
-        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+
+        # Get model outputs using batched prediction
+        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, device=device, threshold=threshold)
+        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, device=device, threshold=threshold)
+
+        # # Get model outputs
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     pos_logits = trained_model(pos_seqs)
+        #     neg_logits = trained_model(neg_seqs)
+        # # Convert to probabilities
+        # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for positive and negative samples
-        kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
-        kde_normalizer(kde)
-        kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
-        kde_normalizer(kde)
+        create_kde_from_histogram(pos_probs, ax1, test_pos_colors[i], f'Pos Set {i} - {len(pos_seqs)}')
+        create_kde_from_histogram(neg_probs, ax1, test_neg_colors[i], f'Neg Set {i} - {len(neg_seqs)}')
+        # kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
+        # kde_normalizer(kde)
+        # kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
+        # kde_normalizer(kde)
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
     ax1.set_ylim(0, 1.1)
-    # ax1.legend()
+    ax1.legend()
 
     # Subplot 2: Healthy Patients Distributions
     ax2.set_title("Healthy vs Ill Patients")
@@ -191,47 +234,59 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = np.unique(healthy_seqs)
         disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
         disease_seqs = np.unique(disease_seqs)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            healthy_logits = trained_model(healthy_seqs)
-            disease_logits = trained_model(disease_seqs)
-        # Convert to probabilities
-        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+        # Get model outputs using batched prediction
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
+        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, device=device, threshold=threshold)
+        # # Get model outputs
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     healthy_logits = trained_model(healthy_seqs)
+        #     disease_logits = trained_model(disease_seqs)
+        # # Convert to probabilities
+        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        # disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for healthy patient samples
-        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
-        kde_normalizer(kde)
-        kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
-        kde_normalizer(kde)
+        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i], f'Healthy Set {i} - {len(healthy_seqs)}')
+        create_kde_from_histogram(disease_probs, ax2, test_colors[i], f'Ill Set {i} - {len(disease_seqs)}')
+        # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
+        # kde_normalizer(kde)
+        # kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
+        # kde_normalizer(kde)
     # More Healthy patients
     for i in range(len(test_inds), len(test_inds) + 6):
         patient = healthy_patients[i]
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
         healthy_seqs = np.unique(healthy_seqs)
+        # Get model outputs using batched prediction
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
         # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            healthy_logits = trained_model(healthy_seqs)
-        # Convert to probabilities
-        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     healthy_logits = trained_model(healthy_seqs)
+        # # Convert to probabilities
+        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for healthy patient samples
-        kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
-        kde_normalizer(kde)
+        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i - len(test_inds)], f'Healthy Set {i} - {len(healthy_seqs)}')
+        # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
+        # kde_normalizer(kde)
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
     ax2.set_ylim(0, 1.1)
-    # ax2.legend()
+    ax2.legend()
     # Save the plot
     os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
-    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution_per_patients_{get_model_config_str(args)}.png")
+    extra = f"_threshold_{threshold}" if threshold is not None else ""
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/comprehensive_distribution_per_patients_{get_model_config_str(args)}{extra}.png")
     plt.tight_layout()
 
     # save the figure in wandb:
     if log_wandb:
-        wandb.log({"output_distributions_per_patient": wandb.Image(plt)})
+        title = "output_distributions_per_patient"
+        if threshold is not None:
+            title += f"_threshold_{threshold}"
+        wandb.log({title: wandb.Image(plt)})
     else:
         plt.show()
 
@@ -251,26 +306,29 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         neg_seqs = np.unique(neg_seqs)
         # Make sure that there are no sequences in the negative set that are in the positive set
         neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            pos_logits = trained_model(pos_seqs)
-            neg_logits = trained_model(neg_seqs)
-        # Convert to probabilities
-        pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
+        # Get model outputs using batched prediction
+        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, device=device, threshold=threshold)
+        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, device=device, threshold=threshold)
+        # # Get model outputs
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     pos_logits = trained_model(pos_seqs)
+        #     neg_logits = trained_model(neg_seqs)
+        # # Convert to probabilities
+        # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
+        # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDFs for positive and negative samples
         # For positive sequences
         x = np.sort(pos_probs)
         y = np.arange(1, len(x) + 1) / len(x)
-        cdf_ax1.plot(x, y, color=test_pos_colors[i], label=f'Pos Set {i}')
+        cdf_ax1.plot(x, y, color=test_pos_colors[i], label=f'Pos Set {i} - {len(pos_seqs)}')
 
         # For negative sequences
         x = np.sort(neg_probs)
         y = np.arange(1, len(x) + 1) / len(x)
-        cdf_ax1.plot(x, y, color=test_neg_colors[i], label=f'Neg Set {i}')
+        cdf_ax1.plot(x, y, color=test_neg_colors[i], label=f'Neg Set {i} - {len(neg_seqs)}')
 
     cdf_ax1.set_xlabel("Predicted Probability for Positive Class")
     cdf_ax1.set_ylabel("Cumulative Probability")
@@ -285,44 +343,49 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = np.unique(healthy_seqs)
         disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
         disease_seqs = np.unique(disease_seqs)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            healthy_logits = trained_model(healthy_seqs)
-            disease_logits = trained_model(disease_seqs)
-        # Convert to probabilities
-        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+        # Get model outputs using batched prediction
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
+        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, device=device, threshold=threshold)
+        # # Get model outputs
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     healthy_logits = trained_model(healthy_seqs)
+        #     disease_logits = trained_model(disease_seqs)
+        # # Convert to probabilities
+        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        # disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDFs for healthy and disease samples
         # For healthy sequences
         x = np.sort(healthy_probs)
         y = np.arange(1, len(x) + 1) / len(x)
-        cdf_ax2.plot(x, y, color=healthy_colors[i], label=f'Healthy Set {i}')
+        cdf_ax2.plot(x, y, color=healthy_colors[i], label=f'Healthy Set {i} - {len(healthy_seqs)}')
 
         # For disease sequences
         x = np.sort(disease_probs)
         y = np.arange(1, len(x) + 1) / len(x)
-        cdf_ax2.plot(x, y, color=test_colors[i], label=f'Ill Set {i}')
+        cdf_ax2.plot(x, y, color=test_colors[i], label=f'Ill Set {i} - {len(disease_seqs)}')
 
     # More Healthy patients
     for i in range(len(test_inds), len(test_inds) + 6):
         patient = healthy_patients[i]
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
         healthy_seqs = np.unique(healthy_seqs)
-        # Get model outputs
-        trained_model.to(device)
-        trained_model.eval()
-        with torch.no_grad():
-            healthy_logits = trained_model(healthy_seqs)
-        # Convert to probabilities
-        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        # Get model outputs using batched prediction
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
+        # # Get model outputs
+        # trained_model.to(device)
+        # trained_model.eval()
+        # with torch.no_grad():
+        #     healthy_logits = trained_model(healthy_seqs)
+        # # Convert to probabilities
+        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDF for healthy patient samples
         x = np.sort(healthy_probs)
         y = np.arange(1, len(x) + 1) / len(x)
-        cdf_ax2.plot(x, y, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}')
+        cdf_ax2.plot(x, y, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i} - {len(healthy_seqs)}')
 
     cdf_ax2.set_xlabel("Predicted Probability for Positive Class")
     cdf_ax2.set_ylabel("Cumulative Probability")
@@ -331,12 +394,15 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
 
     # Save the CDF plot
     plt.tight_layout()
-    plt.savefig(
-        f"plots/{model_type}_model/dist_model_output/cumulative_distribution_per_patients_{get_model_config_str(args)}.png")
+    extra = f"_threshold_{threshold}" if threshold is not None else ""
+    plt.savefig(f"plots/{model_type}_model/dist_model_output/cumulative_distribution_per_patients_{get_model_config_str(args)}{extra}.png")
 
     # Save the figure in wandb:
     if log_wandb:
-        wandb.log({"cumulative_distributions_per_patient": wandb.Image(fig_cdf)})
+        title = "cumulative_distributions_per_patient"
+        if threshold is not None:
+            title += f"_threshold_{threshold}"
+        wandb.log({title: wandb.Image(fig_cdf)})
     else:
         plt.show()
 

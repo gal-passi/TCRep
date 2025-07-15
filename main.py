@@ -3,6 +3,7 @@ from gc import freeze
 from sched import scheduler
 
 from pyarrow.dataset import dataset
+from torch.ao.nn.quantized.functional import threshold
 from triton.language.semantic import device_print
 from wandb.sdk.internal.system.assets import asset_registry
 
@@ -746,8 +747,9 @@ def sweep_model():
                                    cvc_layers_to_train=cvc_layers_to_train, lora=lora, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
-    elif model_type == 'cvc_full':
-        model = CVCClassifierModelFullEmbed(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
+    elif model_type == 'cvc_full' or model_type == 'cvc_weighted':
+        method = 'weighted' if model_type == 'cvc_weighted' else 'full'
+        model = CVCClassifierModelFullEmbed(batch_size=batch_size, method=method, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
                                             freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
     else:
         raise ValueError(f"Model type {model_type} is not supported")
@@ -793,12 +795,12 @@ def sweep_model():
 
 def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=None,
                         use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
-                        filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, verbose=True):
+                        filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
     if to_k_fold:
-        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent, top_n_seqs=top_n_seqs)
+        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent, extra_filter=extra_filter, top_n_seqs=top_n_seqs)
         df_bld, df_hlt = dataset_loader.get_dfs()
         unique_patient_ids = df_bld["patient_id"].unique()
         unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -851,13 +853,13 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
                                    use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
                                    filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
-                                   remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, verbose=verbose)
+                                   remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter, verbose=verbose)
     return dataset_loader
 
 
 if __name__ == '__main__':
     # get program arguments
-    model_types = ['ff', 'cvc', 'esmc', 'cvc_full']
+    model_types = ['ff', 'cvc', 'esmc', 'cvc_full', 'cvc_weighted']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
@@ -913,6 +915,10 @@ if __name__ == '__main__':
     parser.add_argument('--train_vae', action='store_true', default=False, help='Train ControlVAE on positive sequences instead of classification model')
     parser.add_argument('--top_percent', type=int, default=None, help='The top percent of sequences take when loading data from TCRdb2')
     parser.add_argument('--top_n_seqs', type=int, default=None, help='The top n*1000 sequences take when loading data from TCRdb2')
+    parser.add_argument('--plus_healthy_mal_id', action='store_true', default=False, help='Whether to add healthy Mal-ID sequences to the dataset or not')
+    parser.add_argument('--extra_ms_from_pregnant', action='store_true', default=False, help='Whether to add extra MS data of pregnant MS study (only for MS dataset)')
+    parser.add_argument('--use_healthy_as_ms', action='store_true', default=False, help='Whether to use some of the healthy patients as MS patients (only for MS dataset)')
+    parser.add_argument('--extra_filter', action='store_true', default=False, help='Whether to filter the data more than the default filtering (Remove seqs of certain lengths and remove subjects with not a lot of sequences)')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -955,6 +961,11 @@ if __name__ == '__main__':
     remove_seqs_by_len = args.remove_seqs_by_len
     top_percent = args.top_percent
     top_n_seqs = args.top_n_seqs
+    plus_healthy_mal_id = args.plus_healthy_mal_id
+    extra_ms_from_pregnant = args.extra_ms_from_pregnant
+    use_healthy_as_ms = args.use_healthy_as_ms
+    extra_filter = args.extra_filter
+
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -976,8 +987,14 @@ if __name__ == '__main__':
     assert not (top_percent is not None and 'tcrdb2' not in dataset_type), "Cannot use top_percent when dataset_type does not contain 'tcrdb2'"
     assert not (top_n_seqs is not None and 'tcrdb2' not in dataset_type), "Cannot use top_n_seqs when dataset_type does not contain 'tcrdb2'"
     assert not (top_percent is not None and top_n_seqs is not None), "Cannot use both top_percent and top_n_seqs at the same time"
+    assert not (extra_ms_from_pregnant and 'ms' not in dataset_type), "extra_ms_from_pregnant can only be used with MS dataset of tcrdb2.0"
+    assert not (use_healthy_as_ms and 'ms' not in dataset_type), "use_healthy_as_ms can only be used with MS dataset of tcrdb2.0"
+    assert not (extra_filter and 'ms_tcrdb2' not in dataset_type), "extra_filter can only be used with MS TCRdb2 dataset"
 
     if 'ms_tcrdb2' in dataset_type:
+        dataset_type += '_plus_hlt_article' if plus_healthy_mal_id else ''
+        dataset_type += '_extra_ms' if extra_ms_from_pregnant else ''
+        dataset_type += '_hlt_as_ms' if use_healthy_as_ms else ''
         dataset_type += f'_top_{top_percent}' if top_percent is not None else ''
         dataset_type += f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
 
@@ -1021,7 +1038,7 @@ if __name__ == '__main__':
                                         filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                         ratio=ratio,
                                         filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
-                                        top_percent=top_percent, top_n_seqs=top_n_seqs)
+                                        top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter, verbose=True)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1181,9 +1198,12 @@ if __name__ == '__main__':
                                        freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
         elif model_type == 'esmc':
             model = ESMCFeedForwardClassifier(device=device)
-        elif model_type == 'cvc_full':
-            model = CVCClassifierModelFullEmbed(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
-                                       freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
+        elif model_type == 'cvc_full' or model_type == 'cvc_weighted':
+            method = 'weighted' if model_type == 'cvc_weighted' else 'full'
+            model = CVCClassifierModelFullEmbed(batch_size=batch_size, method=method, ch_dropout=ch_dropout,
+                                                cvc_layers_to_train=cvc_layers_to_train,
+                                                freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type,
+                                                device=device)
         else:
             raise ValueError(f"Model type {model_type} is not supported")
 
@@ -1249,22 +1269,27 @@ if __name__ == '__main__':
 
         # New distribution plot
         np.random.seed(42)
-        print("Plotting the output distributions per patient (New)")
-        plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                              test_masks, valid_masks, positive_seqs, df_bld,
-                                              df_hlt, model_type, log_wandb, args, device)
+        # print("Plotting the output distributions per patient (New)")
+        # plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+        #                                       test_masks, valid_masks, positive_seqs, df_bld,
+        #                                       df_hlt, model_type, log_wandb, args, device)
 
         # Plotting the output distributions
-        print("Plotting the output distributions")
-        plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
-                                         valid_masks, positive_seqs, df_bld, patient_id_masks,
-                                         train_patient_inds, train_inds, df_hlt, model_type, log_wandb, args, device)
-
+        # print("Plotting the output distributions")
+        # plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
+        #                                  valid_masks, positive_seqs, df_bld, patient_id_masks,
+        #                                  train_patient_inds, train_inds, df_hlt, model_type, log_wandb, args, device)
+        #
         # Other distribution plot
         print("Plotting the output distributions per patient")
         plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, args, device)
+        # Other distribution plot
+        print("Plotting the output distributions per patient - With threshold=0.5")
+        plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                              test_masks, valid_masks, positive_seqs, df_bld,
+                                              df_hlt, model_type, log_wandb, args, device, threshold=0.5)
 
         # Distribution of unseen MS related dataset plot
         # if dataset_type == 'ms':

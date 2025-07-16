@@ -4,8 +4,15 @@ import numpy as np
 import seaborn as sns
 import torch
 import wandb
+
 from cache_handler import get_model_config_str
 import pandas as pd
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+import umap.umap_ as umap
+
+
+MODEL_PREDICTION_BATCHED_EXTRA_SAMPLE_SIZE = 40000
 
 
 def kde_normalizer(kde):
@@ -124,12 +131,36 @@ def plot_output_distributions_claude(trained_model, valid_patient_inds, unique_p
         plt.show()
 
 
-def get_model_predictions_batched(model, sequences, batch_size=50000, device='cuda', threshold=None):
+def get_model_predictions_batched(model, sequences, sample_plots, batch_size=50000, device='cuda', threshold=None,
+                                  extra_sample_size=MODEL_PREDICTION_BATCHED_EXTRA_SAMPLE_SIZE):
     """Helper function to get model predictions in batches"""
+    sample_size = MODEL_PREDICTION_BATCHED_SAMPLE_SIZE
     model.to(device)
     model.eval()
 
     all_probs = []
+
+    if sample_plots == 1:
+        # sample sample_size sequences for plotting
+        if len(sequences) > sample_size:
+            indices = np.random.choice(len(sequences), size=sample_size, replace=False)
+            sequences = [sequences[i] for i in indices]
+    if sample_plots == 2:
+        # sample sample_count sequences for plotting
+        if len(sequences) > sample_size:
+            extra_factor = (len(sequences) - sample_size) // extra_sample_size + 1
+            sample_count = sample_size * extra_factor
+            sample_count = min(sample_count, len(sequences))  # Safety cap
+            indices = np.random.choice(len(sequences), size=sample_count, replace=False)
+            sequences = [sequences[i] for i in indices]
+    if sample_plots == 3:
+        # sample sample_size times extra factor sequences for plotting
+        if len(sequences) > sample_size:
+            extra_factor = (len(sequences) - sample_size) // extra_sample_size + 1
+            sequences = []
+            for i in range(extra_factor):
+                indices = np.random.choice(len(sequences), size=sample_size, replace=False)
+                sequences.extend([sequences[i] for i in indices])
 
     with torch.no_grad():
         for i in range(0, len(sequences), batch_size):
@@ -146,7 +177,8 @@ def get_model_predictions_batched(model, sequences, batch_size=50000, device='cu
 
 def plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                           test_masks, valid_masks, positive_seqs, df_bld,
-                                          df_hlt, model_type, log_wandb, args, device='cuda', threshold=None):
+                                          df_hlt, model_type, log_wandb, sample_plots, args,
+                                          device='cuda', threshold=None, framealpha=0.1, legend_fontsize=6):
     """
     Create a comprehensive visualization of model output distributions across validation,
     training, and healthy patient sets.
@@ -154,21 +186,57 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     - trained_model: The trained neural network model
     - Various data-related parameters to extract sequences and patient sets
     """
+    global MODEL_PREDICTION_BATCHED_SAMPLE_SIZE
+    if args.top_n_seqs is not None:
+        MODEL_PREDICTION_BATCHED_SAMPLE_SIZE = args.top_n_seqs
+    else:
+        MODEL_PREDICTION_BATCHED_SAMPLE_SIZE = 20000
+
     def create_kde_from_histogram(probs, ax, color, label):
         """Helper function to create KDE plot from histogram of rounded probabilities"""
-        # Round probabilities to 2 decimal places
-        rounded_probs = np.round(probs, 2)
+        if sample_plots == 3:
+            sample_size = MODEL_PREDICTION_BATCHED_SAMPLE_SIZE
+            extra_sample_size = MODEL_PREDICTION_BATCHED_EXTRA_SAMPLE_SIZE
+            extra_factor = (len(probs) - sample_size) // extra_sample_size + 1
 
-        # Create histogram (counts for each unique rounded value)
-        unique_vals, counts = np.unique(rounded_probs, return_counts=True)
+            expanded_probs_list = []
+            # Cut the probs into sample_size chunks:
+            for i in range(extra_factor):
+                start = i * sample_size
+                end = start + sample_size
+                if end > len(probs):
+                    end = len(probs)
+                chunk_probs = probs[start:end]
 
-        # Create expanded array based on counts for KDE
-        expanded_probs = np.repeat(unique_vals, counts)
+                # Round probabilities to 2 decimal places
+                rounded_probs = np.round(chunk_probs, 2)
 
-        # Plot KDE
-        kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
-        kde_normalizer(kde)
-        return kde
+                # Create histogram (counts for each unique rounded value)
+                unique_vals, counts = np.unique(rounded_probs, return_counts=True)
+
+                # Create expanded array based on counts for KDE
+                expanded_probs = np.repeat(unique_vals, counts)
+                expanded_probs_list.append(expanded_probs)
+
+            # Plot KDE
+            expanded_probs = np.concatenate(expanded_probs_list)
+            kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
+            kde_normalizer(kde)
+            return kde
+        else:
+            # Round probabilities to 2 decimal places
+            rounded_probs = np.round(probs, 2)
+
+            # Create histogram (counts for each unique rounded value)
+            unique_vals, counts = np.unique(rounded_probs, return_counts=True)
+
+            # Create expanded array based on counts for KDE
+            expanded_probs = np.repeat(unique_vals, counts)
+
+            # Plot KDE
+            kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
+            kde_normalizer(kde)
+            return kde
 
     # Set up the figure with three subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -200,8 +268,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
 
         # Get model outputs using batched prediction
-        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, device=device, threshold=threshold)
-        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, device=device, threshold=threshold)
+        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, sample_plots, device=device, threshold=threshold)
+        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, sample_plots, device=device, threshold=threshold)
 
         # # Get model outputs
         # trained_model.to(device)
@@ -222,7 +290,9 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
     ax1.set_ylim(0, 1.1)
-    ax1.legend()
+    legend = ax1.legend(framealpha=framealpha, fontsize=legend_fontsize)
+    for text in legend.get_texts():
+        text.set_alpha(0.5)
 
     # Subplot 2: Healthy Patients Distributions
     ax2.set_title("Healthy vs Ill Patients")
@@ -235,8 +305,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
         disease_seqs = np.unique(disease_seqs)
         # Get model outputs using batched prediction
-        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
-        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, device=device, threshold=threshold)
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
+        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, sample_plots, device=device, threshold=threshold)
         # # Get model outputs
         # trained_model.to(device)
         # trained_model.eval()
@@ -259,7 +329,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
         healthy_seqs = np.unique(healthy_seqs)
         # Get model outputs using batched prediction
-        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
         # Get model outputs
         # trained_model.to(device)
         # trained_model.eval()
@@ -274,7 +344,10 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
     ax2.set_ylim(0, 1.1)
-    ax2.legend()
+    # loc = 'upper center' if threshold != 0.5 else 'best'
+    legend = ax2.legend(framealpha=framealpha, fontsize=legend_fontsize)
+    for text in legend.get_texts():
+        text.set_alpha(0.5)
     # Save the plot
     os.makedirs(f"plots/{model_type}_model/dist_model_output", exist_ok=True)
     extra = f"_threshold_{threshold}" if threshold is not None else ""
@@ -307,8 +380,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # Make sure that there are no sequences in the negative set that are in the positive set
         neg_seqs = np.setdiff1d(neg_seqs, pos_seqs, assume_unique=True)
         # Get model outputs using batched prediction
-        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, device=device, threshold=threshold)
-        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, device=device, threshold=threshold)
+        pos_probs = get_model_predictions_batched(trained_model, pos_seqs, sample_plots, device=device, threshold=threshold)
+        neg_probs = get_model_predictions_batched(trained_model, neg_seqs, sample_plots, device=device, threshold=threshold)
         # # Get model outputs
         # trained_model.to(device)
         # trained_model.eval()
@@ -333,7 +406,9 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     cdf_ax1.set_xlabel("Predicted Probability for Positive Class")
     cdf_ax1.set_ylabel("Cumulative Probability")
     cdf_ax1.set_ylim(0, 1.05)
-    cdf_ax1.legend()
+    legend = cdf_ax1.legend(framealpha=framealpha, fontsize=legend_fontsize)
+    for text in legend.get_texts():
+        text.set_alpha(0.5)
 
     # Subplot 2: Healthy vs Ill Patients CDFs
     cdf_ax2.set_title("Healthy vs Ill Patients (CDF)")
@@ -344,8 +419,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
         disease_seqs = np.unique(disease_seqs)
         # Get model outputs using batched prediction
-        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
-        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, device=device, threshold=threshold)
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
+        disease_probs = get_model_predictions_batched(trained_model, disease_seqs, sample_plots, device=device, threshold=threshold)
         # # Get model outputs
         # trained_model.to(device)
         # trained_model.eval()
@@ -373,7 +448,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
         healthy_seqs = np.unique(healthy_seqs)
         # Get model outputs using batched prediction
-        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, device=device, threshold=threshold)
+        healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
         # # Get model outputs
         # trained_model.to(device)
         # trained_model.eval()
@@ -390,7 +465,9 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     cdf_ax2.set_xlabel("Predicted Probability for Positive Class")
     cdf_ax2.set_ylabel("Cumulative Probability")
     cdf_ax2.set_ylim(0, 1.05)
-    cdf_ax2.legend()
+    legend = cdf_ax2.legend(framealpha=framealpha, fontsize=legend_fontsize)
+    for text in legend.get_texts():
+        text.set_alpha(0.5)
 
     # Save the CDF plot
     plt.tight_layout()
@@ -1135,72 +1212,192 @@ def display_ratio_figures_kde(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, d
     plt.show()
 
 
-def plot_embedding_mappings(trained_model, valid_pos_seqs, test_pos_seqs, device='cuda', use_only_val=True):
-    from sklearn.decomposition import PCA
-    from sklearn.manifold import TSNE
-    import umap.umap_ as umap
+# Helper function to create embeddings plot
+def create_embedding_plot(trained_model, sequences, labels, colors, model_config, device, title_suffix="", verbose=True):
+    if len(sequences) == 0:
+        print(f"Warning: No sequences found for {title_suffix}")
+        return None
 
-    # Concatenate validation and test sequences and get embeddings
-    pos_seqs = np.concatenate([valid_pos_seqs, test_pos_seqs]) if not use_only_val else valid_pos_seqs
     trained_model.to(device)
     trained_model.eval()
     with torch.no_grad():
-        pos_embeddings = trained_model.get_embeddings(pos_seqs).cpu()
+        embeddings = trained_model.get_embeddings(sequences).cpu()
 
     # Convert to numpy for sklearn compatibility
-    embeddings_np = pos_embeddings.numpy()
-
-    # Use single color for all embeddings
-    colors = ['blue'] * len(embeddings_np)
+    embeddings_np = embeddings.numpy()
 
     # Apply dimensionality reduction techniques
-    print("Applying PCA...")
+    if verbose:
+        print(f"Applying PCA for {title_suffix}...")
     pca = PCA(n_components=2, random_state=42)
     pca_result = pca.fit_transform(embeddings_np)
 
-    print("Applying t-SNE...")
-    tsne = TSNE(n_components=2, random_state=42, perplexity=30, n_iter=1000)
+    if verbose:
+        print(f"Applying t-SNE for {title_suffix}...")
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings_np) - 1), n_iter=1000)
     tsne_result = tsne.fit_transform(embeddings_np)
 
-    print("Applying UMAP...")
-    umap_reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.1)
+    if verbose:
+        print(f"Applying UMAP for {title_suffix}...")
+    umap_reducer = umap.UMAP(n_components=2, random_state=42, n_neighbors=min(15, len(embeddings_np) - 1),
+                             min_dist=0.1)
     umap_result = umap_reducer.fit_transform(embeddings_np)
 
     # Create the figure with 3 subplots
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
     # Plot PCA
-    axes[0].scatter(pca_result[:, 0], pca_result[:, 1], c=colors, alpha=0.6, s=20)
-    axes[0].set_title(f'PCA\nExplained Variance: {pca.explained_variance_ratio_.sum():.3f}')
+    for i, (label, color) in enumerate(zip(np.unique(labels), colors)):
+        mask = labels == label
+        axes[0].scatter(pca_result[mask, 0], pca_result[mask, 1], c=color, alpha=0.6, s=20, label=label)
+    axes[0].set_title(f'PCA - {title_suffix}\nExplained Variance: {pca.explained_variance_ratio_.sum():.3f}')
     axes[0].set_xlabel('PC1')
     axes[0].set_ylabel('PC2')
     axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
 
     # Plot t-SNE
-    axes[1].scatter(tsne_result[:, 0], tsne_result[:, 1], c=colors, alpha=0.6, s=20)
-    axes[1].set_title('t-SNE')
+    for i, (label, color) in enumerate(zip(np.unique(labels), colors)):
+        mask = labels == label
+        axes[1].scatter(tsne_result[mask, 0], tsne_result[mask, 1], c=color, alpha=0.6, s=20, label=label)
+    axes[1].set_title(f't-SNE - {title_suffix}')
     axes[1].set_xlabel('t-SNE 1')
     axes[1].set_ylabel('t-SNE 2')
     axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
 
     # Plot UMAP
-    axes[2].scatter(umap_result[:, 0], umap_result[:, 1], c=colors, alpha=0.6, s=20)
-    axes[2].set_title('UMAP')
+    for i, (label, color) in enumerate(zip(np.unique(labels), colors)):
+        mask = labels == label
+        axes[2].scatter(umap_result[mask, 0], umap_result[mask, 1], c=color, alpha=0.6, s=20, label=label)
+    axes[2].set_title(f'UMAP - {title_suffix}')
     axes[2].set_xlabel('UMAP 1')
     axes[2].set_ylabel('UMAP 2')
     axes[2].grid(True, alpha=0.3)
+    axes[2].legend()
 
     plt.tight_layout()
+    os.makedirs(f"plots/embedding_mapping/model_config_{model_config}", exist_ok=True)
+    plt.savefig(f"plots/embedding_mapping/model_config_{model_config}/{title_suffix.lower().replace(' ', '_')}.png")
     plt.show()
 
     # Print some statistics
-    print(f"\nEmbedding Statistics:")
-    print(f"Original embedding dimension: {embeddings_np.shape[1]}")
-    print(f"Number of samples: {embeddings_np.shape[0]}")
-    print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
+    if verbose:
+        print(f"\nEmbedding Statistics for {title_suffix}:")
+        print(f"Original embedding dimension: {embeddings_np.shape[1]}")
+        print(f"Number of samples: {embeddings_np.shape[0]}")
+        print(f"PCA explained variance ratio: {pca.explained_variance_ratio_}")
 
     return {
         'pca': pca_result,
         'tsne': tsne_result,
-        'umap': umap_result
+        'umap': umap_result,
+        'labels': labels
     }
+
+
+def plot_embedding_mappings(trained_model, df_bld, valid_pos_seqs, test_pos_seqs, valid_patient_ids, test_patient_ids, model_config,
+                            max_samples_per_patient=1000, max_samples_per_class=5000, device='cuda', use_only_val=True, verbose=True):
+    # Convert to sets for faster lookup
+    pos_seqs_set = set(valid_pos_seqs) if use_only_val else set(np.concatenate([valid_pos_seqs, test_pos_seqs]))
+
+    # Select 2 patients from validation and 2 from test
+    selected_valid_patients = np.random.choice(valid_patient_ids, size=min(2, len(valid_patient_ids)), replace=False)
+    selected_test_patients = np.random.choice(test_patient_ids, size=min(2, len(test_patient_ids)), replace=False) if not use_only_val else []
+
+    all_selected_patients = list(selected_valid_patients) + list(selected_test_patients)
+
+    results = {}
+
+    # Create plots for each selected patient (plots 1-4)
+    for i, patient_id in enumerate(all_selected_patients):
+        if verbose:
+            print(f"\n{'=' * 50}")
+            print(f"Processing Patient {patient_id} (Plot {i + 1}/4)")
+            print(f"{'=' * 50}")
+
+        # Get all sequences for this patient
+        patient_seqs = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
+
+        # Separate positive and negative sequences
+        pos_patient_seqs = np.array(list(set(patient_seqs) & pos_seqs_set))
+        neg_patient_seqs = np.array(list(set(patient_seqs) - pos_seqs_set))
+
+        # Sample sequences (adjust sample size based on availability)
+        pos_sample_size = min(max_samples_per_patient, len(pos_patient_seqs))
+        neg_sample_size = min(max_samples_per_patient, len(neg_patient_seqs))
+
+        if pos_sample_size > 0:
+            pos_patient_seqs_sampled = np.random.choice(pos_patient_seqs, size=pos_sample_size, replace=False)
+        else:
+            pos_patient_seqs_sampled = np.array([])
+
+        if neg_sample_size > 0:
+            neg_patient_seqs_sampled = np.random.choice(neg_patient_seqs, size=neg_sample_size, replace=False)
+        else:
+            neg_patient_seqs_sampled = np.array([])
+
+        # Combine sequences and create labels
+        combined_seqs = np.concatenate([pos_patient_seqs_sampled, neg_patient_seqs_sampled])
+        to_concatenate = [['Positive'] * len(pos_patient_seqs_sampled), ['Negative'] * len(neg_patient_seqs_sampled)]
+        labels = np.concatenate(to_concatenate)
+
+        if len(combined_seqs) > 0:
+            result = create_embedding_plot(
+                trained_model,
+                combined_seqs,
+                labels,
+                ['red', 'blue'],
+                model_config,
+                device,
+                f"Patient {patient_id}",
+                verbose
+            )
+            results[f'patient_{patient_id}'] = result
+        else:
+            print(f"Warning: No sequences found for patient {patient_id}")
+
+    # Create the 5th plot: All positive and negative sequences from all patients
+    if verbose:
+        print(f"\n{'=' * 50}")
+        print(f"Processing All Patients Combined (Plot 5/5)")
+        print(f"{'=' * 50}")
+
+    # Get all sequences from all patients
+    all_patient_ids = np.concatenate([valid_patient_ids, test_patient_ids]) if not use_only_val else valid_patient_ids
+    all_sequences = []
+
+    for patient_id in all_patient_ids:
+        patient_seqs = df_bld[df_bld['patient_id'] == patient_id]['AASeq'].unique()
+        all_sequences.extend(patient_seqs)
+
+    all_sequences = np.array(list(set(all_sequences)))  # Remove duplicates
+
+    # Separate into positive and negative
+    all_pos_seqs = np.array(list(set(all_sequences) & pos_seqs_set))
+    all_neg_seqs = np.array(list(set(all_sequences) - pos_seqs_set))
+
+    to_sample = min(max_samples_per_class, len(all_pos_seqs))
+    if len(all_pos_seqs) > to_sample:
+        all_pos_seqs = np.random.choice(all_pos_seqs, size=to_sample, replace=False)
+
+    if len(all_neg_seqs) > to_sample:
+        all_neg_seqs = np.random.choice(all_neg_seqs, size=to_sample, replace=False)
+
+    # Combine all sequences and create labels
+    all_combined_seqs = np.concatenate([all_pos_seqs, all_neg_seqs])
+    to_concat = [['Positive'] * len(all_pos_seqs), ['Negative'] * len(all_neg_seqs)]
+    all_labels = np.concatenate(to_concat)
+
+    result = create_embedding_plot(
+        trained_model,
+        all_combined_seqs,
+        all_labels,
+        ['red', 'blue'],
+        model_config,
+        device,
+        "All Patients Combined",
+        verbose
+    )
+    results['all_patients'] = result
+    return results

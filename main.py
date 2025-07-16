@@ -46,6 +46,7 @@ from inference.plot_handler import plot_output_distributions_claude, plot_output
 import yaml
 from collections import defaultdict
 from dataset_loader import DatasetLoader
+from cache_handler import get_model_config_str
 
 
 # Constants
@@ -62,7 +63,8 @@ INFERENCE_TO_RANDOM_FOREST = False
 INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
 INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 INFERENCE_CLASSIFICATION_MODEL = False
-INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = False
+INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = True
+INFERENCE_TO_CLASSIFICATION_MODEL = False
 
 dataset_loader = None
 
@@ -656,8 +658,8 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, ch_type, neg_partition,
-              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, device):
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, use_nneighbors_loss, ch_type, neg_partition,
+              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, sample_plots, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -685,12 +687,14 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "masking": masking,
             "ratio": ratio,
             "dist_loss_type": dist_loss_type,
+            "use_nneighbors_loss": use_nneighbors_loss,
             "ch_type": ch_type,
             "neg_partition": neg_partition,
             "use_similar_negatives": use_similar_negatives,
             "filter_num_of_patients": filter_num_of_patients,
             "filter_to_inflate": filter_to_inflate,
             "change_negatives": change_negatives,
+            "sample_plots": sample_plots,
             "device": device,
         },
         notes="Added dropout on classification head of 0.2",
@@ -795,12 +799,14 @@ def sweep_model():
 
 def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=None,
                         use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
-                        filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False, verbose=True):
+                        filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False,
+                       use_nneighbors_loss=False, loss_version=0, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
     if to_k_fold:
-        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent, extra_filter=extra_filter, top_n_seqs=top_n_seqs)
+        dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent,
+                                       extra_filter=extra_filter, top_n_seqs=top_n_seqs, use_nneighbors_loss=use_nneighbors_loss)
         df_bld, df_hlt = dataset_loader.get_dfs()
         unique_patient_ids = df_bld["patient_id"].unique()
         unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -847,13 +853,15 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
 
         altered_lists = generate_shifted_lists(list(unique_patient_ids))
         unique_patient_ids = altered_lists[k_fold]
+        print(f"Using unique patient IDs for k-fold {k_fold}: {unique_patient_ids}")
 
     dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
                                    k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
                                    use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
                                    filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
-                                   remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter, verbose=verbose)
+                                   remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
+                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, verbose=verbose)
     return dataset_loader
 
 
@@ -919,6 +927,9 @@ if __name__ == '__main__':
     parser.add_argument('--extra_ms_from_pregnant', action='store_true', default=False, help='Whether to add extra MS data of pregnant MS study (only for MS dataset)')
     parser.add_argument('--use_healthy_as_ms', action='store_true', default=False, help='Whether to use some of the healthy patients as MS patients (only for MS dataset)')
     parser.add_argument('--extra_filter', action='store_true', default=False, help='Whether to filter the data more than the default filtering (Remove seqs of certain lengths and remove subjects with not a lot of sequences)')
+    parser.add_argument('--use_nneighbors_loss', action='store_true', default=False, help='Add neighbors - common sequences - into loss calculation')
+    parser.add_argument('--loss_version', type=int, default=0, help='The version of the loss to use')
+    parser.add_argument('--sample_plots', type=int, default=0, help='Sampling when plotting instead of running on all sequences')
     args = parser.parse_args()
 
     model_type = args.model_type.lower()
@@ -965,6 +976,9 @@ if __name__ == '__main__':
     extra_ms_from_pregnant = args.extra_ms_from_pregnant
     use_healthy_as_ms = args.use_healthy_as_ms
     extra_filter = args.extra_filter
+    use_nneighbors_loss = args.use_nneighbors_loss
+    loss_version = args.loss_version
+    sample_plots = args.sample_plots
 
 
     if combine_classification and not dont_plot:
@@ -1027,6 +1041,9 @@ if __name__ == '__main__':
     print(f"\tDataset Filter Inflate: {not args.dataset_filter_dont_inflate}")
     print(f"\tNegative Partition Index: {args.negative_partition}")
     print(f"\tChanging Negatives: {args.changing_negatives}")
+    print(f"\tLoss Version: {args.loss_version}")
+    print(f"\tUse Neighbors Loss: {args.use_nneighbors_loss}")
+    print(f"\tSample Plots: {args.sample_plots}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -1038,7 +1055,8 @@ if __name__ == '__main__':
                                         filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                         ratio=ratio,
                                         filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
-                                        top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter, verbose=True)
+                                        top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
+                                        use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, verbose=True)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1050,6 +1068,7 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
+    aaseq_to_nneighbors = dataset_loader.get_aaseq_to_nneighbors_func()
 
     # TODO: Adding VAE training here! dont just leave it here!
     # Training VAE
@@ -1181,12 +1200,14 @@ if __name__ == '__main__':
                 masking=masking,
                 ratio=ratio,
                 dist_loss_type=dist_loss_type,
+                use_nneighbors_loss=use_nneighbors_loss,
                 ch_type=ch_type,
                 neg_partition=neg_partition,
                 use_similar_negatives=use_similar_negatives,
                 filter_num_of_patients=filter_num_of_patients,
                 filter_to_inflate=filter_to_inflate,
                 change_negatives=changing_negatives,
+                sample_plots=sample_plots,
                 device=device,
             )
 
@@ -1241,6 +1262,7 @@ if __name__ == '__main__':
                                                  scheduler_type=scheduler_type,
                                                  aaseq_to_ratio=aaseq_to_ratio,
                                                  aaseq_to_dist=aaseq_to_dist,
+                                                 aaseq_to_nneighbors=aaseq_to_nneighbors,
                                                  masking=masking,
                                                  ratio=ratio,
                                                  change_negatives=changing_negatives,
@@ -1284,12 +1306,12 @@ if __name__ == '__main__':
         print("Plotting the output distributions per patient")
         plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
-                                              df_hlt, model_type, log_wandb, args, device)
+                                              df_hlt, model_type, log_wandb, sample_plots, args, device)
         # Other distribution plot
-        print("Plotting the output distributions per patient - With threshold=0.5")
-        plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                              test_masks, valid_masks, positive_seqs, df_bld,
-                                              df_hlt, model_type, log_wandb, args, device, threshold=0.5)
+        # print("Plotting the output distributions per patient - With threshold=0.5")
+        # plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+        #                                       test_masks, valid_masks, positive_seqs, df_bld,
+        #                                       df_hlt, model_type, log_wandb, sample_plots, args, device, threshold=0.5)
 
         # Distribution of unseen MS related dataset plot
         # if dataset_type == 'ms':
@@ -1299,11 +1321,13 @@ if __name__ == '__main__':
         #                                           df_hlt, model_type, log_wandb, args, device)
 
     # Inference:
-    if not dont_inference and not force_retrain and not log_wandb:
+    # if not dont_inference and not force_retrain and not log_wandb:
+    if not dont_inference:
         print("\nInference:")
 
         # Inference ensemble model
         if to_ensemble and not combine_classification:
+            np.random.seed(42)
             # TODO: Added this inference: remove later!!!
             # def plot_histogram_of_lengths(all_seqs, title_extra=''):
             #     lengths = [len(seq) for seq in all_seqs]
@@ -1360,6 +1384,7 @@ if __name__ == '__main__':
             print(f"Validation F1: {val_f1:.4f}")
 
         if neg_partition > 0:
+            np.random.seed(42)
             from model_trainer import evaluate_model, CustomLossCriterion
             class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)
             criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio,
@@ -1376,6 +1401,7 @@ if __name__ == '__main__':
 
         # Create a dataframe with the AASeq, embedding, label and set_origin as columns
         if INFERENCE_TO_RANDOM_FOREST:
+            np.random.seed(42)
             from inference.inference_testing import get_df_embeddings_onehot, get_df_embeddings
             print("Getting the embeddings the dataset and saving as df to cache")
             df_embed_onehot = get_df_embeddings_onehot(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs)
@@ -1419,6 +1445,7 @@ if __name__ == '__main__':
 
         # Display distribution on other dataset (article is T1D)
         if INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS:
+            np.random.seed(42)
             other_dataset_type = 'article' if dataset_type == 'ms' else 'ms'
             print(f"Plotting the output distributions per patient on {dataset_type} and {other_dataset_type}")
             from inference.plot_handler import kde_normalizer
@@ -1432,22 +1459,27 @@ if __name__ == '__main__':
                                                     df_hlt, df_bld, df_bld_other, df_hlt_other, kde_normalizer, device)
 
         if INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS:
+            np.random.seed(42)
             from inference.plot_handler import plot_embedding_mappings
-            plot_embedding_mappings(trained_model, valid_pos_seqs, test_pos_seqs, device=device)
+            df_bld_val_test = df_bld[df_bld['patient_id'].isin(np.concatenate([valid_patient_ids, test_patient_ids]))]
+            model_config = get_model_config_str(args)
+            plot_embedding_mappings(trained_model, df_bld_val_test, valid_pos_seqs, test_pos_seqs, valid_patient_ids, test_patient_ids, model_config, device=device)
 
         # Inference classification model
-        if k_fold == 0 and combine_classification:
-            from inference.inference_classification import inference_classification_model_combined
-            def get_data_loader_wrapper(k_fold_index):
-                return get_dataset_loader(dataset_type, k_fold=k_fold_index, to_k_fold=True,
-                                          dist_loss_type=dist_loss_type, neg_partition=neg_partition,
-                                          use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
-                                          filter_num_of_patients=filter_num_of_patients,
-                                          filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len, verbose=True)
-            inference_classification_model_combined(trained_model, args, to_ensemble, get_data_loader_wrapper, device)
-        else:
-            from inference.inference_classification import inference_classification_model
-            inference_classification_model(trained_model, args, df_bld, df_hlt,
-                                           test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                           valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-                                           aaseq_to_ratio, to_ensemble, device)
+        if INFERENCE_TO_CLASSIFICATION_MODEL:
+            np.random.seed(42)
+            if k_fold == 0 and combine_classification:
+                from inference.inference_classification import inference_classification_model_combined
+                def get_data_loader_wrapper(k_fold_index):
+                    return get_dataset_loader(dataset_type, k_fold=k_fold_index, to_k_fold=True,
+                                              dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                              use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                              filter_num_of_patients=filter_num_of_patients,
+                                              filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len, verbose=True)
+                inference_classification_model_combined(trained_model, args, to_ensemble, get_data_loader_wrapper, device)
+            else:
+                from inference.inference_classification import inference_classification_model
+                inference_classification_model(trained_model, args, df_bld, df_hlt,
+                                               test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                               valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                                               aaseq_to_ratio, to_ensemble, device)

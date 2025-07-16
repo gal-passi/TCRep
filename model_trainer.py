@@ -36,7 +36,7 @@ def custom_loss_entropy(logits, labels, R=0.1, n_classes=2):
 
 
 class CustomLossCriterion(nn.Module):
-    def __init__(self, device, loss_type='ce', class_weights=None, R=0.1, n_classes=2, ratio=False, aaseq_to_ratio=None, aaseq_to_dist=None):
+    def __init__(self, device, loss_type='ce', class_weights=None, R=0.1, n_classes=2, ratio=False, aaseq_to_ratio=None, aaseq_to_dist=None, aaseq_to_nneighbors=None):
         """
         Flexible loss criterion that supports different loss types and class weights.
 
@@ -55,6 +55,7 @@ class CustomLossCriterion(nn.Module):
         self.ratio = ratio
         self.aaseq_to_ratio = aaseq_to_ratio
         self.aaseq_to_dist = aaseq_to_dist
+        self.aaseq_to_nneighbors = aaseq_to_nneighbors
         self.device = device
 
     def forward(self, logits, labels, batch_samples):
@@ -88,6 +89,16 @@ class CustomLossCriterion(nn.Module):
             sample_weights = batch_sample_distances.type(torch.float32)
             negative_indices = labels == 0
             sample_weights[negative_indices] = batch_sample_distances[negative_indices].type(torch.float32)
+            weighted_losses = per_sample_losses * sample_weights
+            ce_loss = weighted_losses.mean()
+        elif self.aaseq_to_nneighbors is not None:
+            # apply aaseq_to_nneighbors function to get the number of neighbors on the batch samples
+            batch_sample_nneighbors = self.aaseq_to_nneighbors(batch_samples).to(self.device)
+            per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+            sample_weights = batch_sample_nneighbors.type(torch.float32)  # Added this line to run on all samples
+            # sample_weights = torch.ones_like(per_sample_losses)
+            # positive_indices = labels == 1
+            # sample_weights[positive_indices] = batch_sample_nneighbors[positive_indices].type(torch.float32)
             weighted_losses = per_sample_losses * sample_weights
             ce_loss = weighted_losses.mean()
         else:
@@ -145,7 +156,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, args, masking=False, ratio=False, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, args, aaseq_to_nneighbors=None, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -176,7 +187,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
     class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
 
-    criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, device=device)
+    criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, aaseq_to_nneighbors=aaseq_to_nneighbors, device=device)
 
     if model_type == "cvc" and not freeze_embed_model and special_criterion:
         encoder_lr = embedding_lr  # this is the default learning rate for BERT
@@ -466,8 +477,10 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             })
 
         # saving the model for this epoch on odd epochs or on last epoch
-        is_odd_or_last_epoch = ((epoch + 1) % 2 == 1 and epoch >= 15) or epoch + 1 == epochs
-        if not is_sweep and is_odd_or_last_epoch:
+        # is_odd_or_last_epoch = ((epoch + 1) % 2 == 1 and epoch >= 15) or epoch + 1 == epochs
+        # if not is_sweep and is_odd_or_last_epoch:
+        # saving every epoch after 5
+        if not is_sweep and (epoch + 1) >= 5:
             save_model_state(model, args, epoch)
 
     return model, history

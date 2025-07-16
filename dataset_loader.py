@@ -50,7 +50,8 @@ class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
-                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False, display_extra_plots=False, verbose=True):
+                 remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False,
+                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -525,6 +526,26 @@ class DatasetLoader:
                 test_inds = test_inds & ~valid_test_inds
             train_inds = (~test_inds) & (~valid_inds)
 
+
+        # Option for AASeq to nneighbors incorporated into loss:
+        if use_nneighbors_loss:
+            self.build_nnegihbours_df([df_bld[df_bld['patient_id'].isin(train_patient_ids)],
+                                       df_bld[df_bld['patient_id'].isin(test_patient_ids)],
+                                       df_bld[df_bld['patient_id'].isin(valid_patient_ids)]])
+
+        def nneighbors_func(x, gamma, k):
+            return gamma ** (x - k)
+
+        gamma_options = {0 : 1.2, 1 : 1.3, 2 : 1.4, 3 : 1.5, 4 : 1.6}
+        default_gamma = gamma_options[loss_version] if loss_version in gamma_options else gamma_options[0]
+
+        def aaseq_to_nneighbors(aaseq_array, default_value=filter_num_of_patients - 1, gamma=default_gamma):
+            lookup_series = self.df_aaseq_to_nneighbors.set_index('AASeq')['nneighbors']
+            result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
+            result = nneighbors_func(result, gamma=gamma, k=default_value)
+            result[result < 1.0] = 1.0
+            return torch.tensor(result)
+
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
         self.test_neg_seqs = test_neg_seqs
@@ -554,6 +575,7 @@ class DatasetLoader:
         self.df_hlt = df_hlt
         self.aaseq_to_ratio = aaseq_to_ratio if ratio else None
         self.aaseq_to_distance = aaseq_to_distance if dist_loss_type != 'none' else None
+        self.aaseq_to_nneighbors = aaseq_to_nneighbors if use_nneighbors_loss else None
         # [set(positive_seqs).intersection(set(df_hlt[df_hlt['patient_id'] == p]['AASeq'].values)) for p in df_hlt['patient_id'].unique()]
 
         # Note: looks like when we have less sequences in the set and when we take only seqs that appear in i patients,
@@ -764,6 +786,31 @@ class DatasetLoader:
         df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
         self.df_aaseq_to_ratio = df_unique
 
+    def build_nnegihbours_df(self, dfs):
+        """
+            Builds self.df_aaseq_to_nneighbors: a DataFrame with unique AASeqs and their
+            number of neighbors (i.e., how many times they appear) across a list of DataFrames.
+            Counts are aggregated across all provided DataFrames, but duplicates within a
+            single patient in a DataFrame are only counted once.
+
+            Args:
+                dfs (list of pd.DataFrame): Each DataFrame must have columns ['patient_id', 'AASeq']
+        """
+        # Step 1: Count unique AASeqs per patient in each DF
+        all_counts = Counter()
+        for df in dfs:
+            # For each patient, get the unique AASeqs and count each one once per patient
+            patient_groups = df.groupby('patient_id')['AASeq'].unique()
+            for aaseq_list in patient_groups:
+                all_counts.update(aaseq_list)
+
+        # Step 2: Convert Counter to DataFrame
+        self.df_aaseq_to_nneighbors = (
+            pd.DataFrame.from_dict(all_counts, orient='index', columns=['nneighbors'])
+            .reset_index()
+            .rename(columns={'index': 'AASeq'})
+        )
+
     def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
         if filter_to_inflate:
             lev_dist_accept = 1  # for now its always lev distance 1
@@ -824,6 +871,9 @@ class DatasetLoader:
 
     def get_aaseq_to_distance_func(self):
         return self.aaseq_to_distance
+
+    def get_aaseq_to_nneighbors_func(self):
+        return self.aaseq_to_nneighbors
 
     def get_seqs(self):
         return self.train_pos_seqs, self.train_neg_seqs, self.valid_pos_seqs, self.valid_neg_seqs, self.test_pos_seqs, self.test_neg_seqs

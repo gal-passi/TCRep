@@ -6,7 +6,7 @@ import seaborn as sns
 import itertools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
 from models.cvc_cacheing_model import CVCCachingModel
 from cache_handler import get_model_config_str
 from sklearn.manifold import TSNE
@@ -20,11 +20,14 @@ from scipy.stats import wasserstein_distance, ks_2samp
 from multiprocessing import Pool, cpu_count
 from cache_handler import load_model_state
 from models.cvc_ensemble_model import CVCEnsembleModel
+from sklearn.mixture import GaussianMixture
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
 INFERENCE_CONFUSION_MATRIX_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices/")
 INFERENCE_VECTOR_PLOTS_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots/")
+INFERENCE_CONFUSION_MATRIX_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices_v2/")
+INFERENCE_VECTOR_PLOTS_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots_v2/")
 
 # Models Configurations:
 DISABLE_BAD_MODELS = True
@@ -83,6 +86,10 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
             patient_seqs = np.array([x for x in np.unique(patient_seqs) if x in possible_seqs])
         else:
             patient_seqs = df.loc[df["patient_id"] == patient_ind, "AASeq"].values
+
+        n = 100
+        if len(patient_seqs) > n:
+            patient_seqs = np.random.choice(patient_seqs, size=n, replace=False)
 
         # Get model outputs
         with torch.no_grad():
@@ -226,7 +233,7 @@ def plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to
 
 def inference_classification_model(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
-                                   add_ratio_to_vector=False, start_vec_from=20,
+                                   add_ratio_to_vector=False, start_vec_from=0,
                                    # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                    vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
     # TODO: Hot fix for now when using different set of num of healthy patients:
@@ -462,7 +469,7 @@ def inference_classification_model(trained_model, args, df_bld, df_hlt, test_pat
     plot_vectors(patient_vectors, all_healthy_vectors, args, " - All Patients")
 
 
-def plot_vectors(patient_vectors, healthy_vectors, args, title_suffix=""):
+def plot_vectors(patient_vectors, healthy_vectors, args, title_suffix="", inference_save_dir=INFERENCE_VECTOR_PLOTS_DIR):
     """
     Plot t-SNE and PCA visualizations of patient vectors, colored by disease/healthy status
 
@@ -516,7 +523,7 @@ def plot_vectors(patient_vectors, healthy_vectors, args, title_suffix=""):
     plt.tight_layout()
     # save under plot dirs with name including the get_model_config_str
     model_config_str = get_model_config_str(args)
-    plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_DIR, f"patient_vectors_{model_config_str}{title_suffix}.png"))
+    plt.savefig(os.path.join(inference_save_dir, f"patient_vectors_{model_config_str}{title_suffix}.png"))
     plt.show()
 
     # Print statistics
@@ -780,3 +787,398 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
     # Display combined results using display_enhanced_results
     args.k_fold = 0
     display_enhanced_results(combined_classifiers, args)
+
+
+def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
+                                   add_ratio_to_vector=False, start_vec_from=0,
+                                   # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
+                                   vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
+    if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 1.25):
+        num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 1.25)
+        num_of_healthy_test_patients = int(len(df_bld["patient_id"].unique()) * 0.25)
+    elif len(df_hlt["patient_id"].unique()) != num_of_healthy_patients:
+        num_of_healthy_patients = len(df_hlt["patient_id"].unique())
+        num_of_healthy_test_patients = int(num_of_healthy_patients * 0.25)
+
+    np.random.seed(42)
+    # make sure that plot dirs exists
+    os.makedirs(INFERENCE_CONFUSION_MATRIX_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_VECTOR_PLOTS_V2_DIR, exist_ok=True)
+
+    # Creating a caching model of the trained model
+    if to_ensemble:
+        caching_model = trained_model
+    else:
+        trained_model.eval()
+        caching_model = trained_model
+        # caching_model = CVCCachingModel(trained_model, args, device)
+        caching_model.to(device)
+        caching_model.eval()
+
+    # get the patient vectors
+    possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
+    patient_valid_test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
+    patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_inds, vector_representation_bins,
+                                                          add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=unique_patient_ids,
+                                                          possible_seqs=possible_seqs, start_vec_from=start_vec_from)
+
+    # get the train patient vectors
+    patient_valid_test_ids = [unique_patient_ids[x] for x in patient_valid_test_inds]
+    patient_train_inds = [x for x in df_bld["patient_id"].unique() if x not in patient_valid_test_ids]
+    patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, patient_train_inds, vector_representation_bins,
+                                                                      add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
+                                                                      possible_seqs=None, start_vec_from=start_vec_from)
+
+    # healthy vectors helping data
+    healthy_patients = df_hlt["patient_id"].unique()
+    np.random.shuffle(healthy_patients)
+    healthy_patients = healthy_patients[:num_of_healthy_patients]
+
+    healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
+                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from)
+    healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
+                                             healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
+    healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
+                                         healthy_probs[num_of_healthy_patients - num_of_healthy_test_patients:])
+
+    # total_cm_knn = []
+    # total_cm_rf = []
+    # total_cm_svm_rbf = []
+    # total_cm_knn_rbf = []
+    # total_cm_svm_linear = []
+    # total_cm_logistic = []
+    # total_cm_mlp = []
+    # total_cm_nb = []
+    # total_cm_jsd = []
+    # total_cm_wsd = []
+    # total_cm_ks = []
+    # rf_feature_importance = np.zeros(len(patient_test_vectors[0]))
+    #
+    # X_train = np.vstack([patient_train_vectors, healthy_vectors])
+    # y_train = np.hstack([np.ones(patient_train_vectors.shape[0]), np.zeros(healthy_vectors.shape[0])])
+    #
+    # X_test = np.vstack([patient_test_vectors, healthy_test_vectors])
+    # y_test = np.hstack([np.ones(patient_test_vectors.shape[0]), np.zeros(healthy_test_vectors.shape[0])])
+
+    # ============= GMM ADDITION STARTS HERE =============
+
+    print("=" * 60)
+    print("GAUSSIAN MIXTURE MODEL ANALYSIS ON PROBABILITY DISTRIBUTIONS")
+    print("=" * 60)
+
+    # Prepare probability data for GMM fitting
+    # Flatten all probability arrays for each group
+    patient_train_probs_flat = np.concatenate([probs.flatten() for probs in patient_train_probs])
+    healthy_train_probs_flat = np.concatenate([probs.flatten() for probs in healthy_probs])
+
+    # Reshape for sklearn (needs 2D input)
+    patient_train_data = patient_train_probs_flat.reshape(-1, 1)
+    healthy_train_data = healthy_train_probs_flat.reshape(-1, 1)
+
+    print(f"Patient training probability values: {patient_train_data.shape[0]}")
+    print(f"Healthy training probability values: {healthy_train_data.shape[0]}")
+    print(f"Patient probability range: [{patient_train_probs_flat.min():.3f}, {patient_train_probs_flat.max():.3f}]")
+    print(f"Healthy probability range: [{healthy_train_probs_flat.min():.3f}, {healthy_train_probs_flat.max():.3f}]")
+
+    # Define range of components to test (fewer components for 1D data)
+    max_components = min(8, min(len(patient_train_probs), len(healthy_probs)) // 2)
+    n_components_range = range(1, max_components + 1)
+
+    # BIC analysis for patient probability data
+    print("\n--- BIC Analysis for Patient Probability Data ---")
+    patient_bic_scores = []
+    patient_gmm_models = {}
+
+    for n_components in n_components_range:
+        gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
+        gmm.fit(patient_train_data)
+        bic_score = gmm.bic(patient_train_data)
+        patient_bic_scores.append(bic_score)
+        patient_gmm_models[n_components] = gmm
+        print(f"Components: {n_components:2d}, BIC: {bic_score:.2f}")
+
+    # BIC analysis for healthy probability data
+    print("\n--- BIC Analysis for Healthy Probability Data ---")
+    healthy_bic_scores = []
+    healthy_gmm_models = {}
+
+    for n_components in n_components_range:
+        gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
+        gmm.fit(healthy_train_data)
+        bic_score = gmm.bic(healthy_train_data)
+        healthy_bic_scores.append(bic_score)
+        healthy_gmm_models[n_components] = gmm
+        print(f"Components: {n_components:2d}, BIC: {bic_score:.2f}")
+
+    # Plot BIC scores and probability distributions
+    plt.figure(figsize=(12, 5))
+
+    # BIC scores plot
+    plt.subplot(1, 2, 1)
+    plt.plot(n_components_range, patient_bic_scores, 'bo-', label='Patient Data')
+    plt.plot(n_components_range, healthy_bic_scores, 'ro-', label='Healthy Data')
+    plt.xlabel('Number of Components')
+    plt.ylabel('BIC Score')
+    plt.title('BIC Scores for 1D GMM Component Selection')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    # Find optimal number of components for each
+    optimal_patient_components = n_components_range[np.argmin(patient_bic_scores)]
+    optimal_healthy_components = n_components_range[np.argmin(healthy_bic_scores)]
+
+    print(f"\nOptimal components - Patient: {optimal_patient_components}, Healthy: {optimal_healthy_components}")
+
+    # Choose a compromise number of components that works for both
+    # Strategy: choose the minimum of the two optimal values, but at least 2
+    chosen_components = max(2, min(optimal_patient_components, optimal_healthy_components))
+    print(f"Chosen number of components for both distributions: {chosen_components}")
+
+    # Train final GMMs with chosen number of components
+    print(f"\n--- Training Final GMMs with {chosen_components} components ---")
+
+    final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+    final_patient_gmm.fit(patient_train_data)
+
+    final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+    final_healthy_gmm.fit(healthy_train_data)
+
+    # Plot fitted GMMs
+    plt.subplot(1, 2, 2)
+    x_range = np.linspace(0, 1, 1000).reshape(-1, 1)
+    patient_gmm_pdf = np.exp(final_patient_gmm.score_samples(x_range))
+    healthy_gmm_pdf = np.exp(final_healthy_gmm.score_samples(x_range))
+
+    plt.plot(x_range.flatten(), patient_gmm_pdf, 'b-', linewidth=2, label=f'Patient GMM ({chosen_components} comp.)')
+    plt.plot(x_range.flatten(), healthy_gmm_pdf, 'r-', linewidth=2, label=f'Healthy GMM ({chosen_components} comp.)')
+    plt.hist(patient_train_probs_flat, bins=50, alpha=0.3, density=True, color='blue')
+    plt.hist(healthy_train_probs_flat, bins=50, alpha=0.3, density=True, color='red')
+    plt.xlabel('Probability Values')
+    plt.ylabel('Density')
+    plt.title('Fitted GMM Distributions')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_V2_DIR, 'gmm_bic_analysis.png'), dpi=300, bbox_inches='tight')
+    plt.show()
+
+    print(f"Patient GMM - BIC: {final_patient_gmm.bic(patient_train_data):.2f}")
+    print(f"Healthy GMM - BIC: {final_healthy_gmm.bic(healthy_train_data):.2f}")
+
+    # Make predictions on test set
+    print("\n--- Making Predictions on Test Set ---")
+
+    # For each test patient/healthy subject, calculate average log-likelihood and classify
+    test_predictions = []
+    test_true_labels = []
+
+    # Process patient test subjects
+    for i, patient_probs in enumerate(patient_test_probs):
+        patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
+
+        # Calculate average log-likelihood for this patient across all their probability values
+        patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
+        healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
+
+        # Classify as patient if closer to patient GMM
+        prediction = 1 if patient_ll > healthy_ll else 0
+
+        test_predictions.append(prediction)
+        test_true_labels.append(1)  # True label is patient
+
+    # Process healthy test subjects
+    for i, healthy_test_prob in enumerate(healthy_test_probs):
+        healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
+
+        # Calculate average log-likelihood for this healthy subject across all their probability values
+        patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
+        healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
+
+        # Classify as patient if closer to patient GMM
+        prediction = 1 if patient_ll > healthy_ll else 0
+
+        test_predictions.append(prediction)
+        test_true_labels.append(0)  # True label is healthy
+
+    # Convert to numpy arrays
+    gmm_predictions = np.array(test_predictions)
+    y_test = np.array(test_true_labels)
+
+    print(f"Test subjects: {len(patient_test_probs)} patients + {len(healthy_test_probs)} healthy = {len(test_predictions)} total")
+
+    # Confusion Matrix
+    cm = confusion_matrix(y_test, gmm_predictions)
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                xticklabels=['Healthy', 'Patient'],
+                yticklabels=['Healthy', 'Patient'])
+    plt.title('GMM Classification Results')
+    plt.ylabel('True Label')
+    plt.xlabel('Predicted Label')
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_V2_DIR, 'gmm_confusion_matrix.png'), dpi=300,
+                bbox_inches='tight')
+    plt.show()
+
+    # Print detailed classification report
+    print("\n" + "=" * 60)
+    print("CLASSIFICATION RESULTS")
+    print("=" * 60)
+
+    # Overall performance
+    overall_accuracy = np.mean(gmm_predictions == y_test)
+    print(f"\nOverall Accuracy: {overall_accuracy:.3f}")
+
+    print("\n--- Classification Report ---")
+    print(classification_report(y_test, gmm_predictions, target_names=['Healthy', 'Patient']))
+
+    return
+
+    # # if not DISABLE_DIST_MODELS:
+    # #     disease_base_bins = train_vectors.mean(axis=0)
+    # #     healthy_base_bins = healthy_vectors.mean(axis=0)
+    # #     distribution_test_bins = np.concatenate([test_vectors, healthy_test_vectors])
+    # #
+    # #     disease_base = np.concatenate([patient_probs[i] for i in train_patients])
+    # #     healthy_base = np.concatenate(healthy_probs)
+    # #     distribution_test = [patient_probs[i] for i in test_patients] + list(healthy_test_probs)
+    # #
+    # #     # 0. Distance-based predictions
+    # #     y_pred_jsd = dist_predictor(jensenshannon, disease_base_bins, healthy_base_bins, distribution_test_bins)
+    # #     cm_jsd = confusion_matrix(y_test, y_pred_jsd)
+    # #     y_pred_wsd = dist_predictor(wasserstein_distance, disease_base, healthy_base, distribution_test)
+    # #     cm_wsd = confusion_matrix(y_test, y_pred_wsd)
+    # #     y_pred_ks = dist_predictor(ks_statistic, disease_base, healthy_base, distribution_test)
+    # #     cm_ks = confusion_matrix(y_test, y_pred_ks)
+    #
+    # # 1. KNN Classifier
+    # knn = KNeighborsClassifier(n_neighbors=2)  # You might want to tune this parameter
+    # knn.fit(X_train, y_train)
+    # y_pred_knn = knn.predict(X_test)
+    # cm_knn = confusion_matrix(y_test, y_pred_knn)
+    #
+    # # 2. Balanced Random Forest Classifier
+    # # Using class_weight='balanced' to handle class imbalance
+    # rf = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=42)
+    # rf.fit(X_train, y_train)
+    # y_pred_rf = rf.predict(X_test)
+    # cm_rf = confusion_matrix(y_test, y_pred_rf)
+    #
+    # importances = rf.feature_importances_
+    # rf_feature_importance += importances
+    #
+    # # 3. SVM with RBF kernel (Score-based)
+    # svm_rbf = SVC(kernel='rbf', class_weight='balanced', random_state=42, probability=True)
+    # svm_rbf.fit(X_train, y_train)
+    # y_pred_svm_rbf = svm_rbf.predict(X_test)
+    # cm_svm_rbf = confusion_matrix(y_test, y_pred_svm_rbf)
+    #
+    # # TODO: Figure out how to run KNN with RBF kernel correctly!
+    # # KNN with RBF kernel
+    # from sklearn.metrics.pairwise import rbf_kernel
+    # gamma = 1.0 / (2 * np.var(X_train))  # A common heuristic
+    # # Compute RBF kernel matrix
+    # X_train_rbf = rbf_kernel(X_train, X_train, gamma=gamma)
+    # X_test_rbf = rbf_kernel(X_test, X_train, gamma=gamma)
+    # # Apply KNN on the transformed features
+    # knn_rbf = KNeighborsClassifier(n_neighbors=3, metric='euclidean')
+    # knn_rbf.fit(X_train_rbf, y_train)
+    # y_pred_knn_rbf = knn_rbf.predict(X_test_rbf)
+    # cm_knn_rbf = confusion_matrix(y_test, y_pred_knn_rbf)
+    #
+    # # knn_rbf = KNeighborsClassifier(n_neighbors=2, metric='rbf')  # Not directly supported, using default metric
+    # # knn_rbf.fit(X_train, y_train)
+    # # y_pred_knn_rbf = knn_rbf.predict(X_test)
+    # # cm_knn_rbf = confusion_matrix(y_test, y_pred_knn_rbf)
+    #
+    # if not DISABLE_BAD_MODELS:
+    #     # 4. SVM with Linear kernel (Score-based)
+    #     svm_linear = SVC(kernel='linear', class_weight='balanced', random_state=42, probability=True)
+    #     svm_linear.fit(X_train, y_train)
+    #     y_pred_svm_linear = svm_linear.predict(X_test)
+    #     cm_svm_linear = confusion_matrix(y_test, y_pred_svm_linear)
+    #
+    #     # 5. Logistic Regression (Score-based)
+    #     logistic = LogisticRegression(class_weight='balanced', random_state=42, max_iter=1000)
+    #     logistic.fit(X_train, y_train)
+    #     y_pred_logistic = logistic.predict(X_test)
+    #     cm_logistic = confusion_matrix(y_test, y_pred_logistic)
+    #
+    #     # 6. Multi-layer Perceptron (Score-based)
+    #     mlp = MLPClassifier(hidden_layer_sizes=(50, 25), max_iter=1000, random_state=42)
+    #     mlp.fit(X_train, y_train)
+    #     y_pred_mlp = mlp.predict(X_test)
+    #     cm_mlp = confusion_matrix(y_test, y_pred_mlp)
+    #
+    #     # 7. Naive Bayes (Score-based)
+    #     nb = GaussianNB()
+    #     nb.fit(X_train, y_train)
+    #     y_pred_nb = nb.predict(X_test)
+    #     cm_nb = confusion_matrix(y_test, y_pred_nb)
+    #
+    # # Append the confusion matrices to the total list
+    # total_cm_knn.append(cm_knn)
+    # total_cm_rf.append(cm_rf)
+    # total_cm_svm_rbf.append(cm_svm_rbf)
+    # total_cm_knn_rbf.append(cm_knn_rbf)
+    # if not DISABLE_BAD_MODELS:
+    #     total_cm_svm_linear.append(cm_svm_linear)
+    #     total_cm_logistic.append(cm_logistic)
+    #     total_cm_mlp.append(cm_mlp)
+    #     total_cm_nb.append(cm_nb)
+    # # if not DISABLE_DIST_MODELS:
+    # #     total_cm_jsd.append(cm_jsd)
+    # #     total_cm_wsd.append(cm_wsd)
+    # #     total_cm_ks.append(cm_ks)
+    #
+    # # Print feature importance for Random Forest
+    # # if not only_all_classifiers:
+    # #     plot_feature_importances(rf_feature_importance, start_vec_from, add_ratio_to_vector, args)
+    #
+    # # Dictionary of all classifiers and their results
+    # all_classifiers = {
+    #     'KNN (Vector-based)': total_cm_knn,
+    #     'Random Forest (Vector-based)': total_cm_rf,
+    #     'SVM RBF (Score-based)': total_cm_svm_rbf,
+    #     'KNN RBF Kernel (Vector-based)': total_cm_knn_rbf
+    # }
+    # if not DISABLE_BAD_MODELS:
+    #     all_classifiers.update({
+    #         'SVM Linear (Score-based)': total_cm_svm_linear,
+    #         'Logistic Regression (Score-based)': total_cm_logistic,
+    #         'MLP (Score-based)': total_cm_mlp,
+    #         'Naive Bayes (Score-based)': total_cm_nb
+    #     })
+    # if not DISABLE_DIST_MODELS:
+    #     all_classifiers.update({
+    #         'Jensen-Shannon Distance': total_cm_jsd,
+    #         'Wasserstein Distance': total_cm_wsd,
+    #         'Kolmogorov-Smirnov Distance': total_cm_ks
+    #     })
+    #
+    # if only_all_classifiers:
+    #     return all_classifiers
+    #
+    # # Display final results for all classifiers
+    # display_enhanced_results(all_classifiers, args)
+    # std_rates_knn = calculate_std_cm_rates(total_cm_knn)
+    # std_rates_rf = calculate_std_cm_rates(total_cm_rf)
+    #
+    # print("\nStandard deviations of rates across folds:")
+    # print("\nKNN - Standard Deviation of Confusion Matrix Rates:")
+    # print("      Pred_Healthy  Pred_Disease")
+    # print(f"Act_Healthy    {std_rates_knn[0, 0]:.4f}    {std_rates_knn[0, 1]:.4f}  (TNR, FPR)")
+    # print(f"Act_Disease    {std_rates_knn[1, 0]:.4f}    {std_rates_knn[1, 1]:.4f}  (FNR, TPR)")
+    #
+    # print("\nRandom Forest - Standard Deviation of Confusion Matrix Rates:")
+    # print("      Pred_Healthy  Pred_Disease")
+    # print(f"Act_Healthy    {std_rates_rf[0, 0]:.4f}    {std_rates_rf[0, 1]:.4f}  (TNR, FPR)")
+    # print(f"Act_Disease    {std_rates_rf[1, 0]:.4f}    {std_rates_rf[1, 1]:.4f}  (FNR, TPR)")
+    #
+    # # Plot dimensionality reduction visualizations
+    # all_healthy_vectors = np.vstack([healthy_vectors, healthy_test_vectors])
+    # plot_vectors(patient_train_vectors, all_healthy_vectors, args, " - All Patients", INFERENCE_VECTOR_PLOTS_V2_DIR)

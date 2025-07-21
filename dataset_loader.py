@@ -533,18 +533,21 @@ class DatasetLoader:
                                        df_bld[df_bld['patient_id'].isin(test_patient_ids)],
                                        df_bld[df_bld['patient_id'].isin(valid_patient_ids)]])
 
-        def nneighbors_func(x, gamma, k):
-            return gamma ** (x - k)
+        def nneighbors_func(x, gamma, k, a=0.2):
+            # return gamma ** (x - k)
+            m = gamma
+            return m - (m - 1) * (2 / (1 + torch.exp(-a * (x - k))))
 
-        gamma_options = {0 : 1.2, 1 : 1.3, 2 : 1.4, 3 : 1.5, 4 : 1.6}
+        # gamma_options = {0 : 1.2, 1 : 1.3, 2 : 1.4, 3 : 1.5, 4 : 1.6}
+        gamma_options = {0 : 1.0, 1 : 0.5, 2 : 0.0, 3 : -1.0, 4 : -2.0}
         default_gamma = gamma_options[loss_version] if loss_version in gamma_options else gamma_options[0]
 
         def aaseq_to_nneighbors(aaseq_array, default_value=filter_num_of_patients - 1, gamma=default_gamma):
             lookup_series = self.df_aaseq_to_nneighbors.set_index('AASeq')['nneighbors']
-            result = pd.Series(aaseq_array).map(lookup_series).fillna(default_value)
+            result = torch.tensor(pd.Series(aaseq_array).map(lookup_series).fillna(default_value).values)
             result = nneighbors_func(result, gamma=gamma, k=default_value)
             result[result < 1.0] = 1.0
-            return torch.tensor(result)
+            return result
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs

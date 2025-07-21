@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 import time
 import wandb
-from cache_handler import save_model_state
+from cache_handler import save_model_state, load_model_state
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau, CosineAnnealingLR, ExponentialLR
 
 
@@ -250,8 +250,20 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     else:
         print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
 
+    # Load model state if available
+    start_epoch = 0
+    if not is_sweep and False:  # TODO: Added false because this might cause problems!
+        # Try to load the model from epoch args.epoch to 1 if it exists
+        for epoch in range(epochs, 0, -1):
+            trained_model = load_model_state(model, args, epoch, device)
+            if trained_model is not None:
+                start_epoch = epoch
+                model = trained_model
+                print(f"Loaded model state from epoch {epoch}")
+                break
+
     # Training loop
-    for epoch in range(epochs):
+    for epoch in range(start_epoch, epochs):
         start_time = time.time()
 
         # Train phase
@@ -480,7 +492,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         # is_odd_or_last_epoch = ((epoch + 1) % 2 == 1 and epoch >= 15) or epoch + 1 == epochs
         # if not is_sweep and is_odd_or_last_epoch:
         # saving every epoch after 5
-        if not is_sweep and (epoch + 1) >= 5:
+        if not is_sweep and (epoch == 8 or epoch == epochs - 1):
             save_model_state(model, args, epoch)
 
     return model, history

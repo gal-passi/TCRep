@@ -157,10 +157,11 @@ def get_model_predictions_batched(model, sequences, sample_plots, batch_size=500
         # sample sample_size times extra factor sequences for plotting
         if len(sequences) > sample_size:
             extra_factor = (len(sequences) - sample_size) // extra_sample_size + 1
-            sequences = []
+            sequences_list = []
             for i in range(extra_factor):
                 indices = np.random.choice(len(sequences), size=sample_size, replace=False)
-                sequences.extend([sequences[i] for i in indices])
+                sequences_list.extend([sequences[i] for i in indices])
+            sequences = sequences_list
 
     with torch.no_grad():
         for i in range(0, len(sequences), batch_size):
@@ -188,7 +189,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     """
     global MODEL_PREDICTION_BATCHED_SAMPLE_SIZE
     if args.top_n_seqs is not None:
-        MODEL_PREDICTION_BATCHED_SAMPLE_SIZE = args.top_n_seqs
+        MODEL_PREDICTION_BATCHED_SAMPLE_SIZE = args.top_n_seqs * 1000
     else:
         MODEL_PREDICTION_BATCHED_SAMPLE_SIZE = 20000
 
@@ -197,7 +198,10 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         if sample_plots == 3:
             sample_size = MODEL_PREDICTION_BATCHED_SAMPLE_SIZE
             extra_sample_size = MODEL_PREDICTION_BATCHED_EXTRA_SAMPLE_SIZE
-            extra_factor = (len(probs) - sample_size) // extra_sample_size + 1
+            if len(probs) <= sample_size:
+                extra_factor = 1
+            else:
+                extra_factor = (len(probs) - sample_size) // extra_sample_size + 1
 
             expanded_probs_list = []
             # Cut the probs into sample_size chunks:

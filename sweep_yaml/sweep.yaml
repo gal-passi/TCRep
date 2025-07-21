@@ -1,39 +1,37 @@
 method: bayes  # Bayesian optimization for hyperparameter tuning
-#method: random  # Random search over hyperparameters
 name: my_sweep
 metric:
   name: val_f1  # Optimize for validation accuracy
-  goal: maximize  # Maximize the accuracy
-#  name: val_loss  # Optimize for validation loss
-#  goal: minimize  # Minimize the loss
+  goal: maximize  # Maximize the f1-score
 parameters:
   model_type:
     value: 'cvc'  # Fixed default value
+  dataset_type:
+    value: 'ms_tcrdb2_no_healthy_ms'  # Fixed default value
+  top_n_seqs:
+    value: 20  # Fixed default value
   loss_type:
-#    values: ['ce', 'ce_entropy']
     value: 'ce_entropy'  # Fixed default value  # NOTE: Can't sweep 'ce'! Fix training code in main!
-#    values: ['ce', 'ce_l2', 'ce_entropy']
   epochs:
     value: 20  # Fixed default value
-#    values: [15, 20, 25, 30, 40]  # Sweeping different epochs
   batch_size:
     value: 330  # Fixed default value
   neg_pos_ratio:
     value: 10  # Fixed default value
   pos_weights:
     distribution: uniform
-    min: 3
-    max: 8  # Sweeping different positive weights
+    min: 4
+    max: 6  # Sweeping different positive weights
   learning_rate:
-    value: 0.0025  # Fixed default value
-#    distribution: log_uniform_values
-#    min: 0.0001
-#    max: 0.01  # Sweeping different learning rates
+#    value: 0.0025  # Fixed default value
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.004  # Sweeping different learning rates
   embedding_lr:
-    value: 0.000045
-#    distribution: log_uniform_values
-#    min: 0.000001
-#    max: 0.0002  # Always smaller than learning rate
+#    value: 0.000045
+    distribution: log_uniform_values
+    min: 0.000025
+    max: 0.000065  # Always smaller than learning rate
 #    max: 0.0005  # Always smaller than learning rate
   regularization_coefficient:
     value: 0.3  # Fixed default value
@@ -52,11 +50,13 @@ parameters:
     value: True  # Always True
   classification_dropout:
     distribution: uniform
-    min: 0.1
-    max: 0.45  # Sweeping different positive weights
+    min: 0.05
+    max: 0.25  # Sweeping different positive weights
   cvc_layers_to_train:
-    value: 3  # Fixed default value
-#    values: [1, 3, 5, 7, 9, 11]  # Sweeping different layers to train
+    values: [3, 4]  # Fixed default value
+#    value: 3  # Fixed default value
+  reg_coef:
+    value: 0.3  # Fixed default value
   lora:
     value: False  # Always False
   scheduler_type:
@@ -67,17 +67,36 @@ parameters:
   ratio:
     value: False  # Always False
   dist_loss_type:
-    value: None
+    value: none
+  changing_negatives:
+    value: False  # Always False
   ch_type:
     value: 'v1'
-#    value: 'ReduceLROnPlateau'  # Fixed default value
-#    distribution: uniform
-#    min: 0.1
-#    max: 0.5  # Sweeping different dropout rates
-
-# Conditional logic for loss_type and regularization_coefficient
-# conditions:
-#   - condition:
-#       loss_type: 'ce'
-#     fixed:
-#       regularization_coefficient: 0
+  extra_ms_from_pregnant:
+    value: True  # Always True
+  extra_filter:
+    value: True  # Always True
+  use_nneighbors_loss:
+    value: True  # Always True
+  loss_version:
+    values: [0, 1, 2, 3, 4]  # Sweeping different loss types
+  sample_plots:
+    value: 1
+  negative_partition:
+    value: 0  # Always 0
+  use_similar_negatives:
+    value: False  # Always False
+  dataset_filter_num_of_patients:
+    value: 3
+  dataset_filter_num_of_healthy:
+    value: 3
+  dataset_filter_dont_inflate:
+    value: False
+  remove_seqs_by_len:
+    value: False  # Always False
+  top_percent:
+    value: None
+  plus_healthy_mal_id:
+    value: False  # Always False
+  use_healthy_as_ms:
+    value: False  # Always False

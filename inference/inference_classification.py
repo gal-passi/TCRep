@@ -10,6 +10,7 @@ from sklearn.metrics import confusion_matrix, classification_report
 from models.cvc_cacheing_model import CVCCachingModel
 from cache_handler import get_model_config_str
 from sklearn.manifold import TSNE
+import umap.umap_ as umap
 from sklearn.decomposition import PCA
 from sklearn.svm import SVC
 from sklearn.linear_model import LogisticRegression
@@ -27,6 +28,8 @@ INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
 INFERENCE_CONFUSION_MATRIX_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices/")
 INFERENCE_VECTOR_PLOTS_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots/")
 INFERENCE_CONFUSION_MATRIX_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices_v2/")
+INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "gmm_mean_cov_plots_v2/")
+INFERENCE_GMM_BIC_PLOTS_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "gmm_plots_v2/")
 INFERENCE_VECTOR_PLOTS_V2_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots_v2/")
 
 # Models Configurations:
@@ -87,9 +90,9 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         else:
             patient_seqs = df.loc[df["patient_id"] == patient_ind, "AASeq"].values
 
-        n = 100
-        if len(patient_seqs) > n:
-            patient_seqs = np.random.choice(patient_seqs, size=n, replace=False)
+        # n = 500  # TODO: CHANGE THIS!
+        # if len(patient_seqs) > n:
+        #     patient_seqs = np.random.choice(patient_seqs, size=n, replace=False)
 
         # Get model outputs
         with torch.no_grad():
@@ -790,10 +793,11 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
 
 
 def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                   valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, device,
-                                   add_ratio_to_vector=False, start_vec_from=0,
-                                   # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
-                                   vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False):
+                                            valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
+                                            add_ratio_to_vector=False, start_vec_from=0,
+                                            # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
+                                            vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
+                                            to_display_bic=False, to_display_mapping=False):
     if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 1.25):
         num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 1.25)
         num_of_healthy_test_patients = int(len(df_bld["patient_id"].unique()) * 0.25)
@@ -805,14 +809,17 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     # make sure that plot dirs exists
     os.makedirs(INFERENCE_CONFUSION_MATRIX_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_VECTOR_PLOTS_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_GMM_BIC_PLOTS_V2_DIR, exist_ok=True)
+    model_config_str = get_model_config_str(args)
 
     # Creating a caching model of the trained model
     if to_ensemble:
         caching_model = trained_model
     else:
         trained_model.eval()
-        caching_model = trained_model
-        # caching_model = CVCCachingModel(trained_model, args, device)
+        # caching_model = trained_model  # TODO: CHANGE THIS!
+        caching_model = CVCCachingModel(trained_model, args, device)
         caching_model.to(device)
         caching_model.eval()
 
@@ -867,6 +874,18 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     print("GAUSSIAN MIXTURE MODEL ANALYSIS ON PROBABILITY DISTRIBUTIONS")
     print("=" * 60)
 
+    # per person sample 20k values if possible:
+    def sample_probs(probs, num_samples=20000):
+        if len(probs) > num_samples:
+            return np.random.choice(probs, size=num_samples, replace=False)
+        else:
+            return probs
+
+    patient_train_probs = [sample_probs(probs, num_samples=20000) for probs in patient_train_probs]
+    healthy_probs = [sample_probs(probs, num_samples=20000) for probs in healthy_probs]
+    patient_test_probs = [sample_probs(probs, num_samples=20000) for probs in patient_test_probs]
+    healthy_test_probs = [sample_probs(probs, num_samples=20000) for probs in healthy_test_probs]
+
     # Prepare probability data for GMM fitting
     # Flatten all probability arrays for each group
     patient_train_probs_flat = np.concatenate([probs.flatten() for probs in patient_train_probs])
@@ -882,7 +901,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     print(f"Healthy probability range: [{healthy_train_probs_flat.min():.3f}, {healthy_train_probs_flat.max():.3f}]")
 
     # Define range of components to test (fewer components for 1D data)
-    max_components = min(8, min(len(patient_train_probs), len(healthy_probs)) // 2)
+    max_components = min(6, min(len(patient_train_probs), len(healthy_probs)) // 2)
     n_components_range = range(1, max_components + 1)
 
     # BIC analysis for patient probability data
@@ -890,12 +909,26 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     patient_bic_scores = []
     patient_gmm_models = {}
 
+    def calc_mean_bic_score(n_comps, probabilities):
+        bics_scores = []
+        gmms = []
+        for prob in probabilities:
+            prob_reshaped = prob.flatten().reshape(-1, 1)
+            gmm = GaussianMixture(n_components=n_comps, random_state=42, covariance_type='full')
+            gmm.fit(prob_reshaped)
+            bics_scores.append(gmm.bic(prob_reshaped) / len(prob_reshaped))  # Normalize by number of samples
+            gmms.append(gmm)
+        return np.mean(bics_scores), gmms
+
     for n_components in n_components_range:
-        gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
-        gmm.fit(patient_train_data)
-        bic_score = gmm.bic(patient_train_data)
+        bic_score, patient_gmm_model = calc_mean_bic_score(n_components, patient_train_probs)
         patient_bic_scores.append(bic_score)
-        patient_gmm_models[n_components] = gmm
+        patient_gmm_models[n_components] = patient_gmm_model
+        # gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
+        # gmm.fit(patient_train_data)
+        # bic_score = gmm.bic(patient_train_data)
+        # patient_bic_scores.append(bic_score)
+        # patient_gmm_models[n_components] = gmm
         print(f"Components: {n_components:2d}, BIC: {bic_score:.2f}")
 
     # BIC analysis for healthy probability data
@@ -904,25 +937,15 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     healthy_gmm_models = {}
 
     for n_components in n_components_range:
-        gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
-        gmm.fit(healthy_train_data)
-        bic_score = gmm.bic(healthy_train_data)
+        bic_score, healthy_gmm_model = calc_mean_bic_score(n_components, healthy_probs)
         healthy_bic_scores.append(bic_score)
-        healthy_gmm_models[n_components] = gmm
+        healthy_gmm_models[n_components] = healthy_gmm_model
+        # gmm = GaussianMixture(n_components=n_components, random_state=42, covariance_type='full')
+        # gmm.fit(healthy_train_data)
+        # bic_score = gmm.bic(healthy_train_data)
+        # healthy_bic_scores.append(bic_score)
+        # healthy_gmm_models[n_components] = gmm
         print(f"Components: {n_components:2d}, BIC: {bic_score:.2f}")
-
-    # Plot BIC scores and probability distributions
-    plt.figure(figsize=(12, 5))
-
-    # BIC scores plot
-    plt.subplot(1, 2, 1)
-    plt.plot(n_components_range, patient_bic_scores, 'bo-', label='Patient Data')
-    plt.plot(n_components_range, healthy_bic_scores, 'ro-', label='Healthy Data')
-    plt.xlabel('Number of Components')
-    plt.ylabel('BIC Score')
-    plt.title('BIC Scores for 1D GMM Component Selection')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
 
     # Find optimal number of components for each
     optimal_patient_components = n_components_range[np.argmin(patient_bic_scores)]
@@ -932,7 +955,9 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
 
     # Choose a compromise number of components that works for both
     # Strategy: choose the minimum of the two optimal values, but at least 2
-    chosen_components = max(2, min(optimal_patient_components, optimal_healthy_components))
+    # chosen_components = max(2, min(optimal_patient_components, optimal_healthy_components))
+    # Choosing chosen_components manually for now:
+    chosen_components = 2
     print(f"Chosen number of components for both distributions: {chosen_components}")
 
     # Train final GMMs with chosen number of components
@@ -944,12 +969,26 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
     final_healthy_gmm.fit(healthy_train_data)
 
+    # Plot BIC scores and probability distributions
+    plt.figure(figsize=(12, 5))
+    # BIC scores plot
+    plt.subplot(1, 2, 1)
+    plt.plot(n_components_range, patient_bic_scores, 'bo-', label='Patient Data')
+    plt.plot(n_components_range, healthy_bic_scores, 'ro-', label='Healthy Data')
+    # Add horizontal line for bic score of final GMMs
+    plt.axhline(y=final_patient_gmm.bic(patient_train_data) / len(patient_train_data), color='blue', linestyle='--', label='Final Patient GMM BIC')
+    plt.axhline(y=final_healthy_gmm.bic(healthy_train_data) / len(healthy_train_data), color='red', linestyle='--', label='Final Healthy GMM BIC')
+    plt.xlabel('Number of Components')
+    plt.ylabel('Normalized BIC Score')
+    plt.title('Normalized BIC Scores for 1D GMM Component Selection')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+
     # Plot fitted GMMs
     plt.subplot(1, 2, 2)
     x_range = np.linspace(0, 1, 1000).reshape(-1, 1)
     patient_gmm_pdf = np.exp(final_patient_gmm.score_samples(x_range))
     healthy_gmm_pdf = np.exp(final_healthy_gmm.score_samples(x_range))
-
     plt.plot(x_range.flatten(), patient_gmm_pdf, 'b-', linewidth=2, label=f'Patient GMM ({chosen_components} comp.)')
     plt.plot(x_range.flatten(), healthy_gmm_pdf, 'r-', linewidth=2, label=f'Healthy GMM ({chosen_components} comp.)')
     plt.hist(patient_train_probs_flat, bins=50, alpha=0.3, density=True, color='blue')
@@ -959,10 +998,113 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     plt.title('Fitted GMM Distributions')
     plt.legend()
     plt.grid(True, alpha=0.3)
-
     plt.tight_layout()
-    plt.savefig(os.path.join(INFERENCE_VECTOR_PLOTS_V2_DIR, 'gmm_bic_analysis.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(INFERENCE_GMM_BIC_PLOTS_V2_DIR, f'gmm_bic_analysis_{model_config_str}.png'), dpi=300, bbox_inches='tight')
     plt.show()
+
+    # Comparing between patient_gmm_models[chosen_components] and final_patient_gmm (and also for healthy)
+    def calculate_gmm_means_covs_per_component(gmm_models):
+        avg_means_of_components = []
+        avg_covs_of_components = []
+        avg_weights_of_components = []
+        for gmm_model in gmm_models:
+            avg_means_of_components.append([comp for comp in gmm_model.means_])
+            avg_covs_of_components.append([comp[0] for comp in gmm_model.covariances_])
+            avg_weights_of_components.append(gmm_model.weights_ / max(gmm_model.weights_))
+        # calculate and sort avg_means_of_components, but keep avg_covs_of_components in the corresponding order
+        avg_means_of_components = np.mean(np.array(avg_means_of_components), axis=0)[:, 0]
+        avg_covs_of_components = np.mean(np.array(avg_covs_of_components), axis=0)[:, 0]
+        avg_weights_of_components = np.mean(np.array(avg_weights_of_components), axis=0)
+        # Sort means and covariances together
+        sorted_indices = np.argsort(avg_means_of_components)
+        avg_means_of_components = avg_means_of_components[sorted_indices]
+        avg_covs_of_components = avg_covs_of_components[sorted_indices]
+        avg_weights_of_components = avg_weights_of_components[sorted_indices]
+        return avg_means_of_components, avg_covs_of_components, avg_weights_of_components
+
+    # Calculate on mean of GMMs per patient/subject
+    patient_means, patient_covs, patient_weights = calculate_gmm_means_covs_per_component(patient_gmm_models[chosen_components])
+    healthy_means, healthy_covs, healthy_weights = calculate_gmm_means_covs_per_component(healthy_gmm_models[chosen_components])
+    final_patient_means, final_patient_covs, final_patient_weights = calculate_gmm_means_covs_per_component([final_patient_gmm])
+    final_healthy_means, final_healthy_covs, final_healthy_weights = calculate_gmm_means_covs_per_component([final_healthy_gmm])
+
+    # Display the means and covariances in a figure
+    # Plotting on a horizontal axis
+    fig, ax = plt.subplots(figsize=(10, 3), dpi=600)
+    y_offsets = {
+        'patient': 0.3,
+        'final_patient': 0.2,
+        'healthy': -0.2,
+        'final_healthy': -0.3
+    }
+
+    # Helper to plot error bars
+    def plot_gmm(ax, means, covs, weights, y_offset, label, color, marker='o', linestyle=''):
+        y = np.full_like(means, y_offset)
+        y += np.linspace(-0.02, 0.02, len(means))
+        std = np.sqrt(covs)
+        sizes = 200 * weights  # Scale factor for visibility (tune as needed)
+        ax.errorbar(means, y, xerr=std, fmt='none', ecolor=color, capsize=3, linestyle=linestyle)
+        ax.scatter(means, y, s=sizes, label=label, color=color, marker=marker, alpha=0.8, edgecolors='black')
+
+    # Use consistent color scheme
+    plot_gmm(ax, patient_means, patient_covs, patient_weights, y_offsets['patient'], 'Avg Patient GMMs', color='blue')
+    plot_gmm(ax, final_patient_means, final_patient_covs, final_patient_weights, y_offsets['final_patient'], 'Final Patient GMM', color='dodgerblue', marker='x')
+    plot_gmm(ax, healthy_means, healthy_covs, healthy_weights, y_offsets['healthy'], 'Avg Healthy GMMs', color='darkorange')
+    plot_gmm(ax, final_healthy_means, final_healthy_covs, final_healthy_weights, y_offsets['final_healthy'], 'Final Healthy GMM', color='goldenrod', marker='x')
+    # Styling
+    ax.set_xlim(-0.25, 1.25)
+    ax.set_yticks([])
+    ax.set_xlabel("Component Mean (0–1)")
+    ax.set_title("GMM Component Means with Variances (± std)")
+    ax.legend(loc='right', ncol=2, framealpha=0.9)
+    ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    # save plot
+    plt.savefig(os.path.join(INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR, f'gmm_means_covs_{chosen_components}_components_{model_config_str}.png'), dpi=300, bbox_inches='tight')
+    plt.show()
+
+    # Same plot but with 20 random samples from each GMM model in patient:
+    def display_per_person_mean_and_std(gmm_models, size=20, title_extra=''):
+        if len(gmm_models) > size:
+            chosen_patient_gmms = np.random.choice(gmm_models, size=size, replace=False)
+        else:
+            chosen_patient_gmms = gmm_models
+        fig, ax = plt.subplots(figsize=(10, 3), dpi=600)
+        y_offsets = np.linspace(-0.4, 0.4, len(chosen_patient_gmms))
+        for i, gmm in enumerate(chosen_patient_gmms):
+            means = gmm.means_[:, 0]
+            stds = np.sqrt(gmm.covariances_[:, 0])[:, 0]
+            y = np.full_like(means, y_offsets[i])
+            # y += np.linspace(-0.02, 0.02, len(means))
+            ax.errorbar(means, y, xerr=stds, fmt='o', label=f'Patient GMM {i + 1}', color='blue', capsize=3)
+        # Styling
+        ax.set_xlim(-0.25, 1.25)
+        ax.set_yticks([])
+        ax.set_xlabel("Component Mean (0–1)")
+        ax.set_title(f"Random Samples from {title_extra} GMMs with Variances (± std)")
+        # ax.legend(loc='upper right', ncol=2, framealpha=0.9)
+        ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+        plt.tight_layout()
+        plt.show()
+
+    display_per_person_mean_and_std(patient_gmm_models[chosen_components], title_extra='Patient')
+    display_per_person_mean_and_std(healthy_gmm_models[chosen_components], title_extra='Healthy')
+
+    # Fit on 4 of the test patients and 4 of the healthy subjects
+    patient_test_gmms = []
+    healthy_test_gmms = []
+    for i in range(4):
+        # fit gmm:
+        patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+        patient_gmm.fit(patient_test_probs[i].reshape(-1, 1))
+        healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+        healthy_gmm.fit(healthy_test_probs[i].reshape(-1, 1))
+        patient_test_gmms.append(patient_gmm)
+        healthy_test_gmms.append(healthy_gmm)
+    # Display the means and covariances for test patients
+    display_per_person_mean_and_std(patient_test_gmms, title_extra='TEST Patient')
+    display_per_person_mean_and_std(healthy_test_gmms, title_extra='TEST Healthy')
 
     print(f"Patient GMM - BIC: {final_patient_gmm.bic(patient_train_data):.2f}")
     print(f"Healthy GMM - BIC: {final_healthy_gmm.bic(healthy_train_data):.2f}")
@@ -1020,8 +1162,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     plt.xlabel('Predicted Label')
 
     plt.tight_layout()
-    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_V2_DIR, 'gmm_confusion_matrix.png'), dpi=300,
-                bbox_inches='tight')
+    plt.savefig(os.path.join(INFERENCE_CONFUSION_MATRIX_V2_DIR, f'gmm_confusion_matrix_{model_config_str}.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
     # Print detailed classification report
@@ -1035,6 +1176,57 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
 
     print("\n--- Classification Report ---")
     print(classification_report(y_test, gmm_predictions, target_names=['Healthy', 'Patient']))
+
+    # TODO: EXTRA - calculate model outputs on valid and test positive sequences
+    if to_display_mapping and model_non_trained is not None:
+        available_models = [trained_model, model_non_trained]
+        models_names = ['Trained Model', 'Non-Trained Model']
+        for model, model_name in zip(available_models, models_names):
+            part_pos_valid = np.random.choice(valid_pos_seqs, size=len(valid_pos_seqs), replace=False)
+            part_pos_test = np.random.choice(test_pos_seqs, size=len(test_pos_seqs), replace=False)
+            pos_seqs = np.concatenate([part_pos_valid, part_pos_test])
+            neg_seqs = np.random.choice(df_hlt['AASeq'].unique(), size=len(pos_seqs), replace=False)
+            # get model outputs for pos and neg sequences:
+            model.eval()
+            with torch.no_grad():
+                pos_embeds = model.get_embeddings(pos_seqs)
+                neg_embeds = model.get_embeddings(neg_seqs)
+            # display maps of the embeddings in a single figure (pca, t-sne and u-map):
+            # combine embeddings and labels
+            all_embeds = torch.cat([pos_embeds, neg_embeds], dim=0).cpu().numpy()
+            labels = np.array([1] * len(pos_embeds) + [0] * len(neg_embeds))
+            # Create the figure with subplots
+            fig, axes = plt.subplots(1, 3, figsize=(18, 5), dpi=450)
+            # PCA
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(all_embeds)
+            axes[0].scatter(pca_result[labels == 0, 0], pca_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
+            axes[0].scatter(pca_result[labels == 1, 0], pca_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
+            axes[0].set_title("PCA of Embeddings")
+            axes[0].set_xlabel("Dim 1")
+            axes[0].set_ylabel("Dim 2")
+            axes[0].legend()
+            # t-SNE
+            tsne = TSNE(n_components=2, random_state=42, perplexity=30)
+            tsne_result = tsne.fit_transform(all_embeds)
+            axes[1].scatter(tsne_result[labels == 0, 0], tsne_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
+            axes[1].scatter(tsne_result[labels == 1, 0], tsne_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
+            axes[1].set_title("t-SNE of Embeddings")
+            axes[1].set_xlabel("Dim 1")
+            axes[1].set_ylabel("Dim 2")
+            axes[1].legend()
+            # UMAP
+            umap_model = umap.UMAP(n_components=2, random_state=42)
+            umap_result = umap_model.fit_transform(all_embeds)
+            axes[2].scatter(umap_result[labels == 0, 0], umap_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
+            axes[2].scatter(umap_result[labels == 1, 0], umap_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
+            axes[2].set_title("UMAP of Embeddings")
+            axes[2].set_xlabel("Dim 1")
+            axes[2].set_ylabel("Dim 2")
+            axes[2].legend()
+            plt.suptitle(f"{model_name} - Embeddings Visualization", fontsize=16)
+            plt.tight_layout()
+            plt.show()
 
     return
 

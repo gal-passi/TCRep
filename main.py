@@ -1553,12 +1553,14 @@ if __name__ == '__main__':
             else:
                 if classification_v2:
                     from inference.inference_classification import inference_classification_model_version2
+                    model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
                     inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                                             test_patient_inds, valid_patient_inds, unique_patient_ids,
                                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-                                                            aaseq_to_ratio, to_ensemble, device)
+                                                            aaseq_to_ratio, to_ensemble, model_non_trained, device)
                 else:
                     from inference.inference_classification import inference_classification_model
+
                     inference_classification_model(trained_model, args, df_bld, df_hlt,
                                                    test_patient_inds, valid_patient_inds, unique_patient_ids,
                                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,

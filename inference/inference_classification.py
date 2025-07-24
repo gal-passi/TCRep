@@ -24,6 +24,7 @@ from cache_handler import load_model_state
 from models.cvc_ensemble_model import CVCEnsembleModel
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+import pickle
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
@@ -35,6 +36,7 @@ INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "
 INFERENCE_GMM_BIC_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "gmm_plots_v2/")
 INFERENCE_VECTOR_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "vector_plots_v2/")
 INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "uncertainty_threshold_plots_v2/")
+INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "uncertainty_threshold_plots_v2/cache/")
 
 # Models Configurations:
 DISABLE_BAD_MODELS = True
@@ -798,7 +800,6 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
 def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
                                             add_ratio_to_vector=False, start_vec_from=0,
-                                            # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
                                             to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2):
@@ -817,9 +818,9 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     df_train_ids = np.concatenate([patient_valid_test_ids, fold_patient_train_ids])
     df_bld = df_bld[df_bld["patient_id"].isin(df_train_ids)]
 
-    if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 1.5):
-        num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 1.5)
-        num_of_healthy_test_patients = int(len(df_bld["patient_id"].unique()) * 0.5)
+    if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 2.0):
+        num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 2.0)
+        num_of_healthy_test_patients = int(len(df_bld["patient_id"].unique()) * 1.0)
     elif len(df_hlt["patient_id"].unique()) != num_of_healthy_patients:
         num_of_healthy_patients = len(df_hlt["patient_id"].unique())
         num_of_healthy_test_patients = int(num_of_healthy_patients * 0.25)
@@ -831,6 +832,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     os.makedirs(INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_GMM_BIC_PLOTS_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR, exist_ok=True)
     model_config_str = get_model_config_str(args)
 
     # Creating a caching model of the trained model
@@ -1286,6 +1288,19 @@ def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_l
     healthy_lls = np.array(healthy_lls)
     test_true_labels = np.array(test_true_labels)
 
+    # Save the function arguments in pickle file for caching
+    cache_file = os.path.join(INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR, f'params_uncertainty_threshold_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.pkl')
+    if not os.path.exists(cache_file):
+        with open(cache_file, 'wb') as f:
+            pickle.dump({
+                'patient_lls': patient_lls,
+                'healthy_lls': healthy_lls,
+                'test_true_labels': test_true_labels,
+                'chosen_components': chosen_components,
+                'k_fold_disease': k_fold_disease,
+                'model_config_str': model_config_str
+            }, f)
+
     # Calculate difference scores (patient_ll - healthy_ll)
     # Higher values indicate more likely to be patient
     diff_scores = patient_lls - healthy_lls
@@ -1409,7 +1424,7 @@ def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_l
     ax4.legend()
     ax4.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(os.path.join(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, f'uncertainty_threshold_components-{chosen_components}__{model_config_str}.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, f'uncertainty_threshold_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
     # Create heatmap-style plot with uncertainty threshold vs accuracy, colored by samples remaining ratio
@@ -1434,7 +1449,7 @@ def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_l
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.7),
                 arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0'))
     plt.tight_layout()
-    plt.savefig(os.path.join(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, f'uncertainty_threshold_fold-{k_fold_disease}_{model_config_str}.png'), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, f'uncertainty_threshold_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
     # Find and display optimal points

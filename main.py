@@ -1553,7 +1553,7 @@ if __name__ == '__main__':
                 if classification_v2:
                     from inference.inference_classification import inference_classification_model_version2
                     model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
-                    for components, inner_fold in product([2, 3], [1, 2, 3]):
+                    for inner_fold, components in product([1, 2, 3], [2, 3]):
                         inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                                                 test_patient_ids, valid_patient_ids,
                                                                 valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,

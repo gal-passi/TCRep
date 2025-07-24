@@ -6,7 +6,6 @@ from pyarrow.dataset import dataset
 from torch.ao.nn.quantized.functional import threshold
 from triton.language.semantic import device_print
 from wandb.sdk.internal.system.assets import asset_registry
-
 warnings.simplefilter("ignore", category=FutureWarning)
 import pandas as pd
 import numpy as np
@@ -24,7 +23,7 @@ from sklearn.manifold import TSNE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import KFold
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, accuracy_score, f1_score
-from itertools import combinations, chain
+from itertools import combinations, chain, product
 import multiprocessing as mp
 from collections import Counter
 from embedding.embedding import get_cached_embeddings
@@ -1554,10 +1553,12 @@ if __name__ == '__main__':
                 if classification_v2:
                     from inference.inference_classification import inference_classification_model_version2
                     model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
-                    inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
-                                                            test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                                            valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
-                                                            aaseq_to_ratio, to_ensemble, model_non_trained, device)
+                    for components, inner_fold in product([2, 3], [1, 2, 3]):
+                        inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
+                                                                test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                                                valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                                                                aaseq_to_ratio, to_ensemble, model_non_trained, device,
+                                                                k_fold_disease=inner_fold, chosen_components=components)
                 else:
                     from inference.inference_classification import inference_classification_model
 

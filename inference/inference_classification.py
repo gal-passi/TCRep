@@ -795,7 +795,7 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
     display_enhanced_results(combined_classifiers, args)
 
 
-def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_inds, valid_patient_inds, unique_patient_ids,
+def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
                                             add_ratio_to_vector=False, start_vec_from=0,
                                             # vector_representation_bins=20, num_of_healthy_patients=8, num_of_healthy_test_patients=2):
@@ -804,8 +804,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                             k_fold_disease=1, chosen_components=2):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
-    patient_valid_test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
-    patient_valid_test_ids = df_bld["patient_id"].unique()[patient_valid_test_inds]
+    patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
     patient_train_ids = [x for x in df_bld["patient_id"].unique() if x not in patient_valid_test_ids]
     np.random.shuffle(patient_train_ids)
     num_of_patients = len(patient_train_ids)
@@ -817,8 +816,6 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     df_bld_validation = df_bld[df_bld["patient_id"].isin(fold_patient_test_ids)]
     df_train_ids = np.concatenate([patient_valid_test_ids, fold_patient_train_ids])
     df_bld = df_bld[df_bld["patient_id"].isin(df_train_ids)]
-    assert np.all(df_bld['patient_id'].unique()[patient_valid_test_inds] == patient_valid_test_ids), "Patient IDs in valid/test indices do not match the unique patient IDs in df_bld!"
-    unique_patient_ids = df_bld["patient_id"].unique()
 
     if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 1.5):
         num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 1.5)
@@ -849,22 +846,18 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
         caching_model.eval()
 
     # get the patient vectors
-    possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
-    patient_valid_test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
-    patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_inds, vector_representation_bins,
-                                                          add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=unique_patient_ids,
-                                                          possible_seqs=possible_seqs, start_vec_from=start_vec_from, samples=samples_size)
+    # possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
+    patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_ids, vector_representation_bins,
+                                                          add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
+                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
 
     # get the train patient vectors
-    patient_valid_test_ids = [unique_patient_ids[x] for x in patient_valid_test_inds]
-    patient_train_inds = [x for x in df_bld["patient_id"].unique() if x not in patient_valid_test_ids]
-    patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, patient_train_inds, vector_representation_bins,
+    patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, fold_patient_train_ids, vector_representation_bins,
                                                                       add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
                                                                       possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
 
-    # get the train patient vectors
-    disease_validation_ids = df_bld_validation["patient_id"].unique()  # TODO: Check that this works!
-    disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, disease_validation_ids, vector_representation_bins,
+    # get the validation patient vectors
+    disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, fold_patient_test_ids, vector_representation_bins,
                                                                                 add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
                                                                                 possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
 

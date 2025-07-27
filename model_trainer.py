@@ -156,7 +156,8 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, args, aaseq_to_nneighbors=None, masking=False, ratio=False, scheduler_type='none',
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, optimizer_type, args,
+                aaseq_to_nneighbors=None, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
@@ -189,15 +190,21 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
     criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, aaseq_to_nneighbors=aaseq_to_nneighbors, device=device)
 
+    if optimizer_type == "adam":
+        base_optimizer = optim.Adam
+    elif optimizer_type == "adafactor":
+        base_optimizer = optim.Adafactor
+    else:
+        raise ValueError(f"Unsupported optimizer type: {optimizer_type}")
     if model_type == "cvc" and not freeze_embed_model and special_criterion:
         encoder_lr = embedding_lr  # this is the default learning rate for BERT
         classification_head_lr = lr
-        optimizer = optim.Adam([
+        optimizer = base_optimizer([
             {'params': model.model.model.encoder.layer[12-args.cvc_layers_to_train:].parameters(), 'lr': encoder_lr},  # Later layers
             {'params': model.linear.parameters(), 'lr': classification_head_lr}  # Classification head
         ])
     else:
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+        optimizer = base_optimizer(model.parameters(), lr=lr)
 
     scheduler = get_scheduler(optimizer, scheduler_type)
 

@@ -658,7 +658,7 @@ def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
               scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, use_nneighbors_loss, ch_type, neg_partition,
-              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, sample_plots, device):
+              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, sample_plots, optimizer_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -669,6 +669,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "model_type": model_type,
             "loss_type": loss_type,
             "dataset_type": dataset_type,
+            "optimizer_type": optimizer_type,
             "epochs": epochs,
             "batch_size": batch_size,
             "neg_pos_ratio": neg_pos_ratio,
@@ -743,6 +744,7 @@ def sweep_model():
     # changing_negatives = wandb.config.changing_negatives
     changing_negatives = False
     sample_plots = wandb.config.sample_plots
+    optimizer_type = 'adam'  # TODO: We can add this to sweep config file!
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     if top_percent == 'None':
@@ -817,6 +819,7 @@ def sweep_model():
                                          masking=masking,
                                          ratio=ratio,
                                          change_negatives=changing_negatives,
+                                         optimizer_type=optimizer_type,
                                          args=args,
                                          )
 
@@ -947,6 +950,7 @@ if __name__ == '__main__':
                      'ms_tcrdb2_no_healthy_ms_plus_hlt_article']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
+    optimizer_types = ['Adam', 'Adafactor']
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_type', type=str, choices=model_types, default='cvc', help='Type of model to train')
@@ -997,6 +1001,7 @@ if __name__ == '__main__':
     parser.add_argument('--loss_version', type=int, default=0, help='The version of the loss to use')
     parser.add_argument('--sample_plots', type=int, default=0, help='Sampling when plotting instead of running on all sequences')
     parser.add_argument('--classification_v2', action='store_true', default=False, help='Use the new classification model with a different architecture (Version 2)')
+    parser.add_argument('--optimizer_type', type=str, choices=optimizer_types, default='Adam', help='Type of optimizer to use')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1051,6 +1056,7 @@ if __name__ == '__main__':
     loss_version = args.loss_version
     sample_plots = args.sample_plots
     classification_v2 = args.classification_v2
+    optimizer_type = args.optimizer_type.lower()
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1087,6 +1093,7 @@ if __name__ == '__main__':
     print(f"\tModel Type: {args.model_type}")
     print(f"\tLoss Type: {args.loss_type}")
     print(f"\tDataset Type: {args.dataset_type}")
+    print(f"\tOptimizer Type: {args.optimizer_type}")
     print(f"\tEpochs: {args.epochs}")
     print(f"\tBatch Size: {args.batch_size}")
     print(f"\tNegative to Positive Ratio: {args.neg_pos_ratio}")
@@ -1277,6 +1284,7 @@ if __name__ == '__main__':
             filter_to_inflate=filter_to_inflate,
             change_negatives=changing_negatives,
             sample_plots=sample_plots,
+            optimizer_type=optimizer_type,
             device=device,
         )
 
@@ -1335,6 +1343,7 @@ if __name__ == '__main__':
                                              masking=masking,
                                              ratio=ratio,
                                              change_negatives=changing_negatives,
+                                             optimizer_type=optimizer_type,
                                              args=args,
                                              )
 
@@ -1551,6 +1560,16 @@ if __name__ == '__main__':
                 inference_classification_model_combined(trained_model, args, to_ensemble, get_data_loader_wrapper, device)
             else:
                 if classification_v2:
+                    to_v2_tmp = False
+                    if to_v2_tmp:
+                        from inference.inference_classification import inference_classification_model_version2_tmp
+                        model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
+                        inner_fold, components = 1, 2
+                        inference_classification_model_version2_tmp(trained_model, args, df_bld, df_hlt,
+                                                                test_patient_ids, valid_patient_ids,
+                                                                valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                                                                aaseq_to_ratio, to_ensemble, model_non_trained, device,
+                                                                k_fold_disease=inner_fold, chosen_components=components)
                     from inference.inference_classification import inference_classification_model_version2
                     model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
                     for inner_fold, components in product([1, 2, 3], [2, 3]):

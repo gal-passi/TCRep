@@ -98,11 +98,10 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         else:
             patient_seqs = df.loc[df["patient_id"] == patient_ind, "AASeq"].values
 
+        patient_seqs = sorted(patient_seqs)
         rng = np.random.RandomState(42)  # fixed seed, legacy & portable RNG
         if samples is not None and len(patient_seqs) > samples:
             patient_seqs = rng.choice(patient_seqs, size=samples, replace=False)
-
-        print(f'Seqs: ' + patient_seqs[:5] + f'... (total {len(patient_seqs)} sequences)')
 
         # Get model outputs
         with torch.no_grad():
@@ -113,6 +112,7 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         patient_probs.append(disease_probs)
 
         # bin using np into x bins (min value is 0 and max is 1)
+        disease_probs[disease_probs == 1] = 0.9999  # Avoid binning issues with 1.0
         disease_probs_dig = np.digitize(disease_probs, bins=np.linspace(0, 1, vector_representation_bins + 1)) - 1
         # Vectorized bin counting
         patient_vector = np.bincount(disease_probs_dig, minlength=vector_representation_bins).astype(np.float32)
@@ -806,7 +806,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
                                             add_ratio_to_vector=False, start_vec_from=0,
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
-                                            to_display_mapping=False, samples_size=400,
+                                            to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2, to_savefig=True):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
@@ -1369,24 +1369,24 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
                     dpi=300, bbox_inches='tight')
     plt.show()
 
-    # Print detailed classification reports for each threshold
-    print("\n" + "=" * 80)
-    print("CLASSIFICATION RESULTS SUMMARY")
-    print("=" * 80)
-
-    for threshold in thresholds:
-        print(f"\n--- Threshold: {threshold} ---")
-        gmm_predictions, y_test = get_gmm_predictions(threshold)
-
-        if len(gmm_predictions) == 0:
-            print("No predictions made (all differences below threshold)")
-            continue
-
-        overall_accuracy = np.mean(gmm_predictions == y_test)
-        print(f"Overall Accuracy: {overall_accuracy:.3f}")
-        print(f"Classified subjects: {len(gmm_predictions)}")
-        print("Classification Report:")
-        print(classification_report(y_test, gmm_predictions, target_names=['Healthy', 'Patient']))
+    # # Print detailed classification reports for each threshold
+    # print("\n" + "=" * 80)
+    # print("CLASSIFICATION RESULTS SUMMARY")
+    # print("=" * 80)
+    #
+    # for threshold in thresholds:
+    #     print(f"\n--- Threshold: {threshold} ---")
+    #     gmm_predictions, y_test = get_gmm_predictions(threshold)
+    #
+    #     if len(gmm_predictions) == 0:
+    #         print("No predictions made (all differences below threshold)")
+    #         continue
+    #
+    #     overall_accuracy = np.mean(gmm_predictions == y_test)
+    #     print(f"Overall Accuracy: {overall_accuracy:.3f}")
+    #     print(f"Classified subjects: {len(gmm_predictions)}")
+    #     print("Classification Report:")
+    #     print(classification_report(y_test, gmm_predictions, labels=[0, 1], target_names=['Healthy', 'Patient']))
 
 
 def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components, k_fold_disease, model_config_str, to_savefig=True):

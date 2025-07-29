@@ -1002,6 +1002,7 @@ if __name__ == '__main__':
     parser.add_argument('--sample_plots', type=int, default=0, help='Sampling when plotting instead of running on all sequences')
     parser.add_argument('--classification_v2', action='store_true', default=False, help='Use the new classification model with a different architecture (Version 2)')
     parser.add_argument('--optimizer_type', type=str, choices=optimizer_types, default='Adam', help='Type of optimizer to use')
+    parser.add_argument('-reshef_inference', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1057,6 +1058,7 @@ if __name__ == '__main__':
     sample_plots = args.sample_plots
     classification_v2 = args.classification_v2
     optimizer_type = args.optimizer_type.lower()
+    reshef_inference = args.reshef_inference
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1081,6 +1083,7 @@ if __name__ == '__main__':
     assert not (extra_ms_from_pregnant and 'ms' not in dataset_type), "extra_ms_from_pregnant can only be used with MS dataset of tcrdb2.0"
     assert not (use_healthy_as_ms and 'ms' not in dataset_type), "use_healthy_as_ms can only be used with MS dataset of tcrdb2.0"
     assert not (extra_filter and 'ms_tcrdb2' not in dataset_type), "extra_filter can only be used with MS TCRdb2 dataset"
+    assert not (reshef_inference and changing_negatives), "Reshef inference is not applicable if changing negatives"
 
     if 'ms_tcrdb2' in dataset_type:
         dataset_type += '_plus_hlt_article' if plus_healthy_mal_id else ''
@@ -1168,7 +1171,6 @@ if __name__ == '__main__':
             patient_ids.append([train_patient_ids, valid_patient_ids, test_patient_ids])
         print('Done loading all k-folds datasets')
 
-
     # TODO: Adding VAE training here! dont just leave it here!
     # Training VAE
     train_vae = args.train_vae
@@ -1179,48 +1181,6 @@ if __name__ == '__main__':
         # Note: we won't get to this part because there is an exit command in the previous vae line
         from vae.vae_training_dynamic import train_and_inference_vae
         train_and_inference_vae(args, dataset_loader, device)
-
-    # # TODO: ADDED CODE FOR COMPARING BETWEEN OTHER ARTICLE SEQUENCES! REMOVE LATER
-    # article2_data_folder = 'db/test_db/data_tcrb'
-    # article2_data_files = os.listdir(article2_data_folder)
-    # article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x and x.endswith('2.csv')]
-    # # Open all files and read the contents
-    # all_article2_data = set()
-    # all_article2_dfs = []
-    # for file_name in article2_data_files:
-    #     # read the file as .csv (include header as well)
-    #     file_path = os.path.join(article2_data_folder, file_name)
-    #     df = pd.read_csv(file_path, names=['AASeq', 'col 1', 'col 2', 'ratio'])
-    #
-    #     # normalize the ratio column
-    #     df['ratio'] -= df['ratio'].min()
-    #     df['ratio'] /= df['ratio'].max()
-    #
-    #     # add patient_id as 5th and 6th columns
-    #     patient_id = file_name.split('_')[0]
-    #     df['patient_id'] = patient_id
-    #     df['study_id'] = 'article2'
-    #
-    #     # modify AASeq to start with 'C' and end with 'F'
-    #     df['AASeq'] = 'C' + df['AASeq'] + 'F'
-    #
-    #     # add the sequences to the set
-    #     all_article2_data.update(df['AASeq'].tolist())
-    #     all_article2_dfs.append(df)
-    #
-    # # Compare between all sequences in the dataset and the article2 data
-    # all_dataset_data = set(df_bld['AASeq'].tolist())
-    #
-    # # Find the common sequences and print statistics
-    # common_sequences = all_dataset_data.intersection(all_article2_data)
-    # print(f"Number of common sequences (between article 2 and MS TCRdb dataset): {len(common_sequences)}")
-    #
-    # # Filter the article2 data to only include patients with enough samples
-    # article2_df = pd.concat(all_article2_dfs, ignore_index=True)
-    # patients_with_samples = [x[0] for x in article2_df.groupby('patient_id')['AASeq'] if len(x[1]) >= 2000]
-    # article2_df = article2_df[article2_df['patient_id'].isin(patients_with_samples)]
-    # display_common_sequences_figure(dataset_loader, article2_df, df_hlt, dataset_type, l=8)
-
 
     # Save "train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs" to cache/temp_split_MS_data
     if dataset_type == 'ms' and not os.path.exists('cache/temp_split_MS_data.npz'):
@@ -1344,6 +1304,7 @@ if __name__ == '__main__':
                                              ratio=ratio,
                                              change_negatives=changing_negatives,
                                              optimizer_type=optimizer_type,
+                                             reshef_inference=reshef_inference,
                                              args=args,
                                              )
 
@@ -1438,7 +1399,6 @@ if __name__ == '__main__':
 
             # Added this to plot confusion matrices
             from inference.inference_ensemble import plot_confusion_matrices
-            from cache_handler import get_model_config_str
             model_string = get_model_config_str(args)
             plot_confusion_matrices(trained_model, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, model_string, device)
 

@@ -6,7 +6,7 @@ import seaborn as sns
 import itertools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix, classification_report, ConfusionMatrixDisplay
 from models.cvc_cacheing_model import CVCCachingModel
 from models.cvc_df_caching_model import CVCDFCachingModel
 from models.cvc_basic_cacheing_model import CVCBasicCachingModel
@@ -39,6 +39,8 @@ INFERENCE_GMM_BIC_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "gmm_p
 INFERENCE_VECTOR_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "vector_plots_v2/")
 INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "uncertainty_threshold_plots_v2/")
 INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "uncertainty_threshold_plots_v2/cache/")
+INFERENCE_OUTLIER_GMMS_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "outlier_gmms_plots_v2/")
+INFERENCE_SVM_EXTRA_PLOTS_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "svm_plots_v2/")
 
 # Models Configurations:
 DISABLE_BAD_MODELS = True
@@ -839,6 +841,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     os.makedirs(INFERENCE_GMM_BIC_PLOTS_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_SVM_EXTRA_PLOTS_V2_DIR, exist_ok=True)
     model_config_str = get_model_config_str(args)
 
     # Creating a caching model of the trained model
@@ -874,7 +877,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
 
     # healthy vectors helping data
     healthy_patients = df_hlt["patient_id"].unique()
-    np.random.shuffle(healthy_patients)
+    np.random.shuffle(healthy_patients)  # TODO: Consider sorting (and even using rng.permutation) to make it more deterministic!
     healthy_patients = healthy_patients[:num_of_healthy_patients]
 
     healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
@@ -927,8 +930,10 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                       chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
     patient_gmm_models, healthy_gmm_models = gmms
 
-    # TODO: We can consider adding this after we figure out how to define outliers
-    # plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patient_test_probs, healthy_test_probs, chosen_components)
+    recalc_gmms = plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patient_train_probs, healthy_probs,
+                                                patient_test_probs, healthy_test_probs, chosen_components,
+                                                k_fold_disease, model_config_str, to_savefig=to_savefig)
+    final_patient_gmm, final_healthy_gmm, patient_gmm_models, healthy_gmm_models = recalc_gmms
 
     plot_gmm_means_weights_plot(patient_gmm_models, healthy_gmm_models, chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
 
@@ -938,7 +943,8 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patient_test_probs,
                                    healthy_test_probs, chosen_components, size=20)
 
-    cm_svm_rbf = get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patient_test_vectors, healthy_test_vectors, vector_representation_bins)
+    cm_svm_rbf = get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patient_test_vectors, healthy_test_vectors,
+                                               vector_representation_bins, k_fold_disease, model_config_str, to_savefig=to_savefig)
 
     plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_probs, final_patient_gmm, final_healthy_gmm, cm_svm_rbf,
                                             chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
@@ -1187,7 +1193,7 @@ def plot_gmm_components_per_patient_and_final(patient_gmm_models, healthy_gmm_mo
 
 
 def plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patient_test_probs,
-                                   healthy_test_probs, chosen_components, size=20, only_per_person_gmms=False, extra_colors=None):
+                                   healthy_test_probs, chosen_components, size=20, only_per_person_gmms=False, extra_colors=None, savefig_path=None):
     # Same plot but with 20 random samples from each GMM model in patient:
     def display_per_person_mean_and_std(gmm_models, size=size, title_extra=''):
         if len(gmm_models) > size:
@@ -1214,6 +1220,8 @@ def plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patie
         # ax.legend(loc='upper right', ncol=2, framealpha=0.9)
         ax.grid(True, axis='x', linestyle='--', alpha=0.5)
         plt.tight_layout()
+        if savefig_path is not None:
+            plt.savefig(savefig_path.format(title_extra.lower())),
         plt.show()
 
     display_per_person_mean_and_std(patient_gmm_models[chosen_components], title_extra='Patient')
@@ -1238,7 +1246,8 @@ def plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patie
     display_per_person_mean_and_std(healthy_test_gmms, title_extra='TEST Healthy')
 
 
-def get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patient_test_vectors, healthy_test_vectors, vector_representation_bins):
+def get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patient_test_vectors, healthy_test_vectors,
+                                  vector_representation_bins, k_fold_disease, model_config_str, to_savefig=True, plot_confidence=True):
     patient_train_vectors = patient_train_vectors[:, vector_representation_bins // 2:]
     healthy_vectors = healthy_vectors[:, vector_representation_bins // 2:]
     patient_test_vectors = patient_test_vectors[:, vector_representation_bins // 2:]
@@ -1261,6 +1270,81 @@ def get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patien
     svm_rbf.fit(X_train, y_train)
     y_pred_svm_rbf = svm_rbf.predict(X_test)
     cm_svm_rbf = confusion_matrix(y_test, y_pred_svm_rbf)
+
+    if plot_confidence:
+        # === Add Confidence Calculation ===
+        probas = svm_rbf.predict_proba(X_test)        # Shape: (n_samples, 2)
+        confidences = np.max(probas, axis=1)          # Highest class probability
+        confidence_thresholds = sorted(list(set(confidences)))  # Unique confidence values for thresholds
+        # calculate accuracies across thresholds
+        y_pred_svm_rbf = svm_rbf.predict(X_test)
+        accuracies = []
+        num_remaining = []
+        for threshold in confidence_thresholds:
+            # Mask to keep only predictions above the confidence threshold
+            keep_mask = confidences >= threshold
+
+            if np.sum(keep_mask) == 0:
+                continue  # Skip thresholds that remove all predictions
+
+            filtered_preds = y_pred_svm_rbf[keep_mask]
+            filtered_true = y_test[keep_mask]
+
+            acc = np.mean(filtered_preds == filtered_true)
+            accuracies.append(acc)
+            num_remaining.append(np.sum(keep_mask))
+
+        # === PLOT ===
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        ax1.plot(confidence_thresholds[:len(accuracies)], accuracies, color='blue', label='Accuracy')
+        ax1.set_xlabel('Confidence Threshold')
+        ax1.set_ylabel('Accuracy', color='blue')
+        ax1.tick_params(axis='y', labelcolor='blue')
+        ax1.set_ylim(0, 1.05)
+        ax2 = ax1.twinx()
+        ax2.plot(confidence_thresholds[:len(num_remaining)], num_remaining, color='red', linestyle='--',
+                 label='Remaining Samples')
+        ax2.set_ylabel('Number of Remaining Samples', color='red')
+        ax2.tick_params(axis='y', labelcolor='red')
+        plt.title('Accuracy vs Confidence Threshold (SVM-RBF)')
+        fig.tight_layout()
+        plt.grid(True)
+        if to_savefig:
+            plt.savefig(os.path.join(INFERENCE_SVM_EXTRA_PLOTS_V2_DIR, f'svm_rbf_confidence_fold-{k_fold_disease}_{model_config_str}.png'), dpi=300, bbox_inches='tight')
+        plt.show()
+
+        # === CHOOSE 4 CONFIDENCE THRESHOLDS ===
+        thresholds_to_plot = [0.0,  # No filtering
+                              np.percentile(confidences, 25),
+                              np.percentile(confidences, 50),
+                              np.percentile(confidences, 75)]
+        titles = ['No Threshold',
+                  'Threshold ≥ 25th percentile',
+                  'Threshold ≥ 50th percentile (Median)',
+                  'Threshold ≥ 75th percentile']
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        axes = axes.flatten()  # Flatten for easy indexing
+        for i, (threshold, title) in enumerate(zip(thresholds_to_plot, titles)):
+            keep_mask = confidences >= threshold
+            if np.sum(keep_mask) == 0:
+                axes[i].axis('off')
+                axes[i].set_title(f"{title}\n(No samples)")
+                continue
+            filtered_preds = y_pred_svm_rbf[keep_mask]
+            filtered_true = y_test[keep_mask]
+            cm = confusion_matrix(filtered_true, filtered_preds)
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Healthy', 'Patient'])
+            disp.plot(ax=axes[i], colorbar=False, cmap='Blues', values_format='d')
+            axes[i].set_title(f"{title}\n(n={np.sum(keep_mask)})")
+            axes[i].set_xlabel("Predicted Label")
+            axes[i].set_ylabel("True Label")
+        plt.suptitle("Confusion Matrices at Different Confidence Thresholds", fontsize=16)
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        if to_savefig:
+            plt.savefig(os.path.join(INFERENCE_SVM_EXTRA_PLOTS_V2_DIR, f'svm_rbf_confusion_matrices_fold-{k_fold_disease}_{model_config_str}.png'), dpi=300, bbox_inches='tight')
+        plt.show()
+
     return cm_svm_rbf
 
 
@@ -1389,7 +1473,8 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
     #     print(classification_report(y_test, gmm_predictions, labels=[0, 1], target_names=['Healthy', 'Patient']))
 
 
-def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components, k_fold_disease, model_config_str, to_savefig=True):
+def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components,
+                                           k_fold_disease, model_config_str, to_savefig=True):
     # Convert to numpy arrays for easier manipulation
     patient_lls = np.array(patient_lls)
     healthy_lls = np.array(healthy_lls)
@@ -1611,7 +1696,9 @@ def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_l
     return
 
 
-def plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patient_test_probs, healthy_test_probs, chosen_components):
+def plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patient_train_probs, healthy_probs,
+                                  patient_test_probs, healthy_test_probs, chosen_components,
+                                  k_fold_disease, model_config_str, to_savefig=True):
     from sklearn.ensemble import IsolationForest
     patient_gmms = patient_gmm_models[chosen_components]
     healthy_gmms = healthy_gmm_models[chosen_components]
@@ -1628,6 +1715,17 @@ def plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patien
         iso_healthy = IsolationForest(contamination=0.1, random_state=42)
         outlier_labels_patient = iso_patient.fit_predict(patient_means)
         outlier_labels_healthy = iso_healthy.fit_predict(healthy_means)
+    elif outlier_type == 1:
+        patient_means_r = patient_means.max(axis=1)
+        healthy_means_r = healthy_means.max(axis=1)
+        def get_outlier_labels(data, lower_q=0.10, upper_q=0.90):
+            lower = np.quantile(data, lower_q)
+            upper = np.quantile(data, upper_q)
+            labels = np.where((data >= lower) & (data <= upper), 1, -1)
+            return labels
+        # Get label arrays
+        outlier_labels_patient = get_outlier_labels(patient_means_r)
+        outlier_labels_healthy = get_outlier_labels(healthy_means_r)
     else:
         patient_means_r = patient_means.max(axis=1)
         healthy_means_r = healthy_means.max(axis=1)
@@ -1638,17 +1736,40 @@ def plot_gmms_per_person_outliers(patient_gmm_models, healthy_gmm_models, patien
 
         # define all samples as outlier if they cross that middle point
         outlier_labels_patient = np.where(
-            (middle_point < patient_means_r) & (patient_means_r < 2 * patient_main_mean - middle_point), 1, -1)
+            (middle_point < patient_means_r), 1, -1)
+            # (middle_point < patient_means_r) & (patient_means_r < 2 * patient_main_mean - middle_point), 1, -1)
         outlier_labels_healthy = np.where(
-            (2 * healthy_main_mean - middle_point < healthy_means_r) & (healthy_means_r < middle_point), 1, -1)
+            (healthy_means_r < middle_point), 1, -1)
+            # (2 * healthy_main_mean - middle_point < healthy_means_r) & (healthy_means_r < middle_point), 1, -1)
 
     color_dict = dict()
     color_dict['Patient'] = ['blue' if x == 1 else 'red' for x in outlier_labels_patient]
     color_dict['Healthy'] = ['blue' if x == 1 else 'red' for x in outlier_labels_healthy]
 
+    if to_savefig:
+        savefig_path = os.path.join(INFERENCE_OUTLIER_GMMS_PLOTS_V2_DIR,
+                                    f'outlier_gmms_{"{}"}_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.png')
+    else:
+        savefig_path = None
     plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patient_test_probs,
                                    healthy_test_probs, chosen_components, size=500, only_per_person_gmms=True,
-                                   extra_colors=color_dict)
+                                   extra_colors=color_dict, savefig_path=savefig_path)
+
+    filtered_patient_gmms = [gmm for gmm, label in zip(patient_gmms, outlier_labels_patient) if label == 1]
+    filtered_healthy_gmms = [gmm for gmm, label in zip(healthy_gmms, outlier_labels_healthy) if label == 1]
+
+    patient_gmm_models[chosen_components] = filtered_patient_gmms
+    healthy_gmm_models[chosen_components] = filtered_healthy_gmms
+
+    patient_train_data = np.concatenate([probs.flatten() for probs, label in zip(patient_train_probs, outlier_labels_patient) if label == 1]).reshape(-1, 1)
+    healthy_train_data = np.concatenate([probs.flatten() for probs, label in zip(healthy_probs, outlier_labels_healthy) if label == 1]).reshape(-1, 1)
+
+    final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+    final_patient_gmm.fit(patient_train_data)
+    final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='full')
+    final_healthy_gmm.fit(healthy_train_data)
+
+    return final_patient_gmm, final_healthy_gmm, patient_gmm_models, healthy_gmm_models
 
 
 def plot_gmm_means_weights_plot(patient_gmm_models, healthy_gmm_models, chosen_components, k_fold_disease, model_config_str, to_savefig=True):

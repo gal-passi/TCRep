@@ -224,9 +224,6 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
 
             # Plot KDE
             expanded_probs = np.concatenate(expanded_probs_list)
-            kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
-            kde_normalizer(kde)
-            return kde
         else:
             # Round probabilities to 2 decimal places
             rounded_probs = np.round(probs, 2)
@@ -237,10 +234,18 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
             # Create expanded array based on counts for KDE
             expanded_probs = np.repeat(unique_vals, counts)
 
-            # Plot KDE
-            kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
-            kde_normalizer(kde)
-            return kde
+        # Plot KDE
+        kde = sns.kdeplot(expanded_probs, ax=ax, color=color, label=label)
+        kde_normalizer(kde)
+        # Extract the KDE line and compute max y after x > 0.5
+        line = kde.get_lines()[-1]  # Most recent line
+        x_data, y_data = line.get_data()
+        mask = x_data > 0.5
+        if np.any(mask):
+            max_y_after_05 = y_data[mask].max()
+            label += f" (max={max_y_after_05:.3f})"
+        line.set_label(label)  # Set label with updated string
+        return kde
 
     # Set up the figure with three subplots
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
@@ -285,8 +290,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
         # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for positive and negative samples
-        create_kde_from_histogram(pos_probs, ax1, test_pos_colors[i], f'Pos Set {i} - {len(pos_seqs)}')
-        create_kde_from_histogram(neg_probs, ax1, test_neg_colors[i], f'Neg Set {i} - {len(neg_seqs)}')
+        create_kde_from_histogram(pos_probs, ax1, test_pos_colors[i], f'Pos Set {i} ({unique_patient_ids[patient_ind]}) - {len(pos_seqs)}')
+        create_kde_from_histogram(neg_probs, ax1, test_neg_colors[i], f'Neg Set {i} ({unique_patient_ids[patient_ind]}) - {len(neg_seqs)}')
         # kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
         # kde_normalizer(kde)
         # kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
@@ -301,7 +306,9 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
     # Subplot 2: Healthy Patients Distributions
     ax2.set_title("Healthy vs Ill Patients")
     healthy_patients = df_hlt["patient_id"].unique()
-    np.random.shuffle(healthy_patients)
+    rng = np.random.default_rng(42)  # For reproducibility
+    healthy_patients = sorted(healthy_patients)
+    healthy_patients = rng.permutation(healthy_patients)
     for i, patient_ind in enumerate(test_inds):
         patient = healthy_patients[i]
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
@@ -321,8 +328,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
         # disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for healthy patient samples
-        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i], f'Healthy Set {i} - {len(healthy_seqs)}')
-        create_kde_from_histogram(disease_probs, ax2, test_colors[i], f'Ill Set {i} - {len(disease_seqs)}')
+        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i], f'Healthy Set {i} ({patient}) - {len(healthy_seqs)}')
+        create_kde_from_histogram(disease_probs, ax2, test_colors[i], f'Ill Set {i} ({unique_patient_ids[patient_ind]}) - {len(disease_seqs)}')
         # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
         # kde_normalizer(kde)
         # kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
@@ -342,7 +349,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # # Convert to probabilities
         # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
         # Plot KDE for healthy patient samples
-        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i - len(test_inds)], f'Healthy Set {i} - {len(healthy_seqs)}')
+        create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i - len(test_inds)], f'Healthy Set {i} ({patient}) - {len(healthy_seqs)}')
         # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
         # kde_normalizer(kde)
     ax2.set_xlabel("Predicted Probability for Positive Class")

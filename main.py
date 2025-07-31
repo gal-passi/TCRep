@@ -1065,7 +1065,7 @@ if __name__ == '__main__':
     optimizer_type = args.optimizer_type.lower()
     reshef_inference = args.reshef_inference
     reshef_filter_train = args.reshef_filter_train
-    reshef_negative_part = args.reshef_negative_partition if reshef_inference else 0
+    reshef_negative_part = args.reshef_negative_part if reshef_inference else 0
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results

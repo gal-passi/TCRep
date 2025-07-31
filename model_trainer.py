@@ -259,6 +259,17 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         print(f"Training on {num_pos_samples} positive samples and {len(neg_seqs)} negative samples...")
 
     if reshef_inference:
+        if reshef_negative_part > 0:
+            rng = np.random.default_rng(42)
+            # shuffle neg_seqs:
+            rng.shuffle(neg_seqs)
+            # Take the reshef_negative_part chunk from neg_seqs
+            chunk_size = num_pos_samples * neg_pos_ratio
+            start, end = int(chunk_size * (reshef_negative_part - 1)), int(chunk_size * reshef_negative_part)
+            if end > len(neg_seqs):
+                raise ValueError(f"reshef_negative_part {reshef_negative_part} is too large for the number of negative sequences {len(neg_seqs)}.")
+            neg_seqs = neg_seqs[start:end]
+
         from cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)
         reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)

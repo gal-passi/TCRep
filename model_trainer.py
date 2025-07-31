@@ -158,7 +158,9 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
                 embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, optimizer_type, args,
                 aaseq_to_nneighbors=None, masking=False, ratio=False, scheduler_type='none',
-                epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False, reshef_inference=False):  # pos_batch_size=256
+                epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False,
+                reshef_inference=False, reshef_filter_train=False, reshef_negative_part=0,
+                test_pos_seqs=None, test_neg_seqs=None):  # pos_batch_size=256
     """
     Train a binary classification model with positive and negative sequences,
     while validating on a separate validation set during training.
@@ -258,26 +260,51 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
     if reshef_inference:
         from cache_handler import get_model_config_str
-        # First swapping the first 50 samples in train with the first 50 samples in neg_seqs
-        n_swap = 100  # Number of samples to swap for Reshef inference
+        model_config_string = get_model_config_str(args)
+        reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
+        os.makedirs(reshef_cache_folder, exist_ok=True)
+
+        if reshef_filter_train:
+            # load reshef_inference_data.npz
+            reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_data.npz")
+            if os.path.exists(reshef_inference_data_path):
+                reshef_inference_data = np.load(reshef_inference_data_path)
+
+                # load the arrays from the npz file
+                pos_seqs_to_train = reshef_inference_data['pos_seqs_to_train']
+                neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
+
+                # keep only sequences that appear in train_pos_seqs and pos_seqs_to_train
+                mask = np.isin(train_pos_seqs, pos_seqs_to_train)
+                train_pos_seqs = train_pos_seqs[mask]
+                mask = np.isin(train_neg_seqs, neg_seqs_to_train)  # TODO: Change to train_neg_seqs!!!
+                train_neg_seqs = train_neg_seqs[mask]
+            else:
+                raise FileNotFoundError(f"Reshef inference data not found at {reshef_inference_data_path}. Please run the Reshef inference data generation script first.")
+
+        # First swapping the first n_swap samples in train with the first n_swap samples in neg_seqs
+        n_swap = 250  # Number of samples to swap for Reshef inference
         train_pos_seqs = np.array(train_pos_seqs)
-        train_neg_seqs = np.array(neg_seqs)
+        train_neg_seqs = np.array(train_neg_seqs)  # TODO: Change to train_neg_seqs!!!
         if len(train_pos_seqs) < n_swap or len(train_neg_seqs) < n_swap:
             raise ValueError("Not enough samples for Reshef inference. Need at least n_swap positive and n_swap negative samples.")
         train_pos_seqs[:n_swap], train_neg_seqs[:n_swap] = train_neg_seqs[:n_swap], train_pos_seqs[:n_swap]
         # Concatenate the sequences for Reshef inference
-        full_data = np.concatenate([train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs])
+        full_data = np.concatenate([train_pos_seqs, train_neg_seqs,
+                                    valid_pos_seqs, valid_neg_seqs])
+        if test_pos_seqs is not None and test_neg_seqs is not None:
+            full_data = np.concatenate([test_pos_seqs, test_neg_seqs])
         # create a labels array for Reshef inference (1 for positive, 0 for negative), but make sure label the first n_swap correctly because of the swap
         full_labels = np.concatenate([np.zeros(len(train_pos_seqs[:n_swap])), np.ones(len(train_pos_seqs[n_swap:])),
                                       np.ones(len(train_neg_seqs[:n_swap])), np.zeros(len(train_neg_seqs[n_swap:])),
                                       np.ones(len(valid_pos_seqs)), np.zeros(len(valid_neg_seqs))])
+        if test_pos_seqs is not None and test_neg_seqs is not None:
+            full_labels = np.concatenate([np.ones(len(test_pos_seqs)), np.zeros(len(test_neg_seqs))])
         # save the full data & labels for Reshef inference under "cache/reshef_inference"
-        model_config_string = get_model_config_str(args)
-        reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
-        os.makedirs(reshef_cache_folder, exist_ok=True)
         np.save(os.path.join(reshef_cache_folder, "full_data.npy"), full_data)
         np.save(os.path.join(reshef_cache_folder, "full_labels.npy"), full_labels)
-
+        np.save(os.path.join(reshef_cache_folder, "n_swap.npy"), np.array([n_swap]))
+        np.savez(os.path.join(reshef_cache_folder, "parameters.npz"), n_swap=n_swap, reshef_negative_part=reshef_negative_part)
 
     # Load model state if available
     start_epoch = 0
@@ -537,6 +564,8 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         # if not is_sweep and is_odd_or_last_epoch:
         # saving every epoch after 5
         if not is_sweep and (epoch == 8 or epoch == epochs - 1):
+            save_model_state(model, args, epoch)
+        elif reshef_inference:
             save_model_state(model, args, epoch)
 
     return model, history

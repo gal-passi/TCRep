@@ -6,7 +6,7 @@ import seaborn as sns
 import itertools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import confusion_matrix, classification_report, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix, classification_report
 from models.cvc_cacheing_model import CVCCachingModel
 from models.cvc_df_caching_model import CVCDFCachingModel
 from models.cvc_basic_cacheing_model import CVCBasicCachingModel
@@ -89,7 +89,7 @@ def create_binned_disease_probs(patient_ratio, disease_probs, num_bins=20):
 
 
 def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_bins, add_ratio_to_vector,
-                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0, samples=None):
+                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0, samples=None, bad_seqs=None):
     patient_vectors = []
     patient_probs = []
     for patient_ind in patient_inds:
@@ -104,6 +104,16 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         rng = np.random.RandomState(42)  # fixed seed, legacy & portable RNG
         if samples is not None and len(patient_seqs) > samples:
             patient_seqs = rng.choice(patient_seqs, size=samples, replace=False)
+
+        # Filter patient_seqs to only include those in ok_seqs
+        if bad_seqs is not None:
+            patient_seqs = np.array(patient_seqs)
+            mask = np.isin(patient_seqs, bad_seqs)
+            patient_seqs_new = patient_seqs[~mask]
+            if len(patient_seqs_new) == 0:
+                print(f"Patient {patient_ind} has no valid sequences after filtering bad sequences.")
+                continue
+            patient_seqs = patient_seqs_new
 
         # Get model outputs
         with torch.no_grad():
@@ -842,7 +852,17 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR, exist_ok=True)
     os.makedirs(INFERENCE_SVM_EXTRA_PLOTS_V2_DIR, exist_ok=True)
+    os.makedirs(INFERENCE_OUTLIER_GMMS_PLOTS_V2_DIR, exist_ok=True)
     model_config_str = get_model_config_str(args)
+
+    bad_seqs = None
+    filter_uncertain_seqs = False
+    if filter_uncertain_seqs:
+        reshef_cache_folder = os.path.join("cache", "reshef_inference")
+        reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs.npy")
+        if not os.path.exists(reshef_inference_data_path):
+            print(f"Reshef inference data not found at {reshef_inference_data_path}.")
+        bad_seqs = np.load(reshef_inference_data_path)
 
     # Creating a caching model of the trained model
     if to_ensemble:  # TODO: This does not work currently! Raising NotImplementedError
@@ -863,17 +883,17 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     # possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
     patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_ids, vector_representation_bins,
                                                           add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
+                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
 
     # get the train patient vectors
     patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, fold_patient_train_ids, vector_representation_bins,
                                                                       add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
+                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
 
     # get the validation patient vectors
     disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, fold_patient_test_ids, vector_representation_bins,
                                                                                 add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
+                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
 
     # healthy vectors helping data
     healthy_patients = df_hlt["patient_id"].unique()
@@ -881,7 +901,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     healthy_patients = healthy_patients[:num_of_healthy_patients]
 
     healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
-                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size)
+                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
     healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
                                              healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
     healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
@@ -1221,7 +1241,7 @@ def plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patie
         ax.grid(True, axis='x', linestyle='--', alpha=0.5)
         plt.tight_layout()
         if savefig_path is not None:
-            plt.savefig(savefig_path.format(title_extra.lower())),
+            plt.savefig(savefig_path.format(title_extra.lower()))
         plt.show()
 
     display_per_person_mean_and_std(patient_gmm_models[chosen_components], title_extra='Patient')
@@ -1334,8 +1354,10 @@ def get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patien
             filtered_preds = y_pred_svm_rbf[keep_mask]
             filtered_true = y_test[keep_mask]
             cm = confusion_matrix(filtered_true, filtered_preds)
-            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=['Healthy', 'Patient'])
-            disp.plot(ax=axes[i], colorbar=False, cmap='Blues', values_format='d')
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                        xticklabels=['Healthy', 'Patient'],
+                        yticklabels=['Healthy', 'Patient'],
+                        ax=axes[i], cbar=False)
             axes[i].set_title(f"{title}\n(n={np.sum(keep_mask)})")
             axes[i].set_xlabel("Predicted Label")
             axes[i].set_ylabel("True Label")

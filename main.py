@@ -64,6 +64,7 @@ INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 INFERENCE_CLASSIFICATION_MODEL = False
 INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = False
 INFERENCE_TO_CLASSIFICATION_MODEL = True
+INFERENCE_RESHEF = False
 
 dataset_loader = None
 
@@ -820,6 +821,8 @@ def sweep_model():
                                          ratio=ratio,
                                          change_negatives=changing_negatives,
                                          optimizer_type=optimizer_type,
+                                         test_pos_seqs=test_pos_seqs,
+                                         test_neg_seqs=test_neg_seqs,
                                          args=args,
                                          )
 
@@ -1003,6 +1006,8 @@ if __name__ == '__main__':
     parser.add_argument('--classification_v2', action='store_true', default=False, help='Use the new classification model with a different architecture (Version 2)')
     parser.add_argument('--optimizer_type', type=str, choices=optimizer_types, default='Adam', help='Type of optimizer to use')
     parser.add_argument('-reshef_inference', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
+    parser.add_argument('-reshef_filter_train', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
+    parser.add_argument('-reshef_negative_part', type=int, default=0, help='Part of the negative partition to use for Reshef inference (0 for no partitioning)')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1059,6 +1064,8 @@ if __name__ == '__main__':
     classification_v2 = args.classification_v2
     optimizer_type = args.optimizer_type.lower()
     reshef_inference = args.reshef_inference
+    reshef_filter_train = args.reshef_filter_train
+    reshef_negative_part = args.reshef_negative_partition if reshef_inference else 0
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1084,6 +1091,7 @@ if __name__ == '__main__':
     assert not (use_healthy_as_ms and 'ms' not in dataset_type), "use_healthy_as_ms can only be used with MS dataset of tcrdb2.0"
     assert not (extra_filter and 'ms_tcrdb2' not in dataset_type), "extra_filter can only be used with MS TCRdb2 dataset"
     assert not (reshef_inference and changing_negatives), "Reshef inference is not applicable if changing negatives"
+    assert not (reshef_filter_train and not reshef_inference), "Reshef filter train must be on when reshef inference is on"
 
     if 'ms_tcrdb2' in dataset_type:
         dataset_type += '_plus_hlt_article' if plus_healthy_mal_id else ''
@@ -1305,6 +1313,10 @@ if __name__ == '__main__':
                                              change_negatives=changing_negatives,
                                              optimizer_type=optimizer_type,
                                              reshef_inference=reshef_inference,
+                                             reshef_filter_train=reshef_filter_train,
+                                             reshef_negative_part=reshef_negative_part,
+                                             test_pos_seqs=test_pos_seqs,
+                                             test_neg_seqs=test_neg_seqs,
                                              args=args,
                                              )
 
@@ -1541,8 +1553,14 @@ if __name__ == '__main__':
                                                                 k_fold_disease=inner_fold, chosen_components=components)
                 else:
                     from inference.inference_classification import inference_classification_model
-
                     inference_classification_model(trained_model, args, df_bld, df_hlt,
                                                    test_patient_inds, valid_patient_inds, unique_patient_ids,
                                                    valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
                                                    aaseq_to_ratio, to_ensemble, device)
+
+        if INFERENCE_RESHEF and reshef_inference:
+            np.random.seed(42)
+            from inference.reshef_inference import reshef_inference
+            reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, args)
+            # reshef_inference(trained_model, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
+            #                  valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device, args)

@@ -1561,6 +1561,6 @@ if __name__ == '__main__':
         if INFERENCE_RESHEF and reshef_inference:
             np.random.seed(42)
             from inference.reshef_inference import reshef_inference
-            reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, args)
+            reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args)
             # reshef_inference(trained_model, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
             #                  valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device, args)

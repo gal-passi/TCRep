@@ -272,7 +272,10 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
         from cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)
-        reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
+        if reshef_negative_part > 0:
+            reshef_cache_folder = os.path.join("cache", "reshef_inference", f"partition_{reshef_negative_part}", model_config_string)
+        else:
+            reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
         os.makedirs(reshef_cache_folder, exist_ok=True)
 
         if reshef_filter_train:

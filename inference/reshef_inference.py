@@ -6,16 +6,20 @@ from cache_handler import get_model_config_str
 import seaborn as sns
 
 
-def reshef_inference(train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, args, to_save_train_data=True):
+def reshef_inference(train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args, to_save_train_data=True):
     # Load the full data and labels
     model_config_string = get_model_config_str(args)
-    reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
+    if reshef_negative_part > 0:
+        reshef_cache_folder = os.path.join("cache", "reshef_inference", f"partition_{reshef_negative_part}", model_config_string)
+    else:
+        reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
     full_data = np.load(os.path.join(reshef_cache_folder, "full_data.npy"))
     full_labels = np.load(os.path.join(reshef_cache_folder, "full_labels.npy"))
 
     # Load the parameters for Reshef inference
     n_swap, negative_part = load_parameters(reshef_cache_folder)
 
+    assert reshef_negative_part == negative_part, f"Reshef negative part mismatch: {reshef_negative_part} != {negative_part}"
     assert len(full_data) > 0, "No data found for Reshef inference."
     assert len(full_data) == len(full_labels), "Mismatch between full data and labels lengths."
 

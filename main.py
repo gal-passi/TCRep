@@ -64,7 +64,7 @@ INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 INFERENCE_CLASSIFICATION_MODEL = False
 INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = False
 INFERENCE_TO_CLASSIFICATION_MODEL = True
-INFERENCE_RESHEF = False
+INFERENCE_RESHEF = True
 
 dataset_loader = None
 
@@ -850,7 +850,7 @@ def sweep_model():
 def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=0,
                         use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
                         filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False,
-                       use_nneighbors_loss=False, loss_version=0, verbose=True):
+                       use_nneighbors_loss=False, loss_version=0, run_on_full_data=False, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
@@ -911,7 +911,7 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
                                    filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
                                    remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, verbose=verbose)
+                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=verbose)
     return dataset_loader
 
 
@@ -1008,6 +1008,7 @@ if __name__ == '__main__':
     parser.add_argument('-reshef_inference', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     parser.add_argument('-reshef_filter_train', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     parser.add_argument('-reshef_negative_part', type=int, default=0, help='Part of the negative partition to use for Reshef inference (0 for no partitioning)')
+    parser.add_argument('-run_on_full_data', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1066,6 +1067,7 @@ if __name__ == '__main__':
     reshef_inference = args.reshef_inference
     reshef_filter_train = args.reshef_filter_train
     reshef_negative_part = args.reshef_negative_part if reshef_inference else 0
+    run_on_full_data = args.run_on_full_data
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1099,6 +1101,7 @@ if __name__ == '__main__':
         dataset_type += '_hlt_as_ms' if use_healthy_as_ms else ''
         dataset_type += f'_top_{top_percent}' if top_percent is not None else ''
         dataset_type += f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+        dataset_type += f'_run_on_full_data' if run_on_full_data else ''
 
     print("RUN CONFIGURATION:")
     print(f"\tModel Type: {args.model_type}")
@@ -1133,6 +1136,7 @@ if __name__ == '__main__':
     print(f"\tLoss Version: {args.loss_version}")
     print(f"\tUse Neighbors Loss: {args.use_nneighbors_loss}")
     print(f"\tSample Plots: {args.sample_plots}")
+    print(f"\tRun on Full Data: {args.run_on_full_data}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
     print("\n")
 
@@ -1145,7 +1149,7 @@ if __name__ == '__main__':
                                         ratio=ratio,
                                         filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
                                         top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                        use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, verbose=True)
+                                        use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=True)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -1562,5 +1566,3 @@ if __name__ == '__main__':
             np.random.seed(42)
             from inference.reshef_inference import reshef_inference
             reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args)
-            # reshef_inference(trained_model, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
-            #                  valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device, args)

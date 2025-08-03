@@ -268,7 +268,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             start, end = int(chunk_size * (reshef_negative_part - 1)), int(chunk_size * reshef_negative_part)
             if end > len(neg_seqs):
                 raise ValueError(f"reshef_negative_part {reshef_negative_part} is too large for the number of negative sequences {len(neg_seqs)}.")
-            neg_seqs = neg_seqs[start:end]
+            train_neg_seqs = neg_seqs[start:end]
 
         from cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)
@@ -299,7 +299,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         # First swapping the first n_swap samples in train with the first n_swap samples in neg_seqs
         n_swap = 250  # Number of samples to swap for Reshef inference
         train_pos_seqs = np.array(train_pos_seqs)
-        train_neg_seqs = np.array(train_neg_seqs)  # TODO: Change to train_neg_seqs!!!
+        train_neg_seqs = np.array(train_neg_seqs)
         if len(train_pos_seqs) < n_swap or len(train_neg_seqs) < n_swap:
             raise ValueError("Not enough samples for Reshef inference. Need at least n_swap positive and n_swap negative samples.")
         train_pos_seqs[:n_swap], train_neg_seqs[:n_swap] = train_neg_seqs[:n_swap], train_pos_seqs[:n_swap]
@@ -307,18 +307,30 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         full_data = np.concatenate([train_pos_seqs, train_neg_seqs,
                                     valid_pos_seqs, valid_neg_seqs])
         if test_pos_seqs is not None and test_neg_seqs is not None:
-            full_data = np.concatenate([test_pos_seqs, test_neg_seqs])
+            test_data = np.concatenate([test_pos_seqs, test_neg_seqs])
+            full_data = np.concatenate([full_data, test_data])
         # create a labels array for Reshef inference (1 for positive, 0 for negative), but make sure label the first n_swap correctly because of the swap
         full_labels = np.concatenate([np.zeros(len(train_pos_seqs[:n_swap])), np.ones(len(train_pos_seqs[n_swap:])),
                                       np.ones(len(train_neg_seqs[:n_swap])), np.zeros(len(train_neg_seqs[n_swap:])),
                                       np.ones(len(valid_pos_seqs)), np.zeros(len(valid_neg_seqs))])
         if test_pos_seqs is not None and test_neg_seqs is not None:
-            full_labels = np.concatenate([np.ones(len(test_pos_seqs)), np.zeros(len(test_neg_seqs))])
+            test_labels = np.concatenate([np.ones(len(test_pos_seqs)), np.zeros(len(test_neg_seqs))])
+            full_labels = np.concatenate([full_labels, test_labels])
+        inds = [0, len(train_pos_seqs[:n_swap]), len(train_pos_seqs[n_swap:]),
+                len(train_neg_seqs[:n_swap]), len(train_neg_seqs[n_swap:]),
+                len(valid_pos_seqs), len(valid_neg_seqs)]
+        if test_pos_seqs is not None and test_neg_seqs is not None:
+            inds.append(len(test_pos_seqs))
+            inds.append(len(test_neg_seqs))
+        for i in range(1, len(inds)):
+            inds[i] = inds[i - 1] + inds[i]
+        inds = np.array(inds)
         # save the full data & labels for Reshef inference under "cache/reshef_inference"
         np.save(os.path.join(reshef_cache_folder, "full_data.npy"), full_data)
         np.save(os.path.join(reshef_cache_folder, "full_labels.npy"), full_labels)
         np.save(os.path.join(reshef_cache_folder, "n_swap.npy"), np.array([n_swap]))
         np.savez(os.path.join(reshef_cache_folder, "parameters.npz"), n_swap=n_swap, reshef_negative_part=reshef_negative_part)
+        np.save(os.path.join(reshef_cache_folder, "inds.npy"), inds)
 
     # Load model state if available
     start_epoch = 0

@@ -1375,7 +1375,30 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
                                             to_savefig=True, thresholds=[0, 0.015, 0.03]):
     """
     Plot GMM classification results for multiple thresholds in a single figure with 4 subplots.
+    Also displays percentiles and current thresholds information.
     """
+
+    def calculate_all_differences():
+        """Calculate all log-likelihood differences for percentile analysis"""
+        all_differences = []
+
+        # Process patient test subjects
+        for patient_probs in patient_test_probs:
+            patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
+            patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
+            healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
+            diff = patient_ll - healthy_ll
+            all_differences.append(diff)
+
+        # Process healthy test subjects
+        for healthy_test_prob in healthy_test_probs:
+            healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
+            patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
+            healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
+            diff = patient_ll - healthy_ll
+            all_differences.append(diff)
+
+        return np.array(all_differences)
 
     def get_gmm_predictions(threshold):
         """Helper function to get predictions for a given threshold"""
@@ -1424,46 +1447,110 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
 
         return np.array(test_predictions), np.array(test_true_labels)
 
-    # Create figure with 2x2 subplots
-    fig, axs = plt.subplots(2, 2, figsize=(16, 12))
-    axs = axs.flatten()  # Flatten for easier indexing
+    # Calculate percentiles
+    all_diffs = calculate_all_differences()
+    abs_diffs = np.abs(all_diffs)
 
-    # Plot GMM results for each threshold
-    for idx, threshold in enumerate(thresholds):
-        print(f"\n--- Making Predictions for Threshold {threshold} ---")
+    percentiles = [90, 75, 50, 25]
+    percentiles = [100 - p for p in percentiles]  # Convert to 100 - percentile
+    percentile_values = np.percentile(abs_diffs, percentiles)
 
+    # Combine original thresholds with percentile thresholds
+    all_thresholds = thresholds + percentile_values.tolist()
+
+    # Create figure with appropriate number of subplots (original + percentiles + SVM)
+    total_plots = len(thresholds) + len(percentiles) + 1  # +1 for SVM
+    rows = (total_plots + 3) // 4  # Calculate rows needed (4 columns max)
+    cols = min(4, total_plots)
+
+    fig, axs = plt.subplots(rows, cols, figsize=(4*cols, 3*rows))
+    if total_plots == 1:
+        axs = [axs]
+    else:
+        axs = axs.flatten() if rows > 1 else axs
+
+    plot_idx = 0
+
+    # 1. First plot: No threshold (normal)
+    no_threshold_idx = [i for i, t in enumerate(thresholds) if t == 0]
+    if no_threshold_idx:
+        threshold = thresholds[no_threshold_idx[0]]
         gmm_predictions, y_test = get_gmm_predictions(threshold)
 
         if len(gmm_predictions) == 0:
-            print(f"No predictions made for threshold {threshold} (all differences below threshold)")
-            # Create empty confusion matrix
             cm_gmm = np.zeros((2, 2), dtype=int)
             accuracy = 0.0
         else:
             cm_gmm = confusion_matrix(y_test, gmm_predictions)
             accuracy = np.mean(gmm_predictions == y_test)
-            print(f"Test subjects classified: {len(gmm_predictions)} total")
 
-        # Plot confusion matrix
         sns.heatmap(cm_gmm, annot=True, fmt='d', cmap='Blues',
                     xticklabels=['Healthy', 'Patient'],
                     yticklabels=['Healthy', 'Patient'],
-                    ax=axs[idx])
+                    ax=axs[plot_idx])
 
-        threshold_str = f'Threshold: {threshold}' if threshold > 0 else 'No Threshold'
-        axs[idx].set_title(f'GMM - {threshold_str}\nACC: {accuracy:.3f}')
-        axs[idx].set_ylabel('True Label')
-        axs[idx].set_xlabel('Predicted Label')
+        axs[plot_idx].set_title(f'GMM - No Threshold\nACC: {accuracy:.3f}')
+        axs[plot_idx].set_ylabel('True Label')
+        axs[plot_idx].set_xlabel('Predicted Label')
+        plot_idx += 1
 
-    # Plot SVM results in the last subplot
+    # 2. Then plot: Original thresholds (excluding 0 threshold)
+    for threshold in thresholds:
+        if threshold > 0:
+            gmm_predictions, y_test = get_gmm_predictions(threshold)
+
+            if len(gmm_predictions) == 0:
+                cm_gmm = np.zeros((2, 2), dtype=int)
+                accuracy = 0.0
+            else:
+                cm_gmm = confusion_matrix(y_test, gmm_predictions)
+                accuracy = np.mean(gmm_predictions == y_test)
+
+            sns.heatmap(cm_gmm, annot=True, fmt='d', cmap='Blues',
+                        xticklabels=['Healthy', 'Patient'],
+                        yticklabels=['Healthy', 'Patient'],
+                        ax=axs[plot_idx])
+
+            axs[plot_idx].set_title(f'GMM - Threshold: {threshold}\nACC: {accuracy:.3f}')
+            axs[plot_idx].set_ylabel('True Label')
+            axs[plot_idx].set_xlabel('Predicted Label')
+            plot_idx += 1
+
+    # 3. Then plot: SVM results
     svm_accuracy = np.trace(cm_svm_rbf) / np.sum(cm_svm_rbf)
     sns.heatmap(cm_svm_rbf, annot=True, fmt='d', cmap='Greens',
                 xticklabels=['Healthy', 'Patient'],
                 yticklabels=['Healthy', 'Patient'],
-                ax=axs[3])
-    axs[3].set_title(f'SVM-RBF\nACC: {svm_accuracy:.3f}')
-    axs[3].set_ylabel('True Label')
-    axs[3].set_xlabel('Predicted Label')
+                ax=axs[plot_idx])
+    axs[plot_idx].set_title(f'SVM-RBF\nACC: {svm_accuracy:.3f}')
+    axs[plot_idx].set_ylabel('True Label')
+    axs[plot_idx].set_xlabel('Predicted Label')
+    plot_idx += 1
+
+    # 4. Lastly plot: Percentile thresholds
+    for percentile, threshold in zip(percentiles, percentile_values):
+        gmm_predictions, y_test = get_gmm_predictions(threshold)
+
+        if len(gmm_predictions) == 0:
+            cm_gmm = np.zeros((2, 2), dtype=int)
+            accuracy = 0.0
+        else:
+            cm_gmm = confusion_matrix(y_test, gmm_predictions)
+            accuracy = np.mean(gmm_predictions == y_test)
+
+        sns.heatmap(cm_gmm, annot=True, fmt='d', cmap='Oranges',
+                    xticklabels=['Healthy', 'Patient'],
+                    yticklabels=['Healthy', 'Patient'],
+                    ax=axs[plot_idx])
+
+        axs[plot_idx].set_title(f'GMM - {100 - percentile}th Percentile\nThreshold: {threshold:.4f}, ACC: {accuracy:.3f}')
+        axs[plot_idx].set_ylabel('True Label')
+        axs[plot_idx].set_xlabel('Predicted Label')
+        plot_idx += 1
+
+    # Hide any unused subplots
+    for idx in range(plot_idx, len(axs)):
+        axs[idx].set_visible(False)
 
     plt.suptitle(f'Classification Results Comparison (Fold {k_fold_disease}, Components: {chosen_components})',
                  fontsize=16, y=0.98)
@@ -1474,26 +1561,6 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
                                  f'confusion_matrix_multi_threshold_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.png'),
                     dpi=300, bbox_inches='tight')
     plt.show()
-
-    # # Print detailed classification reports for each threshold
-    # print("\n" + "=" * 80)
-    # print("CLASSIFICATION RESULTS SUMMARY")
-    # print("=" * 80)
-    #
-    # for threshold in thresholds:
-    #     print(f"\n--- Threshold: {threshold} ---")
-    #     gmm_predictions, y_test = get_gmm_predictions(threshold)
-    #
-    #     if len(gmm_predictions) == 0:
-    #         print("No predictions made (all differences below threshold)")
-    #         continue
-    #
-    #     overall_accuracy = np.mean(gmm_predictions == y_test)
-    #     print(f"Overall Accuracy: {overall_accuracy:.3f}")
-    #     print(f"Classified subjects: {len(gmm_predictions)}")
-    #     print("Classification Report:")
-    #     print(classification_report(y_test, gmm_predictions, labels=[0, 1], target_names=['Healthy', 'Patient']))
-
 
 def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components,
                                            k_fold_disease, model_config_str, to_savefig=True):

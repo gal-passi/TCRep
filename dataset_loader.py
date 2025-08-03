@@ -51,7 +51,7 @@ class DatasetLoader:
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
                  remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False,
-                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, verbose=True):
+                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, run_on_full_data=False, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -264,16 +264,20 @@ class DatasetLoader:
         test_patient_ids = unique_patient_ids[:num_test_patients // 2]
         valid_patient_ids = unique_patient_ids[num_test_patients // 2:num_test_patients]
         train_patient_ids = unique_patient_ids[num_test_patients:]
+
+        if run_on_full_data:
+            # Add to the self.df_bld the valid and test patient ids with added ending to their patient_ids
+            valid_df = df_bld[df_bld['patient_id'].isin(valid_patient_ids)].copy()
+            valid_df['patient_id'] = valid_df['patient_id'].astype(str) + '_full'
+            test_df = df_bld[df_bld['patient_id'].isin(test_patient_ids)].copy()
+            test_df['patient_id'] = test_df['patient_id'].astype(str) + '_full'
+            df_bld = pd.concat([df_bld, valid_df, test_df], axis=0, ignore_index=True)
+
         # translate back to the inds according to unique_patient_ids
         test_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in test_patient_ids])
         valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
         train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
 
-        # Check that each sequences in the dataset starts with 'C' and ends with 'F'! Otherwise, raise an error
-        # for seq in df_bld['AASeq'].unique().tolist() + df_hlt['AASeq'].unique().tolist():
-        #     if not (seq.startswith('C') and seq.endswith('F')):
-        #         raise ValueError(
-        #             f"Sequence {seq} does not start with 'C' and end with 'F'! (Working with dataset {dataset_type})")
 
         if k_fold > 0:
             name_metadata = f"_fold_{k_fold}"

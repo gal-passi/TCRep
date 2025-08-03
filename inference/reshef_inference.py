@@ -52,11 +52,15 @@ def reshef_inference(train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_s
     confidence, variability = confidence.detach().numpy(), variability.detach().numpy()
 
     # Create indices for the scatter plot data
-    inds = [0, len(train_pos_seqs[:n_swap]), len(train_pos_seqs[n_swap:]),
-            len(train_neg_seqs[:n_swap]), len(train_neg_seqs[n_swap:]),
-            len(valid_pos_seqs), len(valid_neg_seqs)]
-    for i in range(1, len(inds)):
-        inds[i] = inds[i - 1] + inds[i]
+    inds_path = os.path.join(reshef_cache_folder, "inds.npy")
+    if os.path.exists(inds_path):
+        inds = np.load(inds_path)
+    else:
+        inds = [0, len(train_pos_seqs[:n_swap]), len(train_pos_seqs[n_swap:]),
+                len(train_neg_seqs[:n_swap]), len(train_neg_seqs[n_swap:]),
+                len(valid_pos_seqs), len(valid_neg_seqs)]
+        for i in range(1, len(inds)):
+            inds[i] = inds[i - 1] + inds[i]
 
     # Function for picking random indices for the scatter plot
     rng = np.random.default_rng(seed=42)  # For reproducibility
@@ -72,6 +76,8 @@ def reshef_inference(train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_s
 
     if to_save_train_data:
         save_data_for_training(full_data, confidence, inds, reshef_cache_folder, pick_random_indices)
+
+    calculate_epoch_wise_agreement(model_outputs, labels, inds)
     pass
 
 
@@ -236,8 +242,7 @@ def save_data_for_training(full_data, confidence, inds, reshef_cache_folder, pic
 
     seqs_return_to_positives_green = full_data[chosen_indices2]
     all_blue = full_data[inds[1]:inds[2]]  # Train Positive
-    all_blus_plus_seqs_return_to_positives_green = np.concatenate((all_blue, seqs_return_to_positives_green),
-                                                                  axis=0)
+    all_blus_plus_seqs_return_to_positives_green = np.concatenate((all_blue, seqs_return_to_positives_green), axis=0)
 
     # save to npz file
     np.savez(os.path.join(reshef_cache_folder, "reshef_inference_data.npz"),
@@ -256,3 +261,127 @@ def load_parameters(reshef_cache_folder, n_swap=100, negative_part=0):
         n_swap = parameters['n_swap']
         negative_part = parameters['reshef_negative_part']
     return n_swap, negative_part
+
+
+def calculate_epoch_wise_agreement(model_outputs, labels, inds, reshef_cache_folder=None):
+    validation_labels = labels[inds[4]:inds[6]]
+    model_validation_outputs = []
+    for model_output in model_outputs:
+        model_output = torch.tensor(model_output, dtype=torch.float32)
+        model_output = torch.softmax(model_output, dim=1)  # Apply log softmax to logits
+        # take only validation data
+        model_output = model_output[inds[4]:inds[6]]
+        model_validation_outputs.append(model_output)
+
+    true_labels = np.argmax(validation_labels, axis=1)  # Shape: (num_samples,)
+
+    def compute_ece(confidences, predictions, true_labels, n_bins=10):
+        bin_boundaries = np.linspace(0, 1, n_bins + 1)
+        ece = 0.0
+        for i in range(n_bins):
+            start, end = bin_boundaries[i], bin_boundaries[i + 1]
+            in_bin = (confidences > start) & (confidences <= end)
+            prop_in_bin = np.mean(in_bin)
+            if prop_in_bin > 0:
+                acc_in_bin = np.mean(predictions[in_bin] == true_labels[in_bin])
+                avg_conf_in_bin = np.mean(confidences[in_bin])
+                ece += np.abs(acc_in_bin - avg_conf_in_bin) * prop_in_bin
+        return ece
+
+    def compute_mce(confidences, predictions, true_labels, n_bins=10):
+        bin_boundaries = np.linspace(0, 1, n_bins + 1)
+        max_error = 0.0
+        for i in range(n_bins):
+            start, end = bin_boundaries[i], bin_boundaries[i + 1]
+            in_bin = (confidences > start) & (confidences <= end)
+            if np.any(in_bin):
+                acc_in_bin = np.mean(predictions[in_bin] == true_labels[in_bin])
+                avg_conf_in_bin = np.mean(confidences[in_bin])
+                error = np.abs(acc_in_bin - avg_conf_in_bin)
+                max_error = max(max_error, error)
+        return max_error
+
+    def compute_brier_score(probs, true_labels_onehot):
+        return np.mean(np.sum((probs - true_labels_onehot) ** 2, axis=1))
+
+    def compute_nll(probs, true_labels):
+        clipped_probs = np.clip(probs[np.arange(len(true_labels)), true_labels], 1e-12, 1.0)
+        return -np.mean(np.log(clipped_probs))
+
+    ece_list = []
+    mce_list = []
+    brier_list = []
+    nll_list = []
+
+    for probs in model_validation_outputs:
+        probs = probs.detach().numpy()  # Convert to numpy array
+        predictions = np.argmax(probs, axis=1)
+        confidences = probs.max(axis=1)[0]
+
+        ece = compute_ece(confidences, predictions, true_labels)
+        mce = compute_mce(confidences, predictions, true_labels)
+        brier = compute_brier_score(probs, validation_labels)
+        nll = compute_nll(probs, true_labels)
+
+        ece_list.append(ece)
+        mce_list.append(mce)
+        brier_list.append(brier)
+        nll_list.append(nll)
+
+    # Shape: (n_epochs, num_samples)
+    epoch_predictions = np.array([
+        np.argmax(probs, axis=1)
+        for probs in model_validation_outputs
+    ])
+
+    # Majority vote across epochs for each sample
+    from scipy.stats import mode
+    maj_vote_preds, _ = mode(epoch_predictions, axis=0, keepdims=False)
+
+    # Agreement = fraction of epochs matching majority prediction
+    agreement_per_sample = np.mean(epoch_predictions == maj_vote_preds[None, :], axis=0)
+    mean_epoch_agreement = np.mean(agreement_per_sample)
+
+    # Print statistics
+    def print_metric_stats(metric_list, name):
+        print(f"--- {name} ---")
+        print(f"Mean:      {np.mean(metric_list):.4f}")
+        print(f"Std:       {np.std(metric_list):.4f}")
+        print(f"Min:       {np.min(metric_list):.4f}")
+        print(f"Max:       {np.max(metric_list):.4f}")
+        print(f"Best Epoch: {np.argmin(metric_list)}")
+        print()
+
+    print(f"Mean Epoch Agreement: {mean_epoch_agreement:.4f}")
+    print_metric_stats(ece_list, "ECE (Expected Calibration Error)")
+    print_metric_stats(mce_list, "MCE (Maximum Calibration Error)")
+    print_metric_stats(brier_list, "Brier Score")
+    print_metric_stats(nll_list, "Negative Log Likelihood")
+
+    # Compute means and stds
+    metrics = {
+        "ECE": ece_list,
+        "MCE": mce_list,
+        "Brier Score": brier_list,
+    }
+    metric_names = list(metrics.keys())
+    means = [np.mean(metrics[m]) for m in metric_names]
+    stds = [np.std(metrics[m]) for m in metric_names]
+    # Plot
+    plt.figure(figsize=(8, 5))
+    bars = plt.bar(metric_names, means, yerr=stds, capsize=10, color='skyblue', edgecolor='black')
+    # Add labels on top of bars
+    for bar, mean in zip(bars, means):
+        yval = bar.get_height()
+        plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.02, f"{mean:.3f}", ha='center', va='bottom')
+    plt.ylim(0, 1.1)  # normalize all metrics to scale of [0, 1]
+    plt.title("Mean Calibration & Confidence Metrics Across Epochs\n"
+              f"Negative LL: mean: {np.mean(nll_list):.3f}, std: {np.std(nll_list):.3f}")
+    plt.ylabel("Score (Lower is Better)")
+    plt.grid(axis='y', linestyle='--', alpha=0.5)
+    plt.tight_layout()
+    if reshef_cache_folder:
+        plot_path = os.path.join(reshef_cache_folder, "epoch_wise_agreement_metrics.png")
+        plt.savefig(plot_path)
+        print(f"Saved epoch-wise agreement metrics plot at: {plot_path}")
+    plt.show()

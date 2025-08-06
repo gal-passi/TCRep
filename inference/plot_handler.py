@@ -279,23 +279,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # Get model outputs using batched prediction
         pos_probs = get_model_predictions_batched(trained_model, pos_seqs, sample_plots, device=device, threshold=threshold)
         neg_probs = get_model_predictions_batched(trained_model, neg_seqs, sample_plots, device=device, threshold=threshold)
-
-        # # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     pos_logits = trained_model(pos_seqs)
-        #     neg_logits = trained_model(neg_seqs)
-        # # Convert to probabilities
-        # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for positive and negative samples
         create_kde_from_histogram(pos_probs, ax1, test_pos_colors[i], f'Pos Set {i} ({unique_patient_ids[patient_ind]}) - {len(pos_seqs)}')
         create_kde_from_histogram(neg_probs, ax1, test_neg_colors[i], f'Neg Set {i} ({unique_patient_ids[patient_ind]}) - {len(neg_seqs)}')
-        # kde = sns.kdeplot(pos_probs, ax=ax1, color=test_pos_colors[i], label=f'Pos Set {i}')
-        # kde_normalizer(kde)
-        # kde = sns.kdeplot(neg_probs, ax=ax1, color=test_neg_colors[i], label=f'Neg Set {i}', common_norm=True)
-        # kde_normalizer(kde)
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
     ax1.set_ylim(0, 1.1)
@@ -318,22 +303,8 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # Get model outputs using batched prediction
         healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
         disease_probs = get_model_predictions_batched(trained_model, disease_seqs, sample_plots, device=device, threshold=threshold)
-        # # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     healthy_logits = trained_model(healthy_seqs)
-        #     disease_logits = trained_model(disease_seqs)
-        # # Convert to probabilities
-        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        # disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for healthy patient samples
         create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i], f'Healthy Set {i} ({patient}) - {len(healthy_seqs)}')
         create_kde_from_histogram(disease_probs, ax2, test_colors[i], f'Ill Set {i} ({unique_patient_ids[patient_ind]}) - {len(disease_seqs)}')
-        # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i], label=f'Healthy Set {i}', common_norm=True)
-        # kde_normalizer(kde)
-        # kde = sns.kdeplot(disease_probs, ax=ax2, color=test_colors[i], label=f'Ill Set {i}', common_norm=True)
-        # kde_normalizer(kde)
     # More Healthy patients
     for i in range(len(test_inds), len(test_inds) + 6):
         patient = healthy_patients[i]
@@ -341,17 +312,7 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = np.unique(healthy_seqs)
         # Get model outputs using batched prediction
         healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
-        # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     healthy_logits = trained_model(healthy_seqs)
-        # # Convert to probabilities
-        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        # Plot KDE for healthy patient samples
         create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i - len(test_inds)], f'Healthy Set {i} ({patient}) - {len(healthy_seqs)}')
-        # kde = sns.kdeplot(healthy_probs, ax=ax2, color=healthy_colors[i - len(test_inds)], label=f'Healthy Set {i}', common_norm=True)
-        # kde_normalizer(kde)
     ax2.set_xlabel("Predicted Probability for Positive Class")
     ax2.set_ylabel("Density")
     ax2.set_ylim(0, 1.1)
@@ -375,7 +336,6 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         plt.show()
 
     # Add plot for cumulative distributions instead of KDE:
-    # Add plot for cumulative distributions instead of KDE:
     # Create a new figure for CDF plots with two subplots
     fig_cdf, (cdf_ax1, cdf_ax2) = plt.subplots(1, 2, figsize=(15, 6))
     fig_cdf.suptitle(f"Cumulative Distribution Functions for {model_type} Model", fontsize=16)
@@ -393,15 +353,6 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # Get model outputs using batched prediction
         pos_probs = get_model_predictions_batched(trained_model, pos_seqs, sample_plots, device=device, threshold=threshold)
         neg_probs = get_model_predictions_batched(trained_model, neg_seqs, sample_plots, device=device, threshold=threshold)
-        # # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     pos_logits = trained_model(pos_seqs)
-        #     neg_logits = trained_model(neg_seqs)
-        # # Convert to probabilities
-        # pos_probs = torch.softmax(pos_logits, dim=1)[:, 1].cpu().numpy()
-        # neg_probs = torch.softmax(neg_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDFs for positive and negative samples
         # For positive sequences
@@ -432,15 +383,6 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         # Get model outputs using batched prediction
         healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
         disease_probs = get_model_predictions_batched(trained_model, disease_seqs, sample_plots, device=device, threshold=threshold)
-        # # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     healthy_logits = trained_model(healthy_seqs)
-        #     disease_logits = trained_model(disease_seqs)
-        # # Convert to probabilities
-        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
-        # disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDFs for healthy and disease samples
         # For healthy sequences
@@ -460,13 +402,6 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         healthy_seqs = np.unique(healthy_seqs)
         # Get model outputs using batched prediction
         healthy_probs = get_model_predictions_batched(trained_model, healthy_seqs, sample_plots, device=device, threshold=threshold)
-        # # Get model outputs
-        # trained_model.to(device)
-        # trained_model.eval()
-        # with torch.no_grad():
-        #     healthy_logits = trained_model(healthy_seqs)
-        # # Convert to probabilities
-        # healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
 
         # Plot CDF for healthy patient samples
         x = np.sort(healthy_probs)
@@ -505,13 +440,27 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
     - trained_model: The trained neural network model
     - Various data-related parameters to extract sequences and patient sets
     """
-    # Get 10 random healthy patients for average healthy distribution
+    # Get X random healthy patients for average healthy distribution
     healthy_patients = df_hlt["patient_id"].unique()
-    np.random.shuffle(healthy_patients)
-    healthy_patients = healthy_patients[:10]
+    rng = np.random.default_rng(42)  # For reproducibility
+    healthy_patients = sorted(healthy_patients)
+    healthy_patients = rng.permutation(healthy_patients)
+    healthy_to_take = min(len(healthy_patients) // 2, len(test_patient_inds) + len(valid_patient_inds))
+    healthy_patients = healthy_patients[:healthy_to_take]
 
     # Prepare combined test and validation indices
     test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
+
+    sample_rng = np.random.default_rng(42)  # For reproducibility
+    def sample_seqs(sequences, sample_size=20000):
+        """Helper function to sample sequences for plotting"""
+        if isinstance(sequences, list):
+            sequences = np.array(sequences)
+        sequences = np.sort(sequences)
+        if len(sequences) > sample_size:
+            indices = sample_rng.choice(len(sequences), size=sample_size, replace=False)
+            sequences = sequences[indices]
+        return sequences
 
     # Collect distributions
     healthy_dists = []
@@ -522,7 +471,7 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
     # Process healthy patients to create average distribution
     for patient in healthy_patients:
         healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
-        healthy_seqs = np.unique(healthy_seqs)
+        healthy_seqs = sample_seqs(healthy_seqs)
 
         # Get model outputs
         trained_model.to(device)
@@ -538,7 +487,7 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
     for i, patient_ind in enumerate(test_inds):
         # Get disease sequences for this patient
         disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
-        disease_seqs = np.unique(disease_seqs)
+        disease_seqs = sample_seqs(disease_seqs)
 
         # Get model outputs
         trained_model.to(device)
@@ -559,21 +508,68 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
         else:
             individual_disease_labels.append(f"Valid Patient {i - len(test_patient_inds)}")
 
+    save_data_as_pickle = False
+    if save_data_as_pickle:
+        # save to "plots/plots_for_posters/data/"
+        import pickle
+        with open(f"plots/plots_for_posters/data/average_distribution_plot_data.pkl", "wb") as f:
+            pickle.dump({
+                "healthy_dists": healthy_dists,
+                "disease_dists": disease_dists,
+            }, f)
+
     # FIGUREs variables:
     xlim = (-0.15, 1.05)
     ylim = (-0.02, 1.2)
     dpi = 600
+    threshold = 0.85  # Define the threshold
 
     # FIGURE 1: Average distributions with std
-    fig1, ax1 = plt.subplots(figsize=(6, 6))
+    fig1, ax1 = plt.subplots(figsize=(6, 6), dpi=dpi)
     for spine in ax1.spines.values():
         spine.set_edgecolor('black')
         spine.set_linewidth(0.75)
-    fig1.suptitle(f"Average Output Distributions for {model_type} Model", fontsize=16)
-    # Plot average healthy distribution with std
-    plot_average_dist_with_std(ax1, healthy_dists, color="#7BC8F6", label="Healthy Distribution")
+    # fig1.suptitle(f"Average Output Distributions for {model_type} Model", fontsize=16)
     # Plot average disease distribution with std
-    plot_average_dist_with_std(ax1, disease_dists, color="#FFA500", label="Patient Distribution")
+    disease_line = plot_average_dist_with_std(ax1, disease_dists, color="#FFA500", label="MS Distribution")
+    # Plot average healthy distribution with std
+    healthy_line = plot_average_dist_with_std(ax1, healthy_dists, color="#7BC8F6", label="Healthy Distribution")
+
+    # Fill area under curves after threshold
+    fill_area_after_threshold(ax1, disease_line, threshold+0.00205, color="grey", alpha=0.2)
+    fill_area_after_threshold(ax1, healthy_line, threshold, color="grey", alpha=0.2)
+
+    # Add threshold line
+    ax1.plot([threshold, threshold], [-1, 0.2], color='gray', linestyle='--', linewidth=1.5, alpha=0.3,
+             label=f'Threshold = {threshold}')
+    ax1.text(threshold + 0.01, 0.20, 'Confident\nPathogenic', rotation=0, va='bottom', ha='center', fontsize=7,
+             alpha=0.9, fontweight='normal', bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
+
+    # Add means with weights and stds as text labels here:
+    # V1: (pw=4.45)
+    # healthy_means = [0.03152952, 0.6325085]  # Your two healthy means
+    # healthy_weights = [0.89628606, 0.10371394]  # Corresponding weights
+    # healthy_stds = [0.00832225, 0.00832225]  # Corresponding standard deviations
+    #
+    # disease_means = [0.04742954, 0.68807728]  # Your two disease means
+    # disease_weights = [0.8594496, 0.1405504]  # Corresponding weights
+    # disease_stds = [0.01200714, 0.01200714]  # Corresponding standard deviations
+    # V2: (pw=5.45)
+    healthy_means = [0.01233453, 0.74463677]  # Your two healthy means
+    healthy_weights = [0.9109375, 0.0890625]  # Corresponding weights
+    healthy_stds = [0.00474603, 0.00474603]  # Corresponding standard deviations
+
+    disease_means = [0.01504089, 0.80275572]  # Your two disease means
+    disease_weights = [0.86672419, 0.13327581]  # Corresponding weights
+    disease_stds = [0.00638802, 0.00638802]  # Corresponding standard deviations
+
+    # draw line at healthy_means
+    ax1.axvline(x=healthy_means[0], color="#7BC8F6", linestyle='--', linewidth=1, alpha=0.5, label="Healthy GMM μ=0.74")
+    ax1.axvline(x=healthy_means[1], color="#7BC8F6", linestyle='--', linewidth=1, alpha=0.5)
+    # draw line at disease_means
+    ax1.axvline(x=disease_means[0], color="#FFA500", linestyle='--', linewidth=1, alpha=0.5, label="MS GMM μ=0.80")
+    ax1.axvline(x=disease_means[1], color="#FFA500", linestyle='--', linewidth=1, alpha=0.5)
+
     ax1.set_xlabel("Predicted Probability for Positive Class")
     ax1.set_ylabel("Density")
     ax1.set_xlim(xlim[0], xlim[1])  # Focus on the set range
@@ -582,7 +578,21 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
     ax1.set_yticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.2
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
+
+    # add text at the top of the plot for healthy means
+    # txt_height = 1.23 + 0.04
+    # ax1.text(healthy_means[0] - 0.03, txt_height, f'{healthy_weights[0]:.2f}',
+    #          color="black", fontsize=8, ha='center', va='top', rotation=45)
+    # ax1.text(healthy_means[1] - 0.03, txt_height, f'{healthy_weights[1]:.2f}',
+    #          color="black", fontsize=8, ha='center', va='top', rotation=45)
+    # # add text at the top of the plot for disease means
+    # ax1.text(disease_means[0] + 0.03, txt_height, f'{disease_weights[0]:.2f}',
+    #          color="black", fontsize=8, ha='center', va='top', rotation=45)
+    # ax1.text(disease_means[1] + 0.03, txt_height, f'{disease_weights[1]:.2f}',
+    #          color="black", fontsize=8, ha='center', va='top', rotation=45)    # if we move the tight_layout to this line, we need to change 1.23 -> 1.27
+    # plt.legend(fontsize=14, framealpha=1.0)
     plt.tight_layout()
+    # plt.show()
 
     # Save figure 1
     fig1_path = f"plots/{model_type}_model/dist_model_output/average_distributions_nolegend_{get_model_config_str(args)}.png"
@@ -738,13 +748,36 @@ def plot_average_dist_with_std(ax, distributions, color, label, bins=50, min_val
             normalized_main_y - normalized_std_y,
             normalized_main_y + normalized_std_y,
             color=color,
-            alpha=0.3
+            alpha=0.2
         )
 
     # Set the label after normalization
     line.set_label(label)
 
     return line
+
+
+def fill_area_after_threshold(ax, line, threshold, color, alpha=0.2):
+    """
+    Fill the area under a curve after a given threshold.
+
+    Parameters:
+    - ax: Matplotlib axis
+    - line: The line object from the KDE plot
+    - threshold: The x-value threshold after which to fill
+    - color: Color for the fill
+    - alpha: Transparency of the fill
+    """
+    x_data = line.get_xdata()
+    y_data = line.get_ydata()
+
+    # Find indices where x >= threshold
+    mask = x_data >= threshold
+
+    if np.any(mask):
+        # Fill area under curve after threshold
+        ax.fill_between(x_data[mask], -1, y_data[mask],
+                        color=color, alpha=alpha)
 
 
 def plot_output_distributions_unseen_ms(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,

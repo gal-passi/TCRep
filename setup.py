@@ -198,4 +198,8 @@ if __name__ == '__main__':
     study = build_study(study_id, study_df, "High throughput T cell receptor sequencing identifies clonally expanded CD8+ T cell populations in Alopecia Areata",
                 [], [], [])
 
-
+    study_id = "immunoSEQ03"
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "A circulating reservoir of pathogenic-like CD4+ T cells shares a genetic and phenotypic signature with the inflamed synovial micro-environment",
+                [], [], [])

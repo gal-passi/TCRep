@@ -10,12 +10,13 @@ from itertools import combinations, chain
 
 from networkx import all_neighbors
 from tqdm import tqdm
-from Curation import Study
+from Curation import Study, filter_df
 from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
 import hashlib
 from collections import defaultdict
 import random
 import matplotlib.pyplot as plt
+from definitions import TCR_DB2_PATH
 
 
 STUDY_ID = 'PRJNA393498'  # Ankylosing Spondylitis study
@@ -126,18 +127,7 @@ class DatasetLoader:
                         # remove from hlt those patients that were picked
                         df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
                     if extra_filter:
-                        # Filtering sequences by length
-                        df_bld = df_bld[df_bld['AASeq'].str.len() > 10]  # remove sequences that are too short
-                        df_bld = df_bld[df_bld['AASeq'].str.len() < 20]  # remove sequences that are too long
-                        df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 10]  # remove sequences that are too short
-                        df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 20]  # remove sequences that are too long
-
-                        # Filtering patients with 5k sequences less than top_n_seqs (if it exists)
-                        if top_n_seqs is not None:
-                            # Each patient with unique AASeqs less than 1000 * top_n_seqs should be completely removed:
-                            min_seq_count = 1000 * top_n_seqs - 5000
-                            df_bld = df_bld.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
-                            df_hlt = df_hlt.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
             elif dataset_type == 'ms_hlt_article':
                 df_bld, df_hlt = df, df_h
                 # Only Healthy df from article
@@ -193,10 +183,92 @@ class DatasetLoader:
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+            elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
+                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
+                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
+                    unique_bld_patient_ids = df_bld['patient_id'].unique()
+                    rng = np.random.default_rng(seed=42)
+                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
+                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+            elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
+                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
+                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
+                    unique_bld_patient_ids = df_bld['patient_id'].unique()
+                    rng = np.random.default_rng(seed=42)
+                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
+                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+            elif dataset_type == 't1d':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+            elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
+                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
+                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
+                    unique_bld_patient_ids = df_bld['patient_id'].unique()
+                    rng = np.random.default_rng(seed=42)
+                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
+                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+            elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
+                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
+                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
+                    unique_bld_patient_ids = df_bld['patient_id'].unique()
+                    rng = np.random.default_rng(seed=42)
+                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
+                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
             elif dataset_type == 'ms_plus_article2_ms':
                 df_bld_article2 = self.get_full_article2_dataframe()
                 df_bld = pd.concat([df, df_bld_article2], axis=0, ignore_index=True)
                 df_hlt = df_h
+            elif dataset_type == 'jia_tcrdb2':
+                raise NotImplementedError("JIA TCRDB2 dataset is not implemented yet!")
             else:
                 raise ValueError("Invalid dataset type")
         if verbose:
@@ -254,7 +326,7 @@ class DatasetLoader:
         # exit(0)
 
         # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
-        if dataset_type == 'cmv' or dataset_type == 'article_sle':
+        if dataset_type == 'cmv' or 'article_sle' in dataset_type or 't1d' in dataset_type:
             num_test_patients = 4
         else:
             num_test_patients = 8
@@ -283,7 +355,7 @@ class DatasetLoader:
             name_metadata = f"_fold_{k_fold}"
         else:
             name_metadata = ""
-        if dataset_type == 'article_sle':
+        if 'article_sle' in dataset_type or 't1d' in dataset_type:
             num_of_patients = 2
             num_of_healthy = 2
         else:
@@ -1910,3 +1982,18 @@ class DatasetLoader:
         plt.xticks(rotation=90)
         plt.legend()
         plt.show()
+
+def apply_extra_filter(df_bld, df_hlt, top_n_seqs):
+    # Filtering sequences by length
+    df_bld = df_bld[df_bld['AASeq'].str.len() > 10]  # remove sequences that are too short
+    df_bld = df_bld[df_bld['AASeq'].str.len() < 20]  # remove sequences that are too long
+    df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 10]  # remove sequences that are too short
+    df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 20]  # remove sequences that are too long
+
+    # Filtering patients with 5k sequences less than top_n_seqs (if it exists)
+    if top_n_seqs is not None:
+        # Each patient with unique AASeqs less than 1000 * top_n_seqs should be completely removed:
+        min_seq_count = 1000 * top_n_seqs - 5000
+        df_bld = df_bld.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
+        df_hlt = df_hlt.groupby('patient_id').filter(lambda x: len(x['AASeq'].unique()) >= min_seq_count)
+    return df_bld, df_hlt

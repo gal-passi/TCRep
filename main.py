@@ -523,11 +523,11 @@ def combine_to_dataframe(metrics_data, additional_values):
     return df
 
 
-def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True):
+def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True, to_recalculate=False):
     base_plot_save_path = f"plots/common_seqs/{dataset_type}"
     os.makedirs(base_plot_save_path, exist_ok=True)
 
-    if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
+    if not to_recalculate and os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
         print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
         return
 
@@ -551,6 +551,9 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 15), replace=False)
     df = df[df['patient_id'].isin(rand_patients)]
 
+    # per patient id, pick 20,000 AASeqs:
+    # df = df.groupby('patient_id').apply(lambda x: x.sample(n=min(20000, len(x)), replace=False)).reset_index(drop=True)
+
     # calculate common sequences in disease and healthy samples
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
     x_disease_list = [dataset_loader.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
@@ -561,15 +564,24 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         df1 = df[df["patient_id"] == patient_id_bld]
         if option == 1:
             # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
-            random_patients = np.random.choice(df_h['patient_id'].unique(), size=15, replace=False)
+            # healthy_patient_ids = df_h['patient_id'].unique()
+            study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
+            rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
+            healthy_patient_ids = np.array(list(chain(*rand_patients)))
+            random_patients = healthy_patient_ids
+            # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
             df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
-            df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)
+            df_h_comb = df_h_temp
+            # df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)  # TODO: Change back
+            # per patient id, pick 20,000 AASeqs:
+            # df_h_comb = df_h_comb.groupby('patient_id').apply(lambda x: x.sample(n=min(20000, len(x)), replace=False)).reset_index(drop=True)
         else:
             # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
             patient_seqs_len = len(df1)
             all_seqs_h = df_h["AASeq"]
             df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]
+        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(1, l)]
+        # x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]  # TODO: Change back
         return x_healthy
 
     # Average the results of all patients with disease
@@ -620,6 +632,7 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
     plt.legend(framealpha=1.0)
     plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
     plt.show()
+    pass
 
 
 def display_common_sequences_figure_healthy(dataset_loader, df_h, l=8, log_space=True):
@@ -946,11 +959,13 @@ if __name__ == '__main__':
     dataset_types = ['ms', 'ms_hlt_article', 'ms_plus_hlt_article',
                      'ms_extra', 'ms_extra_hlt_article', 'ms_extra_plus_hlt_article',
                      'ms_no_healthy_ms',
-                     'article', 'article2',
-                     'cmv',
-                     'article_sle', 'ms_plus_article2_ms',
+                     'article', 'article2', 'cmv',
+                     'article_sle', 'article_sle_hlt_ms_no_healthy_ms', 'article_sle_plus_hlt_ms_no_healthy_ms',
+                     't1d', 't1d_hlt_ms_no_healthy_ms', 't1d_plus_hlt_ms_no_healthy_ms',
+                     'ms_plus_article2_ms',
                      'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms',
-                     'ms_tcrdb2_no_healthy_ms_plus_hlt_article']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
+                     'ms_tcrdb2_no_healthy_ms_plus_hlt_article',
+                     'jia_tcrdb2']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
     optimizer_types = ['Adam', 'Adafactor']
@@ -1087,11 +1102,11 @@ if __name__ == '__main__':
     assert not ((neg_partition > 0) and to_sweep), "Cannot use negative partitioning and sweep at the same time"
     assert not ((neg_partition > 0) and to_ensemble), "Cannot use negative partitioning and ensemble at the same time"
     assert not (top_percent is not None and 'tcrdb2' not in dataset_type), "Cannot use top_percent when dataset_type does not contain 'tcrdb2'"
-    assert not (top_n_seqs is not None and 'tcrdb2' not in dataset_type), "Cannot use top_n_seqs when dataset_type does not contain 'tcrdb2'"
+    # assert not (top_n_seqs is not None and 'tcrdb2' not in dataset_type), "Cannot use top_n_seqs when dataset_type does not contain 'tcrdb2'"
     assert not (top_percent is not None and top_n_seqs is not None), "Cannot use both top_percent and top_n_seqs at the same time"
     assert not (extra_ms_from_pregnant and 'ms' not in dataset_type), "extra_ms_from_pregnant can only be used with MS dataset of tcrdb2.0"
     assert not (use_healthy_as_ms and 'ms' not in dataset_type), "use_healthy_as_ms can only be used with MS dataset of tcrdb2.0"
-    assert not (extra_filter and 'ms_tcrdb2' not in dataset_type), "extra_filter can only be used with MS TCRdb2 dataset"
+    # assert not (extra_filter and 'ms_tcrdb2' not in dataset_type), "extra_filter can only be used with MS TCRdb2 dataset"
     assert not (reshef_inference and changing_negatives), "Reshef inference is not applicable if changing negatives"
     assert not (reshef_filter_train and not reshef_inference), "Reshef filter train must be on when reshef inference is on"
 
@@ -1325,6 +1340,124 @@ if __name__ == '__main__':
                                              )
 
     if not dont_plot:
+        plot_extra_sequence_logo = False
+        if plot_extra_sequence_logo:
+            import logomaker
+            from collections import Counter
+
+            other_seqs = np.concatenate([neg_seqs, valid_neg_seqs, test_neg_seqs])
+
+            sequence_logo_version = 2
+            if sequence_logo_version == 1:
+                # === STEP 1: Find top 3 lengths in positive_seqs ===
+                positive_lengths = [len(seq) for seq in positive_seqs]
+                top3_lengths = [length for length, _ in Counter(positive_lengths).most_common(3)]
+
+                # === STEP 2: Function to create Position Frequency Matrix (PFM) ===
+                def get_pfm(seqs, seq_len):
+                    filtered_seqs = [seq for seq in seqs if len(seq) == seq_len]
+                    if not filtered_seqs:
+                        return None
+                    pfm = pd.DataFrame([Counter(col) for col in zip(*filtered_seqs)]).fillna(0)
+                    return pfm
+
+                # === STEP 3: Generate logos for each of top 3 lengths ===
+                fig, axs = plt.subplots(len(top3_lengths), 2, figsize=(14, 4 * len(top3_lengths)))
+                for i, seq_len in enumerate(top3_lengths):
+                    pos_pfm = get_pfm(positive_seqs, seq_len)
+                    oth_pfm = get_pfm(other_seqs, seq_len)
+                    if pos_pfm is not None:
+                        logomaker.Logo(pos_pfm, ax=axs[i, 0])
+                        axs[i, 0].set_title(f"Positive Sequences (Length {seq_len})")
+                        axs[i, 0].set_ylabel("Freq")
+                    else:
+                        axs[i, 0].text(0.5, 0.5, "No sequences", ha='center', va='center')
+                        axs[i, 0].axis('off')
+                    if oth_pfm is not None:
+                        logomaker.Logo(oth_pfm, ax=axs[i, 1])
+                        axs[i, 1].set_title(f"Other Sequences (Length {seq_len})")
+                        axs[i, 1].set_ylabel("Freq")
+                    else:
+                        axs[i, 1].text(0.5, 0.5, "No sequences", ha='center', va='center')
+                        axs[i, 1].axis('off')
+
+                    for ax in axs[i]:
+                        ax.set_xlabel("Position")
+
+                plt.tight_layout()
+                plt.show()
+            else:
+                # taking without C and F (can change to: [4:-4])
+                tmp_pos_seqs = np.array([seq[1:-1] for seq in positive_seqs])  # Remove start and stop codons
+                tmp_other_seqs = np.array([seq[1:-1] for seq in other_seqs])  # Remove start and stop codons
+
+                # === STEP 1: Find top 3 most common sequence lengths ===
+                positive_lengths = [len(seq) for seq in tmp_pos_seqs]
+                top3_lengths = [length for length, _ in Counter(positive_lengths).most_common(3)][:1]  # Taking only 1st
+
+                # === STEP 2: Function to create information content matrix ===
+                def get_info_matrix(seqs, seq_len):
+                    filtered_seqs = [seq for seq in seqs if len(seq) == seq_len]
+                    if not filtered_seqs:
+                        return None
+
+                    # Create frequency matrix
+                    columns = list(zip(*filtered_seqs))
+                    pfm_dicts = []
+                    for pos in columns:
+                        count = Counter(pos)
+                        pfm_dicts.append(count)
+
+                    counts_df = pd.DataFrame(pfm_dicts).fillna(0)
+
+                    # Ensure columns are amino acids and rows are positions (1-based)
+                    counts_df.index = range(1, seq_len + 1)
+
+                    # Convert counts to information content (bits)
+                    info_df = logomaker.transform_matrix(counts_df, from_type='counts', to_type='information')
+                    return info_df
+
+                # === STEP 3: Plotting ===
+                fig, axs = plt.subplots(len(top3_lengths), 2, figsize=(14, 4 * len(top3_lengths)))
+                axs = axs.reshape(len(top3_lengths), -1)
+                for ax in axs.flatten():
+                    for spine in ax.spines.values():
+                        spine.set_edgecolor('black')
+                        spine.set_linewidth(1.0)
+
+                for i, seq_len in enumerate(top3_lengths):
+                    pos_matrix = get_info_matrix(tmp_pos_seqs, seq_len)
+                    oth_matrix = get_info_matrix(tmp_other_seqs, seq_len)
+
+                    # Positive
+                    if pos_matrix is not None:
+                        logomaker.Logo(pos_matrix, ax=axs[i, 0])
+                        axs[i, 0].set_title(f"Positive Sequences (Length {seq_len})")
+                        axs[i, 0].set_ylabel("Bits")
+                        axs[i, 0].set_xticks(range(1, seq_len + 1))
+                    else:
+                        axs[i, 0].text(0.5, 0.5, "No sequences", ha='center', va='center')
+                        axs[i, 0].axis('off')
+                    # Other
+                    if oth_matrix is not None:
+                        logomaker.Logo(oth_matrix, ax=axs[i, 1])
+                        axs[i, 1].set_title(f"Other Sequences (Length {seq_len})")
+                        axs[i, 1].set_ylabel("Bits")
+                        axs[i, 1].set_xticks(range(1, seq_len + 1))
+                    else:
+                        axs[i, 1].text(0.5, 0.5, "No sequences", ha='center', va='center')
+                        axs[i, 1].axis('off')
+
+                    for ax in axs[i]:
+                        ax.set_xlabel("Position")
+                        ax.set_ylim(0, 3.55)  # for [1:-1]
+                        # ax.set_ylim(0, 1.48)  # for [4:-4]
+                        # ax.set_ylim(0, 4.32)  # Maximum entropy for 20 amino acids ≈ log2(20)
+
+                plt.tight_layout()
+                plt.show()
+                pass
+
         # if not dont_inference and not force_retrain and not log_wandb:
         #     class TrainedModelWrapper:
         #         def __init__(self, trained_model, aaseq_to_ratio, ratio_threshold=0.1e-5):
@@ -1346,11 +1479,50 @@ if __name__ == '__main__':
 
         # New distribution plot
         np.random.seed(42)
-        # print("Plotting the output distributions per patient (New)")
-        # plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-        #                                       test_masks, valid_masks, positive_seqs, df_bld,
-        #                                       df_hlt, model_type, log_wandb, args, device)
-
+        from models.cvc_basic_cacheing_model import CVCBasicCachingModel
+        print("Plotting the output distributions per patient (New)")
+        caching_model = CVCBasicCachingModel(trained_model, args, device, verbose=True)
+        # class TmpModel(nn.Module):
+        #     def __init__(self, model):
+        #         super(TmpModel, self).__init__()
+        #         self.model = model
+        #
+        #     def forward(self, x):
+        #         """
+        #         Args:
+        #             x: numpy array of shape (batch_size,) containing sequences as strings
+        #         Returns:
+        #             torch.Tensor of shape (batch_size, 2), raw logits
+        #         """
+        #         if isinstance(x, np.ndarray):
+        #             x = x.tolist()
+        #
+        #         batch_size = len(x)
+        #
+        #         # Decide for each sample whether to make it a "low score" or "high score"
+        #         rand_vals = torch.rand(batch_size)
+        #         is_low = rand_vals < 0.9  # 90% get values close to softmax [0, 1]
+        #
+        #         logits = torch.empty((batch_size, 2))
+        #
+        #         # Low confidence for dim 0 → large negative value
+        #         logits[is_low] = torch.tensor([10.0, -10.0])
+        #
+        #         # High confidence for dim 0 → large positive value
+        #         logits[~is_low] = torch.tensor([-10.0, 10.0])
+        #
+        #         rand_vals = torch.rand(batch_size)
+        #         to_change = 0.7 < rand_vals
+        #         logits[to_change] = torch.tensor([1.0, -1.0])
+        #         to_change_2 = 0.85 < rand_vals
+        #         logits[to_change_2] = torch.tensor([-1.0, 1.0])
+        #
+        #         return logits
+        # trained_model = TmpModel(trained_model)
+        # args.model_type = 'tmp_model'
+        plot_output_distributions_per_patient_new(caching_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                                  test_masks, valid_masks, positive_seqs, df_bld,
+                                                  df_hlt, model_type, log_wandb, args, device)
         # Plotting the output distributions
         # print("Plotting the output distributions")
         # plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,

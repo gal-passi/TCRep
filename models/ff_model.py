@@ -35,7 +35,8 @@ class FeedForwardClassifier(nn.Module):
                     one_hot[i, j, self.amino_acids.index(aa)] = 1.0
 
         # Flatten the one-hot encoding for the linear layer
-        return torch.tensor(one_hot.reshape(batch_size, -1), dtype=torch.float32)
+        device = self.fc_layers[0].weight.device
+        return torch.tensor(one_hot.reshape(batch_size, -1), dtype=torch.float32, device=device)
 
     def forward(self, sequences):
         """

@@ -382,7 +382,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             neg_indices = np.arange(len(train_neg_seqs))
             np.random.shuffle(neg_indices)
 
-
         for batch_idx in range(num_batches):
             # Get positive samples for this batch
             start_idx = batch_idx * pos_batch_size

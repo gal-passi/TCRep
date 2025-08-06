@@ -157,15 +157,7 @@ class Study:
             # merged_df_first = self._calculate_merged_df(df, sample_ids, condition, is_immunoseq_data)
 
             # Filter DF
-            patient_ids = merged_df['patient_id'].unique()
-            df_filtered = []
-            for patient_id in patient_ids:
-                df_per_patient = merged_df[merged_df['patient_id'] == patient_id]
-                df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs,
-                                                                  data_path=self._data_path, id=self._id)
-                # df_per_patient = self.tcrdb2_filtering(df_per_patient, patient_id)
-                df_filtered.append(df_per_patient)
-            merged_df = pd.concat(df_filtered, ignore_index=True)
+            merged_df = filter_df(merged_df, top_percent, top_n_seqs, self._data_path, self._id)
 
             # Check that the old df contain the same parameters as the new df:
             # print(f"Study: {self._id}")
@@ -327,6 +319,9 @@ class Study:
                 df[col] = np.nan
 
         df = df[required_cols]
+
+        if top_n_seqs is None and top_percent is None:
+            return df
 
         # calculate the topxk sequences by cloneFraction
         if top_n_seqs is not None:
@@ -520,6 +515,8 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_immunoSEQ21(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'immunoSEQ54':
         return build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ03':
+        return build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -978,6 +975,43 @@ def build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, b
 
     study.save()
     return study
+
+
+def build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, background):
+    found_usable = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source'].lower()
+        cell_type = row['Cell Type']
+        if cell_type[-1] == '+':
+            cell_type = cell_type[:-1]
+        condition = row['Condition']
+
+        patient_id = 'JIA_'+'_'.join(comment.split('_')[:2])
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+def filter_df(df, top_percent, top_n_seqs, data_path='', id=''):
+    patient_ids = df['patient_id'].unique()
+    df_filtered = []
+    for patient_id in patient_ids:
+        df_per_patient = df[df['patient_id'] == patient_id]
+        df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs, data_path=data_path, id=id)
+        # df_per_patient = self.tcrdb2_filtering(df_per_patient, patient_id)
+        df_filtered.append(df_per_patient)
+    df = pd.concat(df_filtered, ignore_index=True)
+    return df
 
 
 if __name__ == '__main__':

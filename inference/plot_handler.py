@@ -305,6 +305,10 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         disease_probs = get_model_predictions_batched(trained_model, disease_seqs, sample_plots, device=device, threshold=threshold)
         create_kde_from_histogram(healthy_probs, ax2, healthy_colors[i], f'Healthy Set {i} ({patient}) - {len(healthy_seqs)}')
         create_kde_from_histogram(disease_probs, ax2, test_colors[i], f'Ill Set {i} ({unique_patient_ids[patient_ind]}) - {len(disease_seqs)}')
+    # make sure that healthy_colors has enough colors to support len(test_inds) + 6, if not repeat the last color
+    if len(healthy_colors) < len(test_inds) + 6:
+        healthy_colors = np.concatenate((healthy_colors, np.tile(healthy_colors[-1], (len(test_inds) + 6 - len(healthy_colors), 1))))
+
     # More Healthy patients
     for i in range(len(test_inds), len(test_inds) + 6):
         patient = healthy_patients[i]

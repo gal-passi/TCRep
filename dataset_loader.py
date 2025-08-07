@@ -326,8 +326,10 @@ class DatasetLoader:
         # exit(0)
 
         # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
-        if dataset_type == 'cmv' or 'article_sle' in dataset_type or 't1d' in dataset_type:
+        if dataset_type == 'cmv':
             num_test_patients = 4
+        elif 'article_sle' in dataset_type or 't1d' in dataset_type:
+            num_test_patients = 10
         else:
             num_test_patients = 8
         if unique_patient_ids is None:
@@ -356,8 +358,8 @@ class DatasetLoader:
         else:
             name_metadata = ""
         if 'article_sle' in dataset_type or 't1d' in dataset_type:
-            num_of_patients = 2
-            num_of_healthy = 2
+            num_of_patients = filter_num_of_patients
+            num_of_healthy = filter_num_of_healthy
         else:
             num_of_patients = filter_num_of_patients
             num_of_healthy = filter_num_of_healthy
@@ -1222,7 +1224,7 @@ class DatasetLoader:
 
         # Reading and interpreting data files
         synapse_datafiles = [x for x in os.listdir(synapse_db_folder) if x.endswith(".bz2")]
-
+        # lupus_ids
         healthy_samples = []
         for datafile in tqdm(synapse_datafiles, desc="Processing data files", total=len(synapse_datafiles)):
             datafile_id = datafile.split("_")[-1][:-4]

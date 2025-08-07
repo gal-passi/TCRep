@@ -279,20 +279,34 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         os.makedirs(reshef_cache_folder, exist_ok=True)
 
         if reshef_filter_train:
-            # load reshef_inference_data.npz
             reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_data.npz")
-            if os.path.exists(reshef_inference_data_path):
+            combined_cache_folder = os.path.join("cache", "reshef_inference", "combined_partitions", "combined_reshef_inference_data.npz")
+            if os.path.exists(combined_cache_folder) and reshef_negative_part == 0:
+                print(f"Loading Reshef inference data from combined cache: {combined_cache_folder}")
+                # load to neg_seqs_to_train & pos_seqs_to_train
+                reshef_inference_data = np.load(combined_cache_folder)
+                pos_seqs_to_train = reshef_inference_data['pos_seqs_to_train']
+                neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
+                # Set train_neg_seqs accordingly (by picking the right amount out of the pos_seqs to train:
+                if len(neg_seqs_to_train) < num_pos_samples * neg_pos_ratio:
+                    raise ValueError(f"Not enough negative sequences in combined cache. Need at least {num_pos_samples * neg_pos_ratio}, but have only {len(neg_seqs_to_train)}.")
+                train_neg_seqs = np.random.choice(neg_seqs_to_train, size=num_pos_samples * neg_pos_ratio, replace=False)
+            elif os.path.exists(reshef_inference_data_path):
+                print(f"Loading Reshef inference data from: {reshef_inference_data_path}")
                 reshef_inference_data = np.load(reshef_inference_data_path)
 
                 # load the arrays from the npz file
                 pos_seqs_to_train = reshef_inference_data['pos_seqs_to_train']
                 neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
-
+                neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
+                train_neg_seqs = neg_seqs_to_train
+                neg_pos_ratio = 8
+                args.neg_pos_ratio = neg_pos_ratio
                 # keep only sequences that appear in train_pos_seqs and pos_seqs_to_train
-                mask = np.isin(train_pos_seqs, pos_seqs_to_train)
-                train_pos_seqs = train_pos_seqs[mask]
-                mask = np.isin(train_neg_seqs, neg_seqs_to_train)  # TODO: Change to train_neg_seqs!!!
-                train_neg_seqs = train_neg_seqs[mask]
+                # mask = np.isin(train_pos_seqs, pos_seqs_to_train)
+                # train_pos_seqs = train_pos_seqs[mask]
+                # mask = np.isin(train_neg_seqs, neg_seqs_to_train)
+                # train_neg_seqs = train_neg_seqs[mask]
             else:
                 raise FileNotFoundError(f"Reshef inference data not found at {reshef_inference_data_path}. Please run the Reshef inference data generation script first.")
 

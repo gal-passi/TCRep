@@ -72,13 +72,13 @@ def reshef_inference(train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_s
         else:
             return rng.choice(indices_range, size=min(amount, len(indices_range)), replace=False)
 
-    plot_var_conv(variability, confidence, inds, pick_random_indices)
+    plot_var_conv(variability, confidence, inds, pick_random_indices, reshef_cache_folder)
 
     if to_save_train_data:
         save_data_for_training(full_data, confidence, inds, reshef_cache_folder, pick_random_indices)
 
-    calculate_epoch_wise_agreement(model_outputs, labels, inds)
-    pass
+    calculate_epoch_wise_agreement(model_outputs, labels, inds, reshef_cache_folder)
+    return
 
 
 def probability_for_confidence(y_pred, y_true):
@@ -236,8 +236,7 @@ def save_data_for_training(full_data, confidence, inds, reshef_cache_folder, pic
     confidence_green = confidence[chosen_indices2]
     confidence_green_p = np.percentile(confidence_green, 90)  # get chosen_indices_green 90% percentile
 
-    conf_mask = np.where(confidence[chosen_indices] > confidence_green_p, True,
-                         False)  # Get boolean array where confidence is greater than 95% percentile
+    conf_mask = np.where(confidence[chosen_indices] > confidence_green_p, True, False)  # Get boolean array where confidence is greater than 95% percentile
     neg_seqs_to_train = full_data[chosen_indices][conf_mask]
 
     seqs_return_to_positives_green = full_data[chosen_indices2]
@@ -373,7 +372,7 @@ def calculate_epoch_wise_agreement(model_outputs, labels, inds, reshef_cache_fol
     # Add labels on top of bars
     for bar, mean in zip(bars, means):
         yval = bar.get_height()
-        plt.text(bar.get_x() + bar.get_width() / 2, yval + 0.02, f"{mean:.3f}", ha='center', va='bottom')
+        plt.text(bar.get_x() + bar.get_width() / 2+0.15, yval + 0.02, f"{mean:.3f}", ha='center', va='bottom')
     plt.ylim(0, 1.1)  # normalize all metrics to scale of [0, 1]
     plt.title("Mean Calibration & Confidence Metrics Across Epochs\n"
               f"Negative LL: mean: {np.mean(nll_list):.3f}, std: {np.std(nll_list):.3f}")
@@ -385,3 +384,31 @@ def calculate_epoch_wise_agreement(model_outputs, labels, inds, reshef_cache_fol
         plt.savefig(plot_path)
         print(f"Saved epoch-wise agreement metrics plot at: {plot_path}")
     plt.show()
+
+
+def combined_reshef_inference(args):
+    model_config_string = get_model_config_str(args)
+
+    all_neg_seqs_to_train = []
+    all_pos_seqs_to_train = []
+
+    # Load the parameters for Reshef inference
+    for reshef_negative_part in range(1, 6):
+        reshef_cache_folder = os.path.join("cache", "reshef_inference", f"partition_{reshef_negative_part}", model_config_string)
+        data = np.load(os.path.join(reshef_cache_folder, "reshef_inference_data.npz"), allow_pickle=True)
+        # Extract the sequences to train
+        neg_seqs_to_train = data["neg_seqs_to_train"]
+        pos_seqs_to_train = data["pos_seqs_to_train"]
+        all_neg_seqs_to_train.append(neg_seqs_to_train)
+        all_pos_seqs_to_train.append(pos_seqs_to_train)
+
+    unique_neg_to_train = np.unique(np.concatenate(all_neg_seqs_to_train))
+    unique_pos_to_train = np.unique(np.concatenate(all_pos_seqs_to_train))
+    # save in general cache folder (that does not involve the model config string)
+    combined_cache_folder = os.path.join("cache", "reshef_inference", "combined_partitions")
+    os.makedirs(combined_cache_folder, exist_ok=True)
+    np.savez(os.path.join(combined_cache_folder, "combined_reshef_inference_data.npz"),
+             neg_seqs_to_train=unique_neg_to_train,
+             pos_seqs_to_train=unique_pos_to_train)
+
+    return unique_neg_to_train, unique_pos_to_train

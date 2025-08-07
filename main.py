@@ -1024,6 +1024,7 @@ if __name__ == '__main__':
     parser.add_argument('-reshef_filter_train', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     parser.add_argument('-reshef_negative_part', type=int, default=0, help='Part of the negative partition to use for Reshef inference (0 for no partitioning)')
     parser.add_argument('-run_on_full_data', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
+    parser.add_argument('-dont_cache_inference', action='store_true', default=False, help='Whether to cache the inference results or not. If True, it will not cache the results and will run inference every time.')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1083,6 +1084,7 @@ if __name__ == '__main__':
     reshef_filter_train = args.reshef_filter_train
     reshef_negative_part = args.reshef_negative_part if reshef_inference else 0
     run_on_full_data = args.run_on_full_data
+    dont_cache_inference = args.dont_cache_inference
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1231,7 +1233,7 @@ if __name__ == '__main__':
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
         try:
-            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=l)
+            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
         except Exception as e:
             print(f"Error displaying common sequences figure: {e}")
             print("Skipping the display of common sequences figure.")
@@ -1479,50 +1481,51 @@ if __name__ == '__main__':
 
         # New distribution plot
         np.random.seed(42)
-        from models.cvc_basic_cacheing_model import CVCBasicCachingModel
-        print("Plotting the output distributions per patient (New)")
-        caching_model = CVCBasicCachingModel(trained_model, args, device, verbose=True)
-        # class TmpModel(nn.Module):
-        #     def __init__(self, model):
-        #         super(TmpModel, self).__init__()
-        #         self.model = model
-        #
-        #     def forward(self, x):
-        #         """
-        #         Args:
-        #             x: numpy array of shape (batch_size,) containing sequences as strings
-        #         Returns:
-        #             torch.Tensor of shape (batch_size, 2), raw logits
-        #         """
-        #         if isinstance(x, np.ndarray):
-        #             x = x.tolist()
-        #
-        #         batch_size = len(x)
-        #
-        #         # Decide for each sample whether to make it a "low score" or "high score"
-        #         rand_vals = torch.rand(batch_size)
-        #         is_low = rand_vals < 0.9  # 90% get values close to softmax [0, 1]
-        #
-        #         logits = torch.empty((batch_size, 2))
-        #
-        #         # Low confidence for dim 0 → large negative value
-        #         logits[is_low] = torch.tensor([10.0, -10.0])
-        #
-        #         # High confidence for dim 0 → large positive value
-        #         logits[~is_low] = torch.tensor([-10.0, 10.0])
-        #
-        #         rand_vals = torch.rand(batch_size)
-        #         to_change = 0.7 < rand_vals
-        #         logits[to_change] = torch.tensor([1.0, -1.0])
-        #         to_change_2 = 0.85 < rand_vals
-        #         logits[to_change_2] = torch.tensor([-1.0, 1.0])
-        #
-        #         return logits
-        # trained_model = TmpModel(trained_model)
-        # args.model_type = 'tmp_model'
-        plot_output_distributions_per_patient_new(caching_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                                  test_masks, valid_masks, positive_seqs, df_bld,
-                                                  df_hlt, model_type, log_wandb, args, device)
+        # from models.cvc_basic_cacheing_model import CVCBasicCachingModel
+        # print("Plotting the output distributions per patient (New)")
+        # caching_model = trained_model
+        # # caching_model = CVCBasicCachingModel(trained_model, args, device, verbose=True)
+        # # class TmpModel(nn.Module):
+        # #     def __init__(self, model):
+        # #         super(TmpModel, self).__init__()
+        # #         self.model = model
+        # #
+        # #     def forward(self, x):
+        # #         """
+        # #         Args:
+        # #             x: numpy array of shape (batch_size,) containing sequences as strings
+        # #         Returns:
+        # #             torch.Tensor of shape (batch_size, 2), raw logits
+        # #         """
+        # #         if isinstance(x, np.ndarray):
+        # #             x = x.tolist()
+        # #
+        # #         batch_size = len(x)
+        # #
+        # #         # Decide for each sample whether to make it a "low score" or "high score"
+        # #         rand_vals = torch.rand(batch_size)
+        # #         is_low = rand_vals < 0.9  # 90% get values close to softmax [0, 1]
+        # #
+        # #         logits = torch.empty((batch_size, 2))
+        # #
+        # #         # Low confidence for dim 0 → large negative value
+        # #         logits[is_low] = torch.tensor([10.0, -10.0])
+        # #
+        # #         # High confidence for dim 0 → large positive value
+        # #         logits[~is_low] = torch.tensor([-10.0, 10.0])
+        # #
+        # #         rand_vals = torch.rand(batch_size)
+        # #         to_change = 0.7 < rand_vals
+        # #         logits[to_change] = torch.tensor([1.0, -1.0])
+        # #         to_change_2 = 0.85 < rand_vals
+        # #         logits[to_change_2] = torch.tensor([-1.0, 1.0])
+        # #
+        # #         return logits
+        # # trained_model = TmpModel(trained_model)
+        # # args.model_type = 'tmp_model'
+        # plot_output_distributions_per_patient_new(caching_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+        #                                           test_masks, valid_masks, positive_seqs, df_bld,
+        #                                           df_hlt, model_type, log_wandb, args, device)
         # Plotting the output distributions
         # print("Plotting the output distributions")
         # plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
@@ -1726,7 +1729,7 @@ if __name__ == '__main__':
                                                                 test_patient_ids, valid_patient_ids,
                                                                 valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
                                                                 aaseq_to_ratio, to_ensemble, model_non_trained, device,
-                                                                k_fold_disease=inner_fold, chosen_components=components)
+                                                                k_fold_disease=inner_fold, chosen_components=components, dont_cache_inference=dont_cache_inference)
                 else:
                     from inference.inference_classification import inference_classification_model
                     inference_classification_model(trained_model, args, df_bld, df_hlt,
@@ -1737,4 +1740,5 @@ if __name__ == '__main__':
         if INFERENCE_RESHEF and reshef_inference:
             np.random.seed(42)
             from inference.reshef_inference import reshef_inference
-            reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args)
+            to_save_train_data = False if reshef_filter_train else True
+            reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args, to_save_train_data=to_save_train_data)

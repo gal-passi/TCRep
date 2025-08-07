@@ -820,7 +820,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
                                             to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2, to_savefig=True,
-                                            covariance_type='tied'):
+                                            covariance_type='tied', dont_cache_inference=False):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
     patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
@@ -871,7 +871,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
         raise NotImplementedError("Ensemble model inference with non-trained model is not implemented yet.")
     else:
         trained_model.eval()
-        if samples_size == 100:
+        if dont_cache_inference:
             caching_model = trained_model
         else:
             caching_model = CVCBasicCachingModel(trained_model, args, device, verbose=True)

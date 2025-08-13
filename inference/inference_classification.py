@@ -106,14 +106,14 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
             patient_seqs = rng.choice(patient_seqs, size=samples, replace=False)
 
         # Filter patient_seqs to only include those in ok_seqs
-        if bad_seqs is not None:
-            patient_seqs = np.array(patient_seqs)
-            mask = np.isin(patient_seqs, bad_seqs)
-            patient_seqs_new = patient_seqs[~mask]
-            if len(patient_seqs_new) == 0:
-                print(f"Patient {patient_ind} has no valid sequences after filtering bad sequences.")
-                continue
-            patient_seqs = patient_seqs_new
+        # if bad_seqs is not None:
+        #     patient_seqs = np.array(patient_seqs)
+        #     mask = np.isin(patient_seqs, bad_seqs)
+        #     patient_seqs_new = patient_seqs[~mask]
+        #     if len(patient_seqs_new) == 0:
+        #         print(f"Patient {patient_ind} has no valid sequences after filtering bad sequences.")
+        #         continue
+        #     patient_seqs = patient_seqs_new
 
         # Get model outputs
         with torch.no_grad():
@@ -121,6 +121,39 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
 
         # Convert to probabilities
         disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+
+        if bad_seqs is not None:
+            patient_seqs = np.array(patient_seqs)
+            if len(bad_seqs) == 2:
+                bad_seqs, close_bad_seqs = bad_seqs
+            # remove seqs and disease logits and disease probs if seqs with probs between 0.1 and 0.9
+            # Step 1: Separate masks for low/high prob vs mid prob
+            low_high_mask = (disease_probs < 0.1) | (disease_probs > 0.85)
+            mid_mask = ~low_high_mask  # between 0.1 and 0.85
+
+            # Step 2: Remove bad sequences from low/high
+            mask_low_high_clean = np.array([seq not in bad_seqs for seq in patient_seqs[low_high_mask]])
+            removed_low_high = np.count_nonzero(~mask_low_high_clean)
+
+            # Step 3: Remove close_bad sequences from mid range
+            mask_mid_clean = np.array([seq not in close_bad_seqs for seq in patient_seqs[mid_mask]])
+            removed_mid = np.count_nonzero(~mask_mid_clean)
+
+            # Step 4: Combine back
+            final_mask = np.zeros_like(disease_probs, dtype=bool)
+            final_mask[low_high_mask] = mask_low_high_clean
+            final_mask[mid_mask] = mask_mid_clean
+
+            total_removed = removed_low_high + removed_mid
+            print(f"Total removed: {total_removed}")
+
+            # Apply mask
+            patient_seqs = patient_seqs[final_mask]
+            disease_probs = disease_probs[final_mask]
+            # mask = (disease_probs < 0.1) | (disease_probs > 0.85)
+            # disease_probs = disease_probs[mask]
+            # disease_logits = disease_logits[mask]
+
         patient_probs.append(disease_probs)
 
         # bin using np into x bins (min value is 0 and max is 1)
@@ -820,7 +853,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
                                             to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2, to_savefig=True,
-                                            covariance_type='tied', dont_cache_inference=False):
+                                            covariance_type='full', dont_cache_inference=False):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
     patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
@@ -860,10 +893,13 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     filter_uncertain_seqs = False
     if filter_uncertain_seqs:
         reshef_cache_folder = os.path.join("cache", "reshef_inference")
-        reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs.npy")
+        reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs_all_partitions.npy")
+        # reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs.npy")
         if not os.path.exists(reshef_inference_data_path):
             print(f"Reshef inference data not found at {reshef_inference_data_path}.")
         bad_seqs = np.load(reshef_inference_data_path)
+        bad_seqs = (set(bad_seqs), set(generate_full_neighbors(bad_seqs)))
+        # bad_seqs = generate_full_neighbors(bad_seqs)
 
     # Creating a caching model of the trained model
     if to_ensemble:  # TODO: This does not work currently! Raising NotImplementedError
@@ -1626,6 +1662,7 @@ def plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_pro
                     dpi=300, bbox_inches='tight')
     plt.show()
 
+
 def find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components,
                                            k_fold_disease, model_config_str, to_savefig=True):
     # Convert to numpy arrays for easier manipulation
@@ -1955,6 +1992,79 @@ def plot_gmm_means_weights_plot(patient_gmm_models, healthy_gmm_models, chosen_c
         plt.savefig(os.path.join(INFERENCE_GMM_MEAN_WEIGHT_SCATTER_V2_DIR, f"gmm_max_means_weights_fold-{k_fold_disease}_components-{chosen_components}_{model_config_str}.png"))
     plt.show()
 
+
+def calculate_low_confidence_neg_seqs_all_partitions():
+    all_hard_to_predict_negatives = set()
+    for i in range(1, 6):
+        base_folder_p = os.path.join("cache", "reshef_inference", f"partition_{i}")
+        pi_folder = os.listdir(base_folder_p)[0]
+        pi_base = os.path.join(base_folder_p, pi_folder)
+        pi_full_data = np.load(os.path.join(pi_base, 'full_data.npy'))
+        pi_full_labels = np.load(os.path.join(pi_base, 'full_labels.npy'))
+
+        # load reshef inference data of the particular partition:
+        reshef_inference_data = np.load(os.path.join(pi_base, "reshef_inference_data.npz"))
+        pi_pos_seqs_to_train = reshef_inference_data['pos_seqs_to_train']
+        pi_neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
+
+        start_end_inds = []
+        pi_full_labels_indices = np.where(pi_full_labels == 0)[0]
+        for j in range(1, len(pi_full_labels_indices)):
+            if pi_full_labels_indices[j] - pi_full_labels_indices[j - 1] != 1:
+                start_end_inds.append(pi_full_labels_indices[j])
+        start, end = start_end_inds[0], start_end_inds[1]
+
+        all_neg_seqs = pi_full_data[start:end]
+        all_hard_to_predict_negatives.update(set(all_neg_seqs) - set(pi_neg_seqs_to_train))
+
+    # saving:
+    np.save(os.path.join("cache", "reshef_inference", "reshef_inference_low_confidence_neg_seqs_all_partitions.npy"),
+            np.array(list(all_hard_to_predict_negatives)))
+
+
+def generate_neighbors(sequences, valid_letters):
+    valid_letters = set(valid_letters)  # Ensure valid letters are a set for quick lookup
+    neighbor_set = set(sequences)  # Start with the original sequences
+
+    for seq in sequences:
+        seq_len = len(seq)
+
+        # Generate substitutions
+        for i in range(seq_len):
+            for letter in valid_letters:
+                if seq[i] != letter:  # Avoid replacing with the same letter
+                    neighbor_set.add(seq[:i] + letter + seq[i + 1:])
+
+        # Generate insertions
+        for i in range(seq_len + 1):
+            for letter in valid_letters:
+                neighbor_set.add(seq[:i] + letter + seq[i:])
+
+        # Generate deletions
+        if seq_len > 1:  # Ensure we don't delete the only character
+            for i in range(seq_len):
+                neighbor_set.add(seq[:i] + seq[i + 1:])
+
+    return neighbor_set
+
+
+def generate_full_neighbors(seqs, valid_letters=None, include_seqs=True):
+    if valid_letters is None:
+        valid_letters = set(''.join(seqs))
+    all_neighbors = set()
+    length_groups = {}
+    for seq in seqs:
+        length_groups.setdefault(len(seq), set()).add(seq)
+    # Process each length group separately
+    for seq_len, seq_group in length_groups.items():
+        # Generate neighbors for this group
+        neighbors = generate_neighbors(seq_group, valid_letters)
+        all_neighbors.update(neighbors)
+    if include_seqs:
+        all_neighbors.update(seqs) # Include original sequences in the neighbors
+    return np.array(list(all_neighbors))
+
+
 #
 # # TODO: Temp function - remove later
 # def inference_classification_model_version2_tmp(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
@@ -2209,3 +2319,5 @@ def plot_gmm_means_weights_plot(patient_gmm_models, healthy_gmm_models, chosen_c
 #     find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
 #
 #     return
+
+

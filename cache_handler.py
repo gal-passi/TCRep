@@ -10,6 +10,10 @@ def get_model_config_str(args):
         metadata += f"_neg-{args.negative_partition}"
     if args.to_ensemble:
         metadata += f"_ensemble-{args.to_ensemble}"
+    if args.dataset_filter_num_of_patients != 3:
+        metadata += f"_npatients-{args.dataset_filter_num_of_patients}"
+    if args.dataset_filter_num_of_healthy != args.dataset_filter_num_of_patients and args.dataset_filter_num_of_healthy != -1:
+        metadata += f"_nhealthy-{args.dataset_filter_num_of_healthy}"
 
     config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}{metadata}_epochs-{args.epochs}_" \
                  f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \

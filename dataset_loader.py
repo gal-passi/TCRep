@@ -52,7 +52,7 @@ class DatasetLoader:
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
                  remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False,
-                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, run_on_full_data=False, verbose=True):
+                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, run_on_full_data=False, num_test_patients=8, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -75,6 +75,12 @@ class DatasetLoader:
             # reading healthy study:
             df_hlt = df_h[df_h['cell_type'] == cell_type]
         else:
+            save_folder = "cache/valid_sequences/multiple_sclerosis"
+            saved_dataset_path = os.path.join(save_folder, f"{dataset_type}_df.pkl")
+            saved_df = None
+            if os.path.exists(saved_dataset_path):
+                with open(saved_dataset_path, 'rb') as f:
+                    saved_df = pickle.load(f)
             if 'ms_tcrdb2_no_healthy_ms_plus_hlt_article' in dataset_type:
                 df_bld, df_hlt = df, df_h
                 # add healthy from article
@@ -126,6 +132,10 @@ class DatasetLoader:
                         df_excess_hlt['patient_id'] = df_excess_hlt['patient_id'].astype(str) + '_hlt_as_ms'
                         # remove from hlt those patients that were picked
                         df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
+                    if 'hlt_article' in dataset_type:
+                        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                        df_hlt = df_article[df_article["condition"] == "Healthy"]
+                        df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
                     if extra_filter:
                         df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
             elif dataset_type == 'ms_hlt_article':
@@ -180,89 +190,130 @@ class DatasetLoader:
                 df_bld = self.get_full_article2_dataframe()
                 df_hlt = df_h
             elif dataset_type == 'article_sle':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                df_hlt = df_article[df_article["condition"] == "Healthy"]
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
-                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
-                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
-                    unique_bld_patient_ids = df_bld['patient_id'].unique()
-                    rng = np.random.default_rng(seed=42)
-                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
-                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                    df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                df_hlt = df_article[df_article["condition"] == "Healthy"]
-                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
-                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
-                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
-                    unique_bld_patient_ids = df_bld['patient_id'].unique()
-                    rng = np.random.default_rng(seed=42)
-                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
-                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                    df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                    df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 't1d':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                df_hlt = df_article[df_article["condition"] == "Healthy"]
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
-                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
-                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
-                    unique_bld_patient_ids = df_bld['patient_id'].unique()
-                    rng = np.random.default_rng(seed=42)
-                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
-                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                    df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                df_hlt = df_article[df_article["condition"] == "Healthy"]
-                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
-                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                if extra_filter:
-                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                # Check if there are x2 more unique healthy patient_ids than there are from df_bld, if so, pick at random x2 patient_ids from df_hlt
-                if len(df_hlt['patient_id'].unique()) >= 2 * len(df_bld['patient_id'].unique()):
-                    unique_hlt_patient_ids = df_hlt['patient_id'].unique()
-                    unique_bld_patient_ids = df_bld['patient_id'].unique()
-                    rng = np.random.default_rng(seed=42)
-                    chosen_patient_ids = rng.choice(unique_hlt_patient_ids, size=2 * len(unique_bld_patient_ids), replace=False)
-                    df_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                    df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                    df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
+            elif dataset_type == 'article_hiv':
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "HIV"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
+            elif dataset_type == 'article_covid19':
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "Covid19"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
+            elif dataset_type == 'article_influenza':
+                if saved_df is None:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_bld = df_article[df_article["condition"] == "Influenza"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                    df_hlt = df_article[df_article["condition"] == "Healthy"]
+                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                    if extra_filter:
+                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                    with open(saved_dataset_path, 'wb') as f:
+                        pickle.dump((df_bld, df_hlt), f)
+                else:
+                    df_bld, df_hlt = saved_df
             elif dataset_type == 'ms_plus_article2_ms':
                 df_bld_article2 = self.get_full_article2_dataframe()
                 df_bld = pd.concat([df, df_bld_article2], axis=0, ignore_index=True)
@@ -315,23 +366,8 @@ class DatasetLoader:
         if get_only_unique_patient_ids:
             self.df_bld, self.df_hlt = df_bld, df_hlt
             return
-        # TODO: This code checks the intersection of healthy and disease samples with the article
-        # healthy_unique = set(df_hlt['AASeq'].unique())
-        # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-        # article_unique = set(df_article['AASeq'].unique())
-        # print(f"Number of sequences in the article: \t{len(df_article['AASeq'])}")
-        # print(f"Number of unique sequences in the article: {len(article_unique)}")
-        # print(f"Number of sequences in the intersection of healthy and article: {len(healthy_unique & article_unique)}")
-        # print(f"Number of sequences in the intersection of disease and article: {len(set(df_bld['AASeq']) & article_unique)}")
-        # exit(0)
 
-        # pick index of 8 unique patients from unique_patient_ids as test patients and the rest as train patients
-        if dataset_type == 'cmv':
-            num_test_patients = 4
-        elif 'article_sle' in dataset_type or 't1d' in dataset_type:
-            num_test_patients = 10
-        else:
-            num_test_patients = 8
+        # pick unique patient ids if not provided
         if unique_patient_ids is None:
             unique_patient_ids = df_bld["patient_id"].unique()
             unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -351,7 +387,6 @@ class DatasetLoader:
         test_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in test_patient_ids])
         valid_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in valid_patient_ids])
         train_patient_inds = np.array([np.where(unique_patient_ids == pid)[0][0] for pid in train_patient_ids])
-
 
         if k_fold > 0:
             name_metadata = f"_fold_{k_fold}"
@@ -1461,7 +1496,7 @@ class DatasetLoader:
         masks = np.array(masks)  # Shape: (num_unique_patients, len(sequences))
         return masks
 
-    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=250):
+    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=500):
         # Select the unique patients
         unique_patients = df['patient_id'].unique()
 

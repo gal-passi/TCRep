@@ -298,7 +298,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 # load the arrays from the npz file
                 pos_seqs_to_train = reshef_inference_data['pos_seqs_to_train']
                 neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
-                neg_seqs_to_train = reshef_inference_data['neg_seqs_to_train']
                 train_neg_seqs = neg_seqs_to_train
                 neg_pos_ratio = 8
                 args.neg_pos_ratio = neg_pos_ratio

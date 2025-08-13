@@ -530,6 +530,8 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
     if not to_recalculate and os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
         print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
         return
+    else:
+        print(f"Calculating common sequences for dataset {dataset_type}...")
 
     # find max len of uniques patient_id
     if l == None:
@@ -540,6 +542,10 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
         rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
+    elif 'article_sle' in dataset_type or 't1d' in dataset_type:
+        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+        rand_patients = [np.random.choice(x, size=min(25, len(x)), replace=False) for x in study_groups]
+        rand_patients = list(chain(*rand_patients))
     elif 'study_id' in df.columns and df.iloc[0]['study_id'] == 'article2':
         rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
     elif 'study_id' in df.columns:
@@ -548,7 +554,9 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         rand_patients = list(chain(*rand_patients))
     else:
         # random patients from the df
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 15), replace=False)
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 25), replace=False)
+    if len(rand_patients) < 15:
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 25), replace=False)
     df = df[df['patient_id'].isin(rand_patients)]
 
     # per patient id, pick 20,000 AASeqs:
@@ -565,8 +573,12 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
         if option == 1:
             # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
             # healthy_patient_ids = df_h['patient_id'].unique()
-            study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
-            rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
+            if 'article_sle' in dataset_type or 't1d' in dataset_type:
+                rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(20, len(df_h['patient_id'].unique())), replace=False)
+                rand_patients = [rand_patients]
+            else:
+                study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
+                rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
             healthy_patient_ids = np.array(list(chain(*rand_patients)))
             random_patients = healthy_patient_ids
             # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
@@ -580,21 +592,39 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
             patient_seqs_len = len(df1)
             all_seqs_h = df_h["AASeq"]
             df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(1, l)]
+        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=1) for i in range(1, l)]
         # x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]  # TODO: Change back
         return x_healthy
 
     # Average the results of all patients with disease
-    x_healthy_list_all = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df['patient_id'].unique()]
-    x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
-    x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
-    x_healthy = np.array(x_healthy_list).mean(axis=0)
-    x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
+    # x_healthy_list_all = [calculate_common_healthy(patient_id_bld, option=1) for patient_id_bld in df['patient_id'].unique()]
+    # x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
+    # x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
+    # x_healthy = np.array(x_healthy_list).mean(axis=0)
+    # x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
+
+    value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
+    if 'article_sle' in dataset_type or 't1d' in dataset_type:
+        rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(25, len(df_h['patient_id'].unique())), replace=False)
+        rand_patients = [rand_patients]
+    else:
+        study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
+        rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
+        if len(rand_patients) < 15:
+            rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(25, len(df_h['patient_id'].unique())), replace=False)
+            rand_patients = [rand_patients]
+    healthy_patient_ids = np.array(list(chain(*rand_patients)))
+    random_patients = healthy_patient_ids
+    # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
+    df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
+    x_healthy_list = [dataset_loader.common_aaseq_analysis(df_h_temp, num_of_patients=i, mode=1) for i in range(2, l)]
+    x_healthy = np.array([x[0][value_to_take] for x in x_healthy_list])
+    x_healthy_std = np.array([x[1] for x in x_healthy_list])
 
     # Average the results of all patients with disease and healthy then save them to a csv file
-    x_avg_hlt = average_dicts(x_healthy_list_all)
-    disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
-    healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
+    # x_avg_hlt = average_dicts(x_healthy_list_all)
+    # disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
+    # healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
     # Save the dfs
     # disease_df.to_csv("cache/disease_df.csv", index=False)
     # healthy_df.to_csv("cache/healthy_df.csv", index=False)
@@ -758,6 +788,7 @@ def sweep_model():
     # changing_negatives = wandb.config.changing_negatives
     changing_negatives = False
     sample_plots = wandb.config.sample_plots
+    k_fold = wandb.config.k_fold
     optimizer_type = 'adam'  # TODO: We can add this to sweep config file!
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
@@ -774,7 +805,7 @@ def sweep_model():
         dataset_type += f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
 
     # Load the dataset
-    dataset_loader = get_dataset_loader(dataset_type, k_fold=0, to_k_fold=False,
+    dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=False,
                                         dist_loss_type=dist_loss_type, neg_partition=neg_partition,
                                         use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
                                         filter_num_of_patients=filter_num_of_patients,
@@ -867,6 +898,12 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
+    if dataset_type == 'cmv':
+        num_test_patients = 4
+    elif 'article_sle' in dataset_type or 't1d' in dataset_type:
+        num_test_patients = 10
+    else:
+        num_test_patients = 8
     if to_k_fold:
         dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent,
                                        extra_filter=extra_filter, top_n_seqs=top_n_seqs, use_nneighbors_loss=use_nneighbors_loss)
@@ -888,26 +925,26 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
             n = len(patient_ids)
 
             # If the list has 8 or fewer elements, we can only create one list
-            if n <= 8:
+            if n <= num_test_patients:
                 return [patient_ids.copy()]
 
-            # Calculate how many shifts we can make without bringing back elements from first 8 positions
-            first_eight = set(patient_ids[:8])
-            max_shifts = (n // 8) - 1
+            # Calculate how many shifts we can make without bringing back elements from first num_test_patients positions
+            first_eight = set(patient_ids[:num_test_patients])
+            max_shifts = (n // num_test_patients) - 1
 
             # Create the altered lists
             altered_lists = []
 
             for shift_count in range(max_shifts + 1):
                 # Calculate the shift amount
-                shift = (shift_count * 8) % n
+                shift = (shift_count * num_test_patients) % n
 
                 # Create a new shifted list
                 shifted_list = patient_ids[shift:] + patient_ids[:shift]
 
-                # Check if any of the first 8 elements are in the shifted list
-                if len(first_eight.intersection(set(shifted_list[:8]))) > 0 and shift_count > 0:
-                    print(shifted_list[:8], patient_ids[:8])
+                # Check if any of the first num_test_patients elements are in the shifted list
+                if len(first_eight.intersection(set(shifted_list[:num_test_patients]))) > 0 and shift_count > 0:
+                    print(shifted_list[:num_test_patients], patient_ids[:num_test_patients])
 
                 # Add to our collection of altered lists
                 altered_lists.append(shifted_list)
@@ -924,11 +961,11 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
                                    filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
                                    remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=verbose)
+                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, num_test_patients=num_test_patients, verbose=verbose)
     return dataset_loader
 
 
-def do_sweep(sweep_version):
+def do_sweep(sweep_version, project_name='TCRep_Sweeps'):
     file_version = '' if sweep_version == 0 else f'_v{sweep_version}'
     sweep_id_path = f'sweep_yaml/sweep_id{file_version}.txt'
 
@@ -941,12 +978,12 @@ def do_sweep(sweep_version):
             sweep_id = f.read().strip()
         print(f"Resuming existing sweep: {sweep_id}")
     else:
-        sweep_id = wandb.sweep(sweep_config, project='TCRep')
+        sweep_id = wandb.sweep(sweep_config, project=project_name)
         with open(sweep_id_path, 'w') as f:
             f.write(sweep_id)
         print(f"Created new sweep: {sweep_id}")
 
-    wandb.agent(sweep_id, function=sweep_model, count=50, project='TCRep',
+    wandb.agent(sweep_id, function=sweep_model, count=50, project=project_name,
                 entity='amir-weinfeld')  # Run sweeps one after the other for count runs
 
 
@@ -963,8 +1000,9 @@ if __name__ == '__main__':
                      'article_sle', 'article_sle_hlt_ms_no_healthy_ms', 'article_sle_plus_hlt_ms_no_healthy_ms',
                      't1d', 't1d_hlt_ms_no_healthy_ms', 't1d_plus_hlt_ms_no_healthy_ms',
                      'ms_plus_article2_ms',
-                     'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms',
+                     'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms', 'ms_tcrdb2_hlt_article',
                      'ms_tcrdb2_no_healthy_ms_plus_hlt_article',
+                     'article_hiv', 'article_covid19', 'article_influenza',
                      'jia_tcrdb2']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
@@ -1232,8 +1270,9 @@ if __name__ == '__main__':
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
+        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
         try:
-            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
+            pass
         except Exception as e:
             print(f"Error displaying common sequences figure: {e}")
             print("Skipping the display of common sequences figure.")

@@ -34,6 +34,7 @@ from models.esmc_ff_model import ESMCFeedForwardClassifier
 from models.cvc_ensemble_model import CVCEnsembleModel
 from models.cvc_cacheing_model import CVCCachingModel
 from models.cvc_full_model import CVCClassifierModelFullEmbed
+from models.cvc_combine_reshef_inference import CVCCombinedReshefModel
 from torch.utils.data import Dataset, DataLoader
 import time
 import random
@@ -523,7 +524,133 @@ def combine_to_dataframe(metrics_data, additional_values):
     return df
 
 
-def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True, to_recalculate=False):
+def display_multiple_common_sequences_figure(dataset_loader, df_dict, dataset_type, l=8, log_space=True, to_recalculate=True, num_rand_patients=30):
+    """
+    Display common sequences figure for multiple dataframes.
+
+    Args:
+        dataset_loader: The dataset loader object with common_aaseq_analysis method
+        df_dict: Dictionary where keys are labels and values are dataframes
+                 e.g., {'Patients': df_disease, 'Healthy': df_healthy, 'Control': df_control}
+        dataset_type: String identifier for the dataset
+        l: Maximum number of patients to analyze
+        log_space: Whether to apply log transformation
+        to_recalculate: Whether to recalculate if plot exists
+        num_rand_patients: Number of random patients to sample
+    """
+    base_plot_save_path = f"plots/common_seqs/{dataset_type}"
+    # os.makedirs(base_plot_save_path, exist_ok=True)
+
+    if not to_recalculate and os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
+        return
+
+    def sample_patients(df, num_patients, dataset_type):
+        if 'cmv' in dataset_type or 'article_sle' in dataset_type or 't1d' in dataset_type:
+            if 'study_id' in df.columns:
+                study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+                patients_per_study = min(num_patients // len(study_groups) + 1, num_patients)
+                rand_patients = [np.random.choice(x, size=min(patients_per_study, len(x)), replace=False) for x in
+                                 study_groups]
+                rand_patients = list(chain(*rand_patients))
+            else:
+                rand_patients = np.random.choice(df['patient_id'].unique(),
+                                                 size=min(len(df['patient_id'].unique()), num_patients),
+                                                 replace=False)
+        elif 'study_id' in df.columns:
+            study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
+            rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
+            rand_patients = list(chain(*rand_patients))
+        else:
+            rand_patients = np.random.choice(df['patient_id'].unique(),
+                                             size=min(len(df['patient_id'].unique()), num_patients),
+                                             replace=False)
+
+        if len(rand_patients) < num_patients:
+            remaining_patients = set(df['patient_id'].unique()) - set(rand_patients)
+            additional_needed = min(num_patients - len(rand_patients), len(remaining_patients))
+            if additional_needed > 0:
+                additional_patients = np.random.choice(list(remaining_patients), size=additional_needed, replace=False)
+                rand_patients = np.concatenate([rand_patients, additional_patients])
+
+        return rand_patients
+
+    def calculate_common_sequences(df, label):
+        sampled_patients = sample_patients(df, num_rand_patients, dataset_type)
+        df_sampled = df[df['patient_id'].isin(sampled_patients)]
+
+        if l is None:
+            max_l = len(df_sampled['patient_id'].unique()) + 1
+        else:
+            max_l = min(l, len(df_sampled['patient_id'].unique()) + 1)
+
+        value_to_take = "percent_of_total"
+        x_list = [dataset_loader.common_aaseq_analysis(df_sampled, num_of_patients=i, mode=1) for i in range(2, max_l)]
+        x_values = np.array([x[0][value_to_take] for x in x_list])
+        x_std = np.array([x[1] for x in x_list])
+
+        return x_values, x_std, max_l
+
+    results = {}
+    colors = [
+        "#F58231",  # Orange
+        "#46F0F0",  # Cyan
+        "#0082C8",  # Blue
+        "#3CB44B",  # Green
+        "#911EB4",  # Purple
+        "#FFE119",  # Yellow
+        "#E6194B",  # Red
+    ]
+
+    for i, (label, df) in enumerate(df_dict.items()):
+        x_values, x_std, max_l = calculate_common_sequences(df, label)
+        results[label] = {
+            'values': x_values,
+            'std': x_std,
+            'max_l': max_l,
+            'color': colors[i % len(colors)]
+        }
+
+    if log_space:
+        for label in results:
+            results[label]['values'] = np.log(results[label]['values'])
+
+    plt.figure(figsize=(6, 6), dpi=600)
+    ax = plt.gca()
+    for spine in ax.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(0.75)
+
+    all_mins, all_maxs = [], []
+
+    for label, data in results.items():
+        x_range = range(2, len(data['values']) + 2)
+        plt.plot(x_range, data['values'], label=label, color=data['color'])
+        plt.fill_between(x_range, data['values'] - data['std'], data['values'] + data['std'],
+                         color=data['color'], alpha=0.2)
+
+        # for i, txt in enumerate(data['values']):
+        #     plt.annotate(f"{txt:.2f}", (i + 2, data['values'][i]),
+        #                  textcoords="offset points", xytext=(0, 10), ha='center')
+
+        all_mins.append(np.min(data['values']))
+        all_maxs.append(np.max(data['values'] + data['std']))
+
+    plt.xlabel("Number of Patients")
+    plt.ylabel("Percentage of Common Sequences")
+    plt.title("Percentage of Common Sequences" + (" (Log Scale)" if log_space else ""))
+    plt.ylim(min(all_mins), max(all_maxs) * 1.1)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+
+    # plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences_nolegend.png'))
+    plt.legend(framealpha=1.0)
+    # plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
+    plt.show()
+    pass
+
+
+def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True, to_recalculate=True, num_rand_patients=30):
     base_plot_save_path = f"plots/common_seqs/{dataset_type}"
     os.makedirs(base_plot_save_path, exist_ok=True)
 
@@ -537,26 +664,28 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
     if l == None:
         l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
 
+    num_rand_patients = min([num_rand_patients, len(df['patient_id'].unique()), len(df_h['patient_id'].unique())])
+
     # check if study_id is in the df
     if dataset_type == 'cmv':
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
+        rand_patients = [np.random.choice(x, size=min(num_rand_patients, len(x)), replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
     elif 'article_sle' in dataset_type or 't1d' in dataset_type:
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(25, len(x)), replace=False) for x in study_groups]
+        rand_patients = [np.random.choice(x, size=min(num_rand_patients, len(x)), replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
-    elif 'study_id' in df.columns and df.iloc[0]['study_id'] == 'article2':
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
     elif 'study_id' in df.columns:
         study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
         rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
         rand_patients = list(chain(*rand_patients))
     else:
-        # random patients from the df
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 25), replace=False)
-    if len(rand_patients) < 15:
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 25), replace=False)
+        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), num_rand_patients), replace=False)
+    if len(rand_patients) < num_rand_patients:
+        # Add the remaining patients randomly from those not picked yet
+        remaining_patients = set(df['patient_id'].unique()) - set(rand_patients)
+        remaining_patients = np.random.choice(list(remaining_patients), size=min(num_rand_patients - len(rand_patients), len(remaining_patients)), replace=False)
+        rand_patients = np.concatenate([rand_patients, remaining_patients])
     df = df[df['patient_id'].isin(rand_patients)]
 
     # per patient id, pick 20,000 AASeqs:
@@ -605,14 +734,16 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
 
     value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
     if 'article_sle' in dataset_type or 't1d' in dataset_type:
-        rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(25, len(df_h['patient_id'].unique())), replace=False)
+        rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(num_rand_patients, len(df_h['patient_id'].unique())), replace=False)
         rand_patients = [rand_patients]
     else:
         study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
-        if len(rand_patients) < 15:
-            rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(25, len(df_h['patient_id'].unique())), replace=False)
-            rand_patients = [rand_patients]
+        rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
+        if len(rand_patients) < num_rand_patients:
+            # Add the remaining patients randomly from those not picked yet
+            remaining_patients = set(df_h['patient_id'].unique()) - set(chain(*rand_patients))
+            remaining_patients = np.random.choice(list(remaining_patients), size=min(num_rand_patients - len(rand_patients), len(remaining_patients)), replace=False)
+            rand_patients.append(remaining_patients)
     healthy_patient_ids = np.array(list(chain(*rand_patients)))
     random_patients = healthy_patient_ids
     # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
@@ -989,7 +1120,7 @@ def do_sweep(sweep_version, project_name='TCRep_Sweeps'):
 
 if __name__ == '__main__':
     # get program arguments
-    model_types = ['ff', 'cvc', 'esmc', 'cvc_full', 'cvc_weighted']
+    model_types = ['ff', 'cvc', 'esmc', 'cvc_full', 'cvc_weighted', 'cvc_combined_reshef']
     loss_types = ['ce', 'ce_l2', 'ce_entropy']
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     # TODO: Article 2 loading is incorrect at the moment. Gal is looking into it.
@@ -1270,9 +1401,43 @@ if __name__ == '__main__':
     # Display common sequences in disease and healthy samples
     if TO_DISPLAY_COMMON_SEQUENCES:
         l = 8
-        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
+        # ds_types = ['article_sle', 't1d', 'article_hiv', 'article_covid19', 'article_influenza']
+        # df_names = ['MS', 'TCRdb2.0 Healthy', 'Article Healthy', 'SLE', 'T1D', 'HIV', 'COVID-19', 'Influenza']
+        # df_dict = {
+        #     df_names[0] : df_bld,
+        #     df_names[1] : df_hlt
+        # }
+        # for i, ds_type in enumerate(ds_types):
+        #     dataset_loader_tmp = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=to_k_fold,
+        #                                         dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+        #                                         use_similar_negatives=use_similar_negatives,
+        #                                         neg_pos_ratio=neg_pos_ratio,
+        #                                         filter_num_of_patients=filter_num_of_patients,
+        #                                         filter_num_of_healthy=filter_num_of_healthy,
+        #                                         ratio=ratio,
+        #                                         filter_to_inflate=filter_to_inflate,
+        #                                         remove_seqs_by_len=remove_seqs_by_len,
+        #                                         top_percent=top_percent, top_n_seqs=top_n_seqs,
+        #                                         extra_filter=extra_filter,
+        #                                         use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version,
+        #                                         run_on_full_data=run_on_full_data, verbose=True)
+        #     df_bld_tmp, df_hlt_tmp = dataset_loader_tmp.get_dfs()
+        #     if ds_type == 'article_sle':
+        #         df_dict[df_names[2]] = df_hlt_tmp
+        #         continue
+        #     df_dict[df_names[3+i]] = df_bld_tmp
+        # display_multiple_common_sequences_figure(
+        #     dataset_loader=dataset_loader,
+        #     df_dict=df_dict,
+        #     dataset_type="all_datasets",
+        #     l=8,
+        #     log_space=True,
+        #     to_recalculate=True,
+        #     num_rand_patients=30
+        # )
+
         try:
-            pass
+            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
         except Exception as e:
             print(f"Error displaying common sequences figure: {e}")
             print("Skipping the display of common sequences figure.")
@@ -1322,6 +1487,8 @@ if __name__ == '__main__':
     elif model_type == 'cvc':
         model = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train,
                                    freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
+    elif model_type == 'cvc_combined_reshef':
+        model = CVCCombinedReshefModel(reshef_negative_part, args, device=device)
     elif model_type == 'esmc':
         model = ESMCFeedForwardClassifier(device=device)
     elif model_type == 'cvc_full' or model_type == 'cvc_weighted':
@@ -1347,6 +1514,8 @@ if __name__ == '__main__':
             if trained_model is None:
                 print(f"Model for epoch {test_mode_epoch} is not available!")
                 exit(1)
+        elif model_type == 'cvc_combined_reshef':
+            trained_model = model
         else:
             trained_model = load_model_state(model, args, args.epochs - 1, device)
     if trained_model is None:

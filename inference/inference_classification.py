@@ -92,6 +92,7 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
                          aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0, samples=None, bad_seqs=None):
     patient_vectors = []
     patient_probs = []
+    total_removed_lst = []
     for patient_ind in patient_inds:
         # Extract and process the patient sequences
         if unique_patient_ids is not None and possible_seqs is not None:
@@ -145,6 +146,7 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
             final_mask[mid_mask] = mask_mid_clean
 
             total_removed = removed_low_high + removed_mid
+            total_removed_lst.append(total_removed)
             print(f"Total removed: {total_removed}")
 
             # Apply mask
@@ -174,6 +176,10 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         else:
             patient_vectors.append(patient_vector)
     patient_vectors = np.array(patient_vectors)
+
+    if len(total_removed_lst) > 0:
+        print(f"Total removed sequences across all patients: {np.mean(total_removed_lst):0.2f} ± {np.std(total_removed_lst):0.2f}")
+
     return patient_vectors, patient_probs
 
 
@@ -890,7 +896,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     model_config_str = get_model_config_str(args)
 
     bad_seqs = None
-    filter_uncertain_seqs = False
+    filter_uncertain_seqs = False  # TODO: Change to false!
     if filter_uncertain_seqs:
         reshef_cache_folder = os.path.join("cache", "reshef_inference")
         reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs_all_partitions.npy")
@@ -2063,261 +2069,3 @@ def generate_full_neighbors(seqs, valid_letters=None, include_seqs=True):
     if include_seqs:
         all_neighbors.update(seqs) # Include original sequences in the neighbors
     return np.array(list(all_neighbors))
-
-
-#
-# # TODO: Temp function - remove later
-# def inference_classification_model_version2_tmp(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
-#                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
-#                                             add_ratio_to_vector=False, start_vec_from=0,
-#                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
-#                                             to_display_mapping=False, samples_size=200,
-#                                             k_fold_disease=1, chosen_components=2, to_savefig=False):
-#     np.random.seed(42)
-#     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
-#     patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
-#     patient_train_ids = [x for x in df_bld["patient_id"].unique() if x not in patient_valid_test_ids]
-#     np.random.shuffle(patient_train_ids)
-#     num_of_patients = len(patient_train_ids)
-#     num_of_patients_per_fold = num_of_patients // 3
-#     start_ind = (k_fold_disease - 1) * num_of_patients_per_fold
-#     end_ind = start_ind + num_of_patients_per_fold
-#     fold_patient_test_ids = patient_train_ids[start_ind:end_ind]
-#     fold_patient_train_ids = [x for x in patient_train_ids if x not in fold_patient_test_ids]
-#     df_bld_validation = df_bld[df_bld["patient_id"].isin(fold_patient_test_ids)]
-#     df_train_ids = np.concatenate([patient_valid_test_ids, fold_patient_train_ids])
-#     df_bld = df_bld[df_bld["patient_id"].isin(df_train_ids)]
-#
-#     if len(df_hlt["patient_id"].unique()) >= int(len(df_bld["patient_id"].unique()) * 2.0):
-#         num_of_healthy_patients = int(len(df_bld["patient_id"].unique()) * 2.0)
-#         num_of_healthy_test_patients = int(len(df_bld["patient_id"].unique()) * 1.0)
-#     elif len(df_hlt["patient_id"].unique()) != num_of_healthy_patients:
-#         num_of_healthy_patients = len(df_hlt["patient_id"].unique())
-#         num_of_healthy_test_patients = int(num_of_healthy_patients * 0.25)
-#
-#     np.random.seed(42)
-#     # make sure that plot dirs exists
-#     os.makedirs(INFERENCE_CONFUSION_MATRIX_V2_DIR, exist_ok=True)
-#     # os.makedirs(INFERENCE_VECTOR_PLOTS_V2_DIR, exist_ok=True)  # disabled for now
-#     os.makedirs(INFERENCE_GMM_MEAN_COV_PLOTS_V2_DIR, exist_ok=True)
-#     os.makedirs(INFERENCE_GMM_BIC_PLOTS_V2_DIR, exist_ok=True)
-#     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_V2_DIR, exist_ok=True)
-#     os.makedirs(INFERENCE_UNCERTAINTY_THRESHOLD_CACHE_V2_DIR, exist_ok=True)
-#     model_config_str = get_model_config_str(args)
-#
-#     # Creating a caching model of the trained model
-#     if to_ensemble:  # TODO: This does not work currently! Raising NotImplementedError
-#         caching_model = trained_model
-#         raise NotImplementedError("Ensemble model inference with non-trained model is not implemented yet.")
-#     else:
-#         trained_model.eval()
-#         if samples_size == 50:
-#             caching_model = CVCBasicCachingModel(trained_model, args, device)
-#         elif samples_size == 20:
-#             caching_model = trained_model
-#         else:
-#             caching_model = CVCCachingModel(trained_model, args, device)
-#             # caching_model = CVCDFCachingModel(trained_model, args, device)  # TODO: This is very very slow for some reason...
-#         caching_model.to(device)
-#         caching_model.eval()
-#
-#     # get the patient vectors
-#     # possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
-#     patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_ids, vector_representation_bins,
-#                                                           add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-#                                                           possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
-#
-#     # get the train patient vectors
-#     patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, fold_patient_train_ids, vector_representation_bins,
-#                                                                       add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-#                                                                       possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
-#
-#     # get the validation patient vectors
-#     disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, fold_patient_test_ids, vector_representation_bins,
-#                                                                                 add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-#                                                                                 possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size)
-#
-#     # healthy vectors helping data
-#     healthy_patients = df_hlt["patient_id"].unique()
-#     np.random.shuffle(healthy_patients)
-#     healthy_patients = healthy_patients[:num_of_healthy_patients]
-#
-#     healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
-#                                            add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size)
-#     healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
-#                                              healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
-#     healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
-#                                          healthy_probs[num_of_healthy_patients - num_of_healthy_test_patients:])
-#
-#     # ============= GMM ADDITION STARTS HERE =============
-#
-#     print("=" * 60)
-#     print("GAUSSIAN MIXTURE MODEL ANALYSIS ON PROBABILITY DISTRIBUTIONS")
-#     print("=" * 60)
-#
-#     # Prepare probability data for GMM fitting
-#     # Flatten all probability arrays for each group
-#     patient_train_probs_flat = np.concatenate([probs.flatten() for probs in patient_train_probs])
-#     healthy_train_probs_flat = np.concatenate([probs.flatten() for probs in healthy_probs])
-#
-#     # Reshape for sklearn (needs 2D input)
-#     patient_train_data = patient_train_probs_flat.reshape(-1, 1)
-#     healthy_train_data = healthy_train_probs_flat.reshape(-1, 1)
-#
-#     print(f"Patient training probability values: {patient_train_data.shape[0]}")
-#     print(f"Healthy training probability values: {healthy_train_data.shape[0]}")
-#     print(f"Patient probability range: [{patient_train_probs_flat.min():.3f}, {patient_train_probs_flat.max():.3f}]")
-#     print(f"Healthy probability range: [{healthy_train_probs_flat.min():.3f}, {healthy_train_probs_flat.max():.3f}]")
-#
-#     # Choose a compromise number of components that works for both
-#     # Choosing chosen_components manually for now:  # Strategy: choose the minimum of the two optimal values, but at least 2
-#     # chosen_components = max(2, min(optimal_patient_components, optimal_healthy_components))
-#     print(f"Chosen number of components for both distributions: {chosen_components}")
-#
-#     # Train final GMMs with chosen number of components
-#     print(f"\n--- Training Final GMMs with {chosen_components} components ---")
-#
-#     final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
-#     final_patient_gmm.fit(patient_train_data)
-#
-#     final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
-#     final_healthy_gmm.fit(healthy_train_data)
-#
-#     print(f"Patient GMM - BIC: {final_patient_gmm.bic(patient_train_data):.2f}")
-#     print(f"Healthy GMM - BIC: {final_healthy_gmm.bic(healthy_train_data):.2f}")
-#
-#     gmms = plot_bic_scores_per_models(patient_train_probs, healthy_probs, final_patient_gmm,
-#                                       final_healthy_gmm, patient_train_data, healthy_train_data,
-#                                       patient_train_probs_flat, healthy_train_probs_flat,
-#                                       chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
-#     patient_gmm_models, healthy_gmm_models = gmms
-#
-#     # TODO: Find GMMs out of distribution!
-#     from sklearn.ensemble import IsolationForest
-#     patient_gmms = patient_gmm_models[chosen_components]
-#     healthy_gmms = healthy_gmm_models[chosen_components]
-#
-#     def flatten_means(gmm):
-#         return gmm.means_.flatten()
-#     patient_means = np.array([flatten_means(gmm) for gmm in patient_gmms])
-#     healthy_means = np.array([flatten_means(gmm) for gmm in healthy_gmms])
-#
-#     outlier_type = 1
-#     if outlier_type == 0:
-#         iso_patient = IsolationForest(contamination=0.1, random_state=42)
-#         iso_healthy = IsolationForest(contamination=0.1, random_state=42)
-#         outlier_labels_patient = iso_patient.fit_predict(patient_means)
-#         outlier_labels_healthy = iso_healthy.fit_predict(healthy_means)
-#     else:
-#         patient_means_r = patient_means.max(axis=1)
-#         healthy_means_r = healthy_means.max(axis=1)
-#
-#         patient_main_mean = patient_means_r.mean()
-#         healthy_main_mean = healthy_means_r.mean()
-#         middle_point = (patient_main_mean + healthy_main_mean) / 2
-#
-#         # define all samples as outlier if they cross that middle point
-#         outlier_labels_patient = np.where((middle_point < patient_means_r) & (patient_means_r < 2*patient_main_mean-middle_point), 1, -1)
-#         outlier_labels_healthy = np.where((2*healthy_main_mean - middle_point < healthy_means_r) & (healthy_means_r < middle_point), 1, -1)
-#
-#
-#     color_dict = dict()
-#     color_dict['Patient'] = ['blue' if x == 1 else 'red' for x in outlier_labels_patient]
-#     color_dict['Healthy'] = ['blue' if x == 1 else 'red' for x in outlier_labels_healthy]
-#
-#     plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patient_test_probs,
-#                                    healthy_test_probs, chosen_components, size=500, only_per_person_gmms=True, extra_colors=color_dict)
-#
-#     exit(0)
-#     plot_gmm_components_per_patient_and_final(patient_gmm_models, healthy_gmm_models, final_patient_gmm,
-#                                               final_healthy_gmm, chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
-#
-#     plot_per_person_gmm_components(patient_gmm_models, healthy_gmm_models, patient_test_probs,
-#                                    healthy_test_probs, chosen_components, size=20)
-#
-#     cm_svm_rbf = get_svm_rbf_classification_cm(patient_train_vectors, healthy_vectors, patient_test_vectors, healthy_test_vectors, vector_representation_bins)
-#
-#     plot_gmm_classification_multi_threshold(patient_test_probs, healthy_test_probs, final_patient_gmm, final_healthy_gmm, cm_svm_rbf,
-#                                             chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
-#
-#     # EXTRA - calculate model outputs on valid and test positive sequences
-#     if to_display_mapping and model_non_trained is not None:
-#         available_models = [trained_model, model_non_trained]
-#         models_names = ['Trained Model', 'Non-Trained Model']
-#         for model, model_name in zip(available_models, models_names):
-#             part_pos_valid = np.random.choice(valid_pos_seqs, size=len(valid_pos_seqs), replace=False)
-#             part_pos_test = np.random.choice(test_pos_seqs, size=len(test_pos_seqs), replace=False)
-#             pos_seqs = np.concatenate([part_pos_valid, part_pos_test])
-#             neg_seqs = np.random.choice(df_hlt['AASeq'].unique(), size=len(pos_seqs), replace=False)
-#             # get model outputs for pos and neg sequences:
-#             model.eval()
-#             with torch.no_grad():
-#                 pos_embeds = model.get_embeddings(pos_seqs)
-#                 neg_embeds = model.get_embeddings(neg_seqs)
-#             # display maps of the embeddings in a single figure (pca, t-sne and u-map):
-#             # combine embeddings and labels
-#             all_embeds = torch.cat([pos_embeds, neg_embeds], dim=0).cpu().numpy()
-#             labels = np.array([1] * len(pos_embeds) + [0] * len(neg_embeds))
-#             # Create the figure with subplots
-#             fig, axes = plt.subplots(1, 3, figsize=(18, 5), dpi=450)
-#             # PCA
-#             pca = PCA(n_components=2)
-#             pca_result = pca.fit_transform(all_embeds)
-#             axes[0].scatter(pca_result[labels == 0, 0], pca_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
-#             axes[0].scatter(pca_result[labels == 1, 0], pca_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
-#             axes[0].set_title("PCA of Embeddings")
-#             axes[0].set_xlabel("Dim 1")
-#             axes[0].set_ylabel("Dim 2")
-#             axes[0].legend()
-#             # t-SNE
-#             tsne = TSNE(n_components=2, random_state=42, perplexity=30)
-#             tsne_result = tsne.fit_transform(all_embeds)
-#             axes[1].scatter(tsne_result[labels == 0, 0], tsne_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
-#             axes[1].scatter(tsne_result[labels == 1, 0], tsne_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
-#             axes[1].set_title("t-SNE of Embeddings")
-#             axes[1].set_xlabel("Dim 1")
-#             axes[1].set_ylabel("Dim 2")
-#             axes[1].legend()
-#             # UMAP
-#             umap_model = umap.UMAP(n_components=2, random_state=42)
-#             umap_result = umap_model.fit_transform(all_embeds)
-#             axes[2].scatter(umap_result[labels == 0, 0], umap_result[labels == 0, 1], c='orange', label='Healthy', alpha=0.3)
-#             axes[2].scatter(umap_result[labels == 1, 0], umap_result[labels == 1, 1], c='purple', label='Disease', alpha=0.3)
-#             axes[2].set_title("UMAP of Embeddings")
-#             axes[2].set_xlabel("Dim 1")
-#             axes[2].set_ylabel("Dim 2")
-#             axes[2].legend()
-#             plt.suptitle(f"{model_name} - Embeddings Visualization", fontsize=16)
-#             plt.tight_layout()
-#             plt.show()
-#
-#     # Finding uncertainty threshold and such:
-#     # Process patient test subjects
-#     patient_lls = []
-#     healthy_lls = []
-#     test_true_labels = []
-#     for i, patient_probs in enumerate(disease_validation_probs):
-#         patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
-#
-#         # Calculate average log-likelihood for this patient across all their probability values
-#         patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
-#         healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
-#         patient_lls.append(patient_ll)
-#         healthy_lls.append(healthy_ll)
-#
-#         test_true_labels.append(1)
-#     for i, healthy_test_prob in enumerate(healthy_test_probs[:len(disease_validation_probs)]):
-#         healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
-#
-#         # Calculate average log-likelihood for this healthy subject across all their probability values
-#         patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
-#         healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
-#         patient_lls.append(patient_ll)
-#         healthy_lls.append(healthy_ll)
-#
-#         test_true_labels.append(0)  # True label is healthy
-#     find_and_display_uncertainty_threshold(patient_lls, healthy_lls, test_true_labels, chosen_components, k_fold_disease, model_config_str, to_savefig=to_savefig)
-#
-#     return
-
-

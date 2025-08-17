@@ -517,6 +517,10 @@ def build_study(study_id, study_df, study_desc, usable, uncertain, background):
         return build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, background)
     if study_id == 'immunoSEQ03':
         return build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, background)
+    if study_id == 'immunoSEQ68':
+        return build_study_immunoSEQ68(study_id, study_df, study_desc, usable, uncertain, background)
+    # if study_id == 'immunoSEQ48':
+    #     return build_study_immunoSEQ48(study_id, study_df, study_desc, usable, uncertain, background)
     throw_error('study_id not found!')
 
 
@@ -1000,6 +1004,56 @@ def build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, b
 
     study.save()
     return study
+
+
+def build_study_immunoSEQ68(study_id, study_df, study_desc, usable, uncertain, background):
+    found_usable = []
+
+    import re
+    study = Study(study_id, to_rebuild=True)
+    study._desc = study_desc
+    for row_ind, row in study_df.iterrows():
+        sample_id = row['Sample ID']
+        comment = row['Comment']
+        tissue = row['Cell Source'].lower()
+        cell_type = row['Cell Type'].split(' ')[-1]
+        if cell_type[-1] == '+':
+            cell_type = cell_type[:-1]
+        condition = row['Condition']
+
+        patient_id = comment.split('_')[0]
+
+        sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+        study += sample
+        found_usable.append(sample_id)
+
+    study.save()
+    return study
+
+
+# def build_study_immunoSEQ48(study_id, study_df, study_desc, usable, uncertain, background):
+#     found_usable = []
+#
+#     import re
+#     study = Study(study_id, to_rebuild=True)
+#     study._desc = study_desc
+#     for row_ind, row in study_df.iterrows():
+#         sample_id = row['Sample ID']
+#         comment = row['Comment']
+#         tissue = row['Cell Source'].lower()
+#         cell_type = row['Cell Type']#.split(' ')[-1]
+#         if cell_type[-1] == '+':
+#             cell_type = cell_type[:-1]
+#         condition = row['Condition']
+#
+#         patient_id = comment#.split('_')[0]
+#
+#         sample = Sample(study_id, sample_id, patient_id, tissue, cell_type, condition, to_rebuild=True)
+#         study += sample
+#         found_usable.append(sample_id)
+#
+#     study.save()
+#     return study
 
 
 def filter_df(df, top_percent, top_n_seqs, data_path='', id=''):

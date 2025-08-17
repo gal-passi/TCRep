@@ -34,7 +34,7 @@ class CVCModel(nn.Module):
                 bias='none',
                 layers_to_transform=list(range(11, 11-cvc_layers_to_train, -1)),
                 task_type=TaskType.FEATURE_EXTRACTION,
-                target_modules=['attention.self.query', 'attention.self.value'],  # TODO: Made the following changes to LoraConfig due to suggestions
+                target_modules=['attention.self.query', 'attention.self.value'],  # TODO: Made the following changes to LoraConfig due to suggestions from Tanya
                 # target_modules=['attention.self.query', 'attention.self.key', 'attention.self.value',
                 #                 'attention.output.dense', 'intermediate.dense', 'output.dense'],
             )

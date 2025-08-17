@@ -386,6 +386,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
             # Save the model outputs for Reshef inference under "cache/reshef_inference"
             np.save(os.path.join(reshef_cache_folder, f"model_outputs_epoch-{epoch}.npy"), model_outputs)
             print(f"Saved model outputs for Reshef inference at epoch {epoch} in: {reshef_cache_folder}")
+            model.train()
 
         # Shuffle positive samples for this epoch
         pos_indices = np.arange(num_pos_samples)

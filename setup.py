@@ -203,3 +203,21 @@ if __name__ == '__main__':
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "A circulating reservoir of pathogenic-like CD4+ T cells shares a genetic and phenotypic signature with the inflamed synovial micro-environment",
                 [], [], [])
+
+    study_id = "immunoSEQ68"  # CMV
+    columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    study_df = get_study_df(study_id, columns)
+    study = build_study(study_id, study_df, "Memory CD4+ T cell receptor repertoire data mining as a tool for identifying cytomegalovirus serostatus",
+                [], [], [])
+
+    # study_id = "immunoSEQ06"  # Dont know how to parse! Not working for now!
+    # columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    # study_df = get_study_df(study_id, columns)
+    # study = build_study(study_id, study_df, "Alloreactive T Cell Receptor Diversity against Structurally Similar or Dissimilar HLA-DP Antigens Assessed by Deep Sequencing",
+    #             [], [], [])
+
+    # study_id = "immunoSEQ48"  # Dont know how to parse! Not working for now!
+    # columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment"]
+    # study_df = get_study_df(study_id, columns)
+    # study = build_study(study_id, study_df, "Cytomegalovirus Exposure in the Elderly Does Not Reduce CD8 T cell Repertoire Diversity",
+    #             [], [], [])

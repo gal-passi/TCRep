@@ -89,10 +89,11 @@ def create_binned_disease_probs(patient_ratio, disease_probs, num_bins=20):
 
 
 def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_bins, add_ratio_to_vector,
-                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0, samples=None, bad_seqs=None):
+                         aaseq_to_ratio, possible_seqs=None, unique_patient_ids=None, start_vec_from=0, samples=None, bad_seqs=None, save_data_pkl=None):
     patient_vectors = []
     patient_probs = []
     total_removed_lst = []
+    all_patient_seqs = []
     for patient_ind in patient_inds:
         # Extract and process the patient sequences
         if unique_patient_ids is not None and possible_seqs is not None:
@@ -104,7 +105,11 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
         patient_seqs = sorted(patient_seqs)
         rng = np.random.RandomState(42)  # fixed seed, legacy & portable RNG
         if samples is not None and len(patient_seqs) > samples:
-            patient_seqs = rng.choice(patient_seqs, size=samples, replace=False)
+            if save_data_pkl is None or '_full_sequences' not in save_data_pkl:
+                patient_seqs = rng.choice(patient_seqs, size=samples, replace=False)
+
+        if save_data_pkl is not None:
+            all_patient_seqs.append((patient_ind, patient_seqs))
 
         # Filter patient_seqs to only include those in ok_seqs
         # if bad_seqs is not None:
@@ -179,6 +184,11 @@ def calc_patient_vectors(df, caching_model, patient_inds, vector_representation_
 
     if len(total_removed_lst) > 0:
         print(f"Total removed sequences across all patients: {np.mean(total_removed_lst):0.2f} ± {np.std(total_removed_lst):0.2f}")
+
+    if save_data_pkl is not None:
+        # Save the patient sequences for debugging
+        with open(os.path.join(save_data_pkl), 'wb') as f:
+            pickle.dump(all_patient_seqs, f)
 
     return patient_vectors, patient_probs
 
@@ -853,13 +863,19 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
     display_enhanced_results(combined_classifiers, args)
 
 
+def save_pickle(path, **kwargs):
+    """Save multiple variables into a pickle file."""
+    with open(path, "wb") as f:
+        pickle.dump(kwargs, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
 def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
                                             add_ratio_to_vector=False, start_vec_from=0,
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
                                             to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2, to_savefig=True,
-                                            covariance_type='full', dont_cache_inference=False):
+                                            covariance_type='full', dont_cache_inference=False, filter_uncertain_seqs=False):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
     patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
@@ -896,16 +912,16 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     model_config_str = get_model_config_str(args)
 
     bad_seqs = None
-    filter_uncertain_seqs = False  # TODO: Change to false!
-    if filter_uncertain_seqs:
-        reshef_cache_folder = os.path.join("cache", "reshef_inference")
-        reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs_all_partitions.npy")
-        # reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs.npy")
-        if not os.path.exists(reshef_inference_data_path):
-            print(f"Reshef inference data not found at {reshef_inference_data_path}.")
-        bad_seqs = np.load(reshef_inference_data_path)
-        bad_seqs = (set(bad_seqs), set(generate_full_neighbors(bad_seqs)))
-        # bad_seqs = generate_full_neighbors(bad_seqs)
+    if filter_uncertain_seqs:  # TODO: CHANGE THIS BACK ONCE WE'RE DONE HERE!
+        model_config_str += "_full_sequences"
+        # reshef_cache_folder = os.path.join("cache", "reshef_inference")
+        # reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs_all_partitions.npy")
+        # model_config_str += "_filter_uncertain_seqs"
+        # # reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_low_confidence_neg_seqs.npy")
+        # if not os.path.exists(reshef_inference_data_path):
+        #     print(f"Reshef inference data not found at {reshef_inference_data_path}.")
+        # bad_seqs = np.load(reshef_inference_data_path)
+        # bad_seqs = (set(bad_seqs), set(generate_full_neighbors(bad_seqs)))
 
     # Creating a caching model of the trained model
     if to_ensemble:  # TODO: This does not work currently! Raising NotImplementedError
@@ -1018,21 +1034,28 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
             plt.tight_layout()
             plt.show()
 
+    save_data_pkl = None
+    if args.pos_weights == 5.45002:  # TODO: REMOVE THIS AFTER WE ARE DONE EXTRACTING DATA!
+        # Save all the data to a file for later use under reshef inference ablation:
+        reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
+        os.makedirs(reshef_inference_ablation_data, exist_ok=True)
+        save_data_pkl = os.path.join(reshef_inference_ablation_data, f"sequences_{'{}'}_{model_config_str}.pkl")
+
     # get the patient vectors
     # possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
     patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_ids, vector_representation_bins,
                                                           add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
+                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_test"))
 
     # get the train patient vectors
     patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, fold_patient_train_ids, vector_representation_bins,
                                                                       add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
+                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_train"))
 
     # get the validation patient vectors
     disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, fold_patient_test_ids, vector_representation_bins,
                                                                                 add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
+                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_validation"))
 
     # healthy vectors helping data
     healthy_patients = df_hlt["patient_id"].unique()
@@ -1040,7 +1063,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     healthy_patients = healthy_patients[:num_of_healthy_patients]
 
     healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
-                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs)
+                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("healthy_all"))
     healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
                                              healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
     healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
@@ -1060,6 +1083,27 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     # Reshape for sklearn (needs 2D input)
     patient_train_data = patient_train_probs_flat.reshape(-1, 1)
     healthy_train_data = healthy_train_probs_flat.reshape(-1, 1)
+
+    if args.pos_weights == 5.45002:
+        # Save all the data to a file for later use under reshef inference ablation:
+        reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
+        os.makedirs(reshef_inference_ablation_data, exist_ok=True)
+        # save with the model config string:
+        save_pickle(
+            os.path.join(reshef_inference_ablation_data, f"reshef_inference_ablation_data_{model_config_str}.pkl"),
+            patient_train_probs=patient_train_probs,
+            healthy_probs=healthy_probs,
+            healthy_test_probs=healthy_test_probs,
+            patient_train_data=patient_train_data,
+            healthy_train_data=healthy_train_data,
+            patient_test_probs=patient_test_probs,
+            disease_validation_probs=disease_validation_probs,
+            patient_test_vectors=patient_test_vectors,
+            patient_train_vectors=patient_train_vectors,
+            healthy_vectors=healthy_vectors,
+            healthy_test_vectors=healthy_test_vectors,
+        )
+        print(f"Saved reshef inference ablation data to {os.path.join(reshef_inference_ablation_data, f'reshef_inference_ablation_data_{model_config_str}.npz')}")
 
     print(f"Patient training probability values: {patient_train_data.shape[0]}")
     print(f"Healthy training probability values: {healthy_train_data.shape[0]}")

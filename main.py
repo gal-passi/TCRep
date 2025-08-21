@@ -650,9 +650,100 @@ def display_multiple_common_sequences_figure(dataset_loader, df_dict, dataset_ty
     pass
 
 
-def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True, to_recalculate=True, num_rand_patients=30):
+def count_sequences_in_at_least_k(presence_df: pd.DataFrame, patient_ids: list, k: int) -> int:
+    """
+    Count how many sequences appear in at least k of the selected patients.
+
+    Args:
+        presence_df (pd.DataFrame): Output of make_presence_matrix
+        patient_ids (list): List of patient IDs
+        k (int): Minimum number of patients a sequence must appear in
+
+    Returns:
+        int: Number of sequences that appear in at least k patients
+    """
+    # Sum across the chosen patient columns
+    seq_counts = presence_df[patient_ids].sum(axis=1)
+
+    # Total unique sequences across selected patients
+    total_mask = presence_df[patient_ids].any(axis=1)
+    total_count = total_mask.sum()
+
+    # Count how many sequences are present in at least k patients
+    return (seq_counts >= k).sum() / total_count if total_count > 0 else 0
+
+
+def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8, log_space=True, to_recalculate=False, num_rand_patients=60):
     base_plot_save_path = f"plots/common_seqs/{dataset_type}"
     os.makedirs(base_plot_save_path, exist_ok=True)
+
+    # TODO: Added the following code for now!
+    # binary_df = (
+    #     df[["AASeq", "patient_id"]]
+    #     .drop_duplicates()  # remove duplicate patient-sequence pairs if any
+    #     .assign(value=1)  # mark presence
+    #     .pivot(index="AASeq", columns="patient_id", values="value")
+    #     .fillna(0)  # replace NaN with 0 (absence)
+    #     .astype(int)  # make sure it's integer 0/1
+    # )
+    # binary_df_h = (
+    #     df_h[["AASeq", "patient_id"]]
+    #     .drop_duplicates()  # remove duplicate patient-sequence pairs if any
+    #     .assign(value=1)  # mark presence
+    #     .pivot(index="AASeq", columns="patient_id", values="value")
+    #     .fillna(0)  # replace NaN with 0 (absence)
+    #     .astype(int)  # make sure it's integer 0/1
+    # )
+    #
+    # # Parameters
+    # n_repeats = 50
+    # n_patients = 10
+    # k_range = range(2, 7)
+    # d_results = []
+    # h_results = []
+    # for _ in tqdm(range(n_repeats)):
+    #     # randomly choose 10 disease and 10 healthy patients
+    #     d_patients = np.random.choice(df['patient_id'].unique(), size=n_patients, replace=False)
+    #     h_patients = np.random.choice(df_h['patient_id'].unique(), size=n_patients, replace=False)
+    #
+    #     # compute counts for each k
+    #     d_counts = [count_sequences_in_at_least_k(binary_df, d_patients, k) for k in k_range]
+    #     h_counts = [count_sequences_in_at_least_k(binary_df_h, h_patients, k) for k in k_range]
+    #
+    #     d_results.append(d_counts)
+    #     h_results.append(h_counts)
+    #
+    # # Convert to arrays for easy stats
+    # d_results = np.array(d_results)  # shape (n_repeats, len(k_range))
+    # h_results = np.array(h_results)
+    # # Mean and std across repeats
+    # d_mean, d_std = d_results.mean(axis=0), d_results.std(axis=0)
+    # h_mean, h_std = h_results.mean(axis=0), h_results.std(axis=0)
+    #
+    # # --- Plot ---
+    # plt.figure(figsize=(6, 6), dpi=600)
+    # ax = plt.gca()
+    # for spine in ax.spines.values():
+    #     spine.set_edgecolor('black')
+    #     spine.set_linewidth(0.75)
+    # # Plot mean ± std as shaded area
+    # plt.plot(k_range, d_mean, label="Patients", color="#FFA500")
+    # plt.fill_between(k_range, d_mean - d_std, d_mean + d_std, color="#FFA500", alpha=0.2)
+    # plt.plot(k_range, h_mean, label="Healthy", color="#7BC8F6")
+    # plt.fill_between(k_range, h_mean - h_std, h_mean + h_std, color="#7BC8F6", alpha=0.2)
+    # plt.xlabel("Number of Patients")
+    # plt.ylabel("Number of Common Sequences")
+    # plt.title("Number of Common Sequences (avg ± std over 50 samples)")
+    # plt.ylim(0, max(d_mean.max() + d_std.max(), h_mean.max() + h_std.max()) * 1.1)
+    # plt.xticks(fontsize=12)
+    # plt.yticks(fontsize=12)
+    # plt.tight_layout()
+    # plt.legend(framealpha=1.0)
+    # plt.show()
+
+    # intersection = binary_df[df['patient_id'].unique()[:5]].all(axis=1)  # True if present in all
+    # shared_sequences = binary_df[intersection].index.tolist()
+    # common_seqs = len(shared_sequences)
 
     if not to_recalculate and os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')):
         print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
@@ -666,101 +757,22 @@ def display_common_sequences_figure(dataset_loader, df, df_h, dataset_type, l=8,
 
     num_rand_patients = min([num_rand_patients, len(df['patient_id'].unique()), len(df_h['patient_id'].unique())])
 
-    # check if study_id is in the df
-    if dataset_type == 'cmv':
-        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(num_rand_patients, len(x)), replace=False) for x in study_groups]
-        rand_patients = list(chain(*rand_patients))
-    elif 'article_sle' in dataset_type or 't1d' in dataset_type:
-        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(num_rand_patients, len(x)), replace=False) for x in study_groups]
-        rand_patients = list(chain(*rand_patients))
-    elif 'study_id' in df.columns:
-        study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=5, replace=False) for x in study_groups]
-        rand_patients = list(chain(*rand_patients))
-    else:
-        rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), num_rand_patients), replace=False)
-    if len(rand_patients) < num_rand_patients:
-        # Add the remaining patients randomly from those not picked yet
-        remaining_patients = set(df['patient_id'].unique()) - set(rand_patients)
-        remaining_patients = np.random.choice(list(remaining_patients), size=min(num_rand_patients - len(rand_patients), len(remaining_patients)), replace=False)
-        rand_patients = np.concatenate([rand_patients, remaining_patients])
-    df = df[df['patient_id'].isin(rand_patients)]
-
-    # per patient id, pick 20,000 AASeqs:
-    # df = df.groupby('patient_id').apply(lambda x: x.sample(n=min(20000, len(x)), replace=False)).reset_index(drop=True)
+    value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
 
     # calculate common sequences in disease and healthy samples
-    value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-    x_disease_list = [dataset_loader.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
+    rand_patients_disease = np.random.choice(df['patient_id'].unique(), size=num_rand_patients, replace=False)
+    df_df = df[df['patient_id'].isin(rand_patients_disease)]
+    x_disease_list = [dataset_loader.common_aaseq_analysis(df_df, num_of_patients=i, mode=1, std_val=value_to_take) for i in range(2, l)]
     x_disease = np.array([x[0][value_to_take] for x in x_disease_list])
     x_disease_std = np.array([x[1] for x in x_disease_list])
 
-    def calculate_common_healthy(patient_id_bld, option=1):
-        df1 = df[df["patient_id"] == patient_id_bld]
-        if option == 1:
-            # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
-            # healthy_patient_ids = df_h['patient_id'].unique()
-            if 'article_sle' in dataset_type or 't1d' in dataset_type:
-                rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(20, len(df_h['patient_id'].unique())), replace=False)
-                rand_patients = [rand_patients]
-            else:
-                study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
-                rand_patients = [np.random.choice(x, size=min(3, len(x)), replace=False) for x in study_groups]
-            healthy_patient_ids = np.array(list(chain(*rand_patients)))
-            random_patients = healthy_patient_ids
-            # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
-            df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
-            df_h_comb = df_h_temp
-            # df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)  # TODO: Change back
-            # per patient id, pick 20,000 AASeqs:
-            # df_h_comb = df_h_comb.groupby('patient_id').apply(lambda x: x.sample(n=min(20000, len(x)), replace=False)).reset_index(drop=True)
-        else:
-            # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
-            patient_seqs_len = len(df1)
-            all_seqs_h = df_h["AASeq"]
-            df_h_comb = generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-        x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=1) for i in range(1, l)]
-        # x_healthy = [dataset_loader.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]  # TODO: Change back
-        return x_healthy
-
-    # Average the results of all patients with disease
-    # x_healthy_list_all = [calculate_common_healthy(patient_id_bld, option=1) for patient_id_bld in df['patient_id'].unique()]
-    # x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
-    # x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
-    # x_healthy = np.array(x_healthy_list).mean(axis=0)
-    # x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
-
-    value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-    if 'article_sle' in dataset_type or 't1d' in dataset_type:
-        rand_patients = np.random.choice(df_h['patient_id'].unique(), size=min(num_rand_patients, len(df_h['patient_id'].unique())), replace=False)
-        rand_patients = [rand_patients]
-    else:
-        study_groups = df_h.groupby('study_id')['patient_id'].unique().apply(list)
-        rand_patients = [np.random.choice(x, size=min(5, len(x)), replace=False) for x in study_groups]
-        if len(rand_patients) < num_rand_patients:
-            # Add the remaining patients randomly from those not picked yet
-            remaining_patients = set(df_h['patient_id'].unique()) - set(chain(*rand_patients))
-            remaining_patients = np.random.choice(list(remaining_patients), size=min(num_rand_patients - len(rand_patients), len(remaining_patients)), replace=False)
-            rand_patients.append(remaining_patients)
-    healthy_patient_ids = np.array(list(chain(*rand_patients)))
-    random_patients = healthy_patient_ids
-    # random_patients = np.random.choice(healthy_patient_ids, size=min(15, len(healthy_patient_ids)), replace=False)
-    df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
-    x_healthy_list = [dataset_loader.common_aaseq_analysis(df_h_temp, num_of_patients=i, mode=1) for i in range(2, l)]
+    random_patients_healthy = np.random.choice(df_h['patient_id'].unique(), size=num_rand_patients, replace=False)
+    df_hf = df_h[df_h['patient_id'].isin(random_patients_healthy)]
+    x_healthy_list = [dataset_loader.common_aaseq_analysis(df_hf, num_of_patients=i, mode=1, std_val=value_to_take) for i in range(2, l)]
     x_healthy = np.array([x[0][value_to_take] for x in x_healthy_list])
     x_healthy_std = np.array([x[1] for x in x_healthy_list])
 
-    # Average the results of all patients with disease and healthy then save them to a csv file
-    # x_avg_hlt = average_dicts(x_healthy_list_all)
-    # disease_df = combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
-    # healthy_df = combine_to_dataframe(x_avg_hlt, x_healthy_std)
-    # Save the dfs
-    # disease_df.to_csv("cache/disease_df.csv", index=False)
-    # healthy_df.to_csv("cache/healthy_df.csv", index=False)
-
-    if log_space:
+    if log_space and (value_to_take != "num_common"):
         x_disease = np.log(x_disease)
         x_healthy = np.log(x_healthy)
 
@@ -1194,6 +1206,7 @@ if __name__ == '__main__':
     parser.add_argument('-reshef_negative_part', type=int, default=0, help='Part of the negative partition to use for Reshef inference (0 for no partitioning)')
     parser.add_argument('-run_on_full_data', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     parser.add_argument('-dont_cache_inference', action='store_true', default=False, help='Whether to cache the inference results or not. If True, it will not cache the results and will run inference every time.')
+    parser.add_argument('-filter_uncertain_seqs', action='store_true', default=False, help='Whether to filter uncertain sequences in the inference classification v2 part.')
     args = parser.parse_args()
 
     to_sweep = args.to_sweep
@@ -1254,6 +1267,7 @@ if __name__ == '__main__':
     reshef_negative_part = args.reshef_negative_part if reshef_inference else 0
     run_on_full_data = args.run_on_full_data
     dont_cache_inference = args.dont_cache_inference
+    filter_uncertain_seqs = args.filter_uncertain_seqs if classification_v2 else False
 
     if combine_classification and not dont_plot:
         dont_plot = True  # If combining classification, we don't plot the individual results
@@ -1436,8 +1450,9 @@ if __name__ == '__main__':
         #     num_rand_patients=30
         # )
 
+        display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
         try:
-            display_common_sequences_figure(dataset_loader, df_bld, df_hlt, dataset_type, l=min(l, len(train_patient_ids)))
+            pass
         except Exception as e:
             print(f"Error displaying common sequences figure: {e}")
             print("Skipping the display of common sequences figure.")
@@ -1731,9 +1746,10 @@ if __name__ == '__main__':
         # #         return logits
         # # trained_model = TmpModel(trained_model)
         # # args.model_type = 'tmp_model'
-        # plot_output_distributions_per_patient_new(caching_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-        #                                           test_masks, valid_masks, positive_seqs, df_bld,
-        #                                           df_hlt, model_type, log_wandb, args, device)
+        # TODO: Comment the following line when done with getting this figure!
+        plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                                  test_masks, valid_masks, positive_seqs, df_bld,
+                                                  df_hlt, model_type, log_wandb, args, device)
         # Plotting the output distributions
         # print("Plotting the output distributions")
         # plot_output_distributions_claude(trained_model, valid_patient_inds, unique_patient_ids,
@@ -1745,11 +1761,6 @@ if __name__ == '__main__':
         plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, sample_plots, args, device)
-        # Other distribution plot
-        # print("Plotting the output distributions per patient - With threshold=0.5")
-        # plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-        #                                       test_masks, valid_masks, positive_seqs, df_bld,
-        #                                       df_hlt, model_type, log_wandb, sample_plots, args, device, threshold=0.5)
 
         # Distribution of unseen MS related dataset plot
         # if dataset_type == 'ms':
@@ -1937,7 +1948,7 @@ if __name__ == '__main__':
                                                                 test_patient_ids, valid_patient_ids,
                                                                 valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
                                                                 aaseq_to_ratio, to_ensemble, model_non_trained, device,
-                                                                k_fold_disease=inner_fold, chosen_components=components, dont_cache_inference=dont_cache_inference)
+                                                                k_fold_disease=inner_fold, chosen_components=components, dont_cache_inference=dont_cache_inference, filter_uncertain_seqs=filter_uncertain_seqs)
                 else:
                     from inference.inference_classification import inference_classification_model
                     inference_classification_model(trained_model, args, df_bld, df_hlt,

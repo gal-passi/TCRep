@@ -184,23 +184,23 @@ class DatasetLoader:
             if os.path.exists(saved_dataset_path):
                 with open(saved_dataset_path, 'rb') as f:
                     saved_df = pickle.load(f)
-            if 'ms_tcrdb2_no_healthy_ms_plus_hlt_article' in dataset_type:
-                df_bld, df_hlt = df, df_h
-                # add healthy from article
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
-                if top_n_seqs is not None:
-                    topk = int(top_n_seqs * 1000)
-                    if len(df_article_hlt) >= topk:
-                        df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
-                        threshold = df_top['cloneFraction'].min()
-                        threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
-                        df_article_hlt = threshold_df
-                elif top_percent is not None and 100 > top_percent > 0:
-                    threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
-                    df = df[df['cloneFraction'] >= threshold]
-                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
-            elif dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
+            # if 'ms_tcrdb2_no_healthy_ms_plus_hlt_article' in dataset_type:
+            #     df_bld, df_hlt = df, df_h
+            #     # add healthy from article
+            #     df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            #     df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+            #     if top_n_seqs is not None:
+            #         topk = int(top_n_seqs * 1000)
+            #         if len(df_article_hlt) >= topk:
+            #             df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
+            #             threshold = df_top['cloneFraction'].min()
+            #             threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
+            #             df_article_hlt = threshold_df
+            #     elif top_percent is not None and 100 > top_percent > 0:
+            #         threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+            #         df = df[df['cloneFraction'] >= threshold]
+            #     df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+            if dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
                 df_bld, df_hlt = df, df_h
 
                 # Special case for TCRDB2 datasets!
@@ -237,7 +237,11 @@ class DatasetLoader:
                         df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
                     if 'hlt_article' in dataset_type:
                         df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                        df_hlt = df_article[df_article["condition"] == "Healthy"]
+                        df_hlt_tmp = df_article[df_article["condition"] == "Healthy"]
+                        if 'plus_hlt_article' in dataset_type:
+                            df_hlt = pd.concat([df_hlt, df_hlt_tmp], axis=0, ignore_index=True)
+                        else:
+                            df_hlt = df_hlt_tmp
                         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
                     if extra_filter:
                         df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
@@ -1212,8 +1216,9 @@ class DatasetLoader:
 
             study = Study(study_id)
             usable_samples = study._samples['usable']
+            data_source = 'tcrdb2' if 'tcrdb2' in dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition=disease if not get_all else None,
-                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs)
+                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
             # if not get_all:
             #     df = df[df['condition'] == disease]
             # df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
@@ -1251,8 +1256,9 @@ class DatasetLoader:
 
             study = Study(study_id)
             usable_samples = study._samples['usable']
+            data_source = 'tcrdb2' if 'tcrdb2' in dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition='Healthy',
-                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs)
+                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
             # df = df[df['condition'] == 'Healthy']
             # df['study_id'] = study_id
             healthy_studies.append(df)
@@ -1532,7 +1538,7 @@ class DatasetLoader:
 
         return neighbor_set
 
-    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=750):
+    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=50000, std_val='percent_of_total'):
 
         # Select the unique patients
         unique_patients = df['patient_id'].unique()
@@ -1557,13 +1563,14 @@ class DatasetLoader:
         # Pick max_combinations at random from patient_combinations, if it is too large
         if len(patient_combinations) > max_combinations:
             patient_combinations = random.sample(patient_combinations, max_combinations)
+        print(f"Number of patient combinations: {len(patient_combinations)}")
 
         # TODO: Check if multiprocessing is better than just running normally!
         # results, percent_of_total_values = run_multiprocess_analysis(
         #     patient_combinations, patient_sequences, df, lev_dist_accept,
         #     helper_function_common_aaseq_analysis, num_processes=min(mp.cpu_count(), 8)  # Limit to 8 processes
         # )
-        percent_of_total_values = []
+        values_to_std = []
         for combination in patient_combinations:
             selected_sequences = [patient_sequences[pid] for pid in combination]
 
@@ -1580,30 +1587,34 @@ class DatasetLoader:
             min_sequences = min(len(seqs) for seqs in selected_sequences)
             max_sequences = max(len(seqs) for seqs in selected_sequences)
             percent_of_total = (num_common / total_sequences) * 100 if total_sequences > 0 else 0
+            percent_of_mean = [num_common / len(seqs) for seqs in selected_sequences]
+            percent_of_mean = (sum(percent_of_mean) / len(percent_of_mean)) * 100 if percent_of_mean else 0
             percent_of_min = (num_common / min_sequences) * 100 if min_sequences > 0 else 0
             percent_of_max = (num_common / max_sequences) * 100 if max_sequences > 0 else 0
-            percent_of_total_values.append(percent_of_total)
             results.append({
                 'num_total_seqs': total_sequences,
                 'num_common': num_common,
                 'percent_of_total': percent_of_total,
+                'percent_of_mean': percent_of_mean,
                 'percent_of_min': percent_of_min,
                 'percent_of_max': percent_of_max
             })
+            values_to_std.append(results[-1][std_val])  # Collect values for std calculation
 
         # Calculate means
         mean_results = {
             'num_total_seqs': sum(r['num_total_seqs'] for r in results) / len(results),
             'num_common': sum(r['num_common'] for r in results) / len(results),
             'percent_of_total': sum(r['percent_of_total'] for r in results) / len(results),
+            'percent_of_mean': sum(r['percent_of_mean'] for r in results) / len(results),
             'percent_of_min': sum(r['percent_of_min'] for r in results) / len(results),
             'percent_of_max': sum(r['percent_of_max'] for r in results) / len(results)
         }
 
-        # Calculate std for percent_of_total
-        std_percent_of_total = np.std(percent_of_total_values)  # Calculate std for percent_of_total
+        # Calculate std for the given value
+        std_values = np.std(values_to_std)
 
-        return mean_results, std_percent_of_total
+        return mean_results, std_values
 
     # TODO: This code does not contain the filtering of the data! that should be when loading data from TCRdb2!
     def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):

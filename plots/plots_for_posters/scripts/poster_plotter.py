@@ -14,6 +14,7 @@ import re
 from collections import defaultdict
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import confusion_matrix
+import json
 
 
 # DISCLAIMER:
@@ -389,15 +390,77 @@ def calculations_for_poster():
           f"\tsensitivity: {svm_sens:.3f}, specificity: {svm_spec:.3f}")
 
 
-def plot_ablation_on_folds(n_folds=8):
+def plot_ablation_on_folds(n_folds=8, n_models=5):
     val_f1 = [0.16036, 0.24463, 0.25254, 0.24101, 0.102, 0.16456, 0.16056, 0.15261, 0.11184, 0.17993, 0.19084, 0.2027, 0.12983, 0.20327, 0.19976, 0.19702, 0.11933, 0.18205, 0.17235, 0.17512, 0.11732, 0.16997, 0.17016, 0.17387, 0.13861, 0.23182, 0.20886, 0.22035, 0.13027, 0.18538, 0.18526, 0.18966]
     val_tpr = [0.73674, 0.67287, 0.67409, 0.69312, 0.68308, 0.54638, 0.54279, 0.5787, 0.66152, 0.60961, 0.57844, 0.57307, 0.70011, 0.53348, 0.541, 0.51593, 0.64883, 0.55895, 0.58, 0.58611, 0.67459, 0.51458, 0.49389, 0.49012, 0.62191, 0.59371, 0.61731, 0.61175, 0.67703, 0.62616, 0.6087, 0.60675]
     val_fnr = [1 - x for x in val_tpr]  # False Negative Rate
     val_tnr = [0.85941, 0.87868, 0.88388, 0.87138, 0.86852, 0.91396, 0.91186, 0.89857, 0.8742, 0.89346, 0.90755, 0.91584, 0.85513, 0.91243, 0.90866, 0.91229, 0.88305, 0.9084, 0.89704, 0.89789, 0.86821, 0.91411, 0.91845, 0.92154, 0.89829, 0.91784, 0.90002, 0.90824, 0.86027, 0.87712, 0.88111, 0.88521]
     val_fpr = [1 - x for x in val_tnr]  # False Positive Rate
 
+    # (val_f1, val_precision, val_recall, val_tnr, val_tpr, val_fpr, val_fnr)
+    # 0.05408282055546316 0.028450447928331467 0.5460040295500336 0.6482445804350856 0.5460040295500336 0.3517554195649144 0.4539959704499664
+    # 0.0262531328320802 0.013360330341342092 0.7502238137869293 0.37796518173045995 0.7502238137869293 0.62203481826954 0.24977618621307074
+    # 0 0 0.0 1.0 0.0 0.0 1.0
+    # 0.017699912176008286 0.009246406136037456 0.20640756302521007 0.6473022094912643 0.20640756302521007 0.3526977905087358 0.7935924369747899
+    # 0 0 0.0 1.0 0.0 0.0 1.0
+    # 0.026267387055983443 0.013327112070222507 0.904950495049505 0.1012909280869827 0.904950495049505 0.8987090719130173 0.09504950495049505
+    # 0.029098683470237422 0.01476465617649074 0.9976851851851852 0.07895214406951546 0.9976851851851852 0.9210478559304845 0.0023148148148148147
+    # 0 0 0.0 1.0 0.0 0.0 1.0
 
-    # Create ablation figure
+    # Untrained CVC values (F1, TPR, FNR, TNR, FPR) for each fold
+    untrained_vals = [
+        (0.05408282055546316, 0.5460040295500336, 0.4539959704499664, 0.6482445804350856, 0.3517554195649144),
+        (0.0262531328320802, 0.7502238137869293, 0.24977618621307074, 0.37796518173045995, 0.62203481826954),
+        (0.0, 0.0, 1.0, 1.0, 0.0),
+        (0.017699912176008286, 0.20640756302521007, 0.7935924369747899, 0.6473022094912643, 0.3526977905087358),
+        (0.0, 0.0, 1.0, 1.0, 0.0),
+        (0.026267387055983443, 0.904950495049505, 0.09504950495049505, 0.1012909280869827, 0.8987090719130173),
+        (0.029098683470237422, 0.9976851851851852, 0.0023148148148148147, 0.07895214406951546, 0.9210478559304845),
+        (0.0, 0.0, 1.0, 1.0, 0.0)
+    ]
+
+    def interleave_untrained(metric_list, untrained_list):
+        """Insert untrained values at start and after every 4 trained values."""
+        out = []
+        n_models = 4
+        un_idx = 0
+        for i in range(0, len(metric_list), n_models):
+            if un_idx < len(untrained_list):
+                out.append(untrained_list[un_idx])
+                un_idx += 1
+            out.extend(metric_list[i:i + n_models])
+        return out
+
+    # Extract each metric column from untrained_vals
+    tmp_f1 = [x[0] for x in untrained_vals]
+    tmp_tpr = [x[1] for x in untrained_vals]
+    tmp_fnr = [x[2] for x in untrained_vals]
+    tmp_tnr = [x[3] for x in untrained_vals]
+    tmp_fpr = [x[4] for x in untrained_vals]
+
+    # Interleave for each metric
+    val_f1 = interleave_untrained(val_f1, tmp_f1)
+    val_tpr = interleave_untrained(val_tpr, tmp_tpr)
+    val_fnr = interleave_untrained(val_fnr, tmp_fnr)
+    val_tnr = interleave_untrained(val_tnr, tmp_tnr)
+    val_fpr = interleave_untrained(val_fpr, tmp_fpr)
+
+
+    # list dir "naive_model_results"
+    dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results"))
+    dir_content = sorted([x for x in dir_content if 'cvc' in x])
+    for cvc_dir in dir_content:
+        # list files in cvc_dir and make sure that there are exactly 2 files
+        results_files = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir))
+        assert len(results_files) == 2, f"Expected 2 files in {cvc_dir}, but found {len(results_files)}"
+        for result_file in results_files:
+            # load all jsons in result_file with open
+            with open(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir, result_file), "r") as f:
+                results = json.load(f)
+            f1 = results['best_validation_f1']
+            # TODO: ADDING TPR AND SUCH...
+
+
     # Dictionary to select which metric to plot
     metrics = {
         "F1": val_f1,
@@ -409,43 +472,87 @@ def plot_ablation_on_folds(n_folds=8):
 
     # Model labels
     model_labels = [
-        "Normal",
-        "Inflation (by edit distance)",
-        "Special Entropy Term",
-        "Confidence Neighbors Term"
+        "Untrained CVC",
+        "Cross Entropy",
+        "Inflation",
+        "Confidence Term",
+        "Repeating Sequences Term"
     ]
+    assert n_models == len(model_labels), "Number of models does not match the number of labels."
 
     # Reshape helper
     def reshape_values(values):
-        return np.array(values).reshape(n_folds, 4)  # n_folds × 4 models
+        return np.array(values).reshape(n_folds, n_models)  # n_folds × n_models
 
     # Plot all metrics in subplots
-    fig, axes = plt.subplots(2, 3, figsize=(15, 8))  # 2 rows, 3 cols (last will be empty)
+    fig, axes = plt.subplots(2, 3, figsize=(15, 8), dpi=600)  # 2 rows, 3 cols (last will be empty)
     axes = axes.flatten()
-
     for idx, (metric_name, metric_values) in enumerate(metrics.items()):
         ax = axes[idx]
         values = reshape_values(metric_values)
 
         # Boxplots
-        ax.boxplot(values, positions=np.arange(1, 5), widths=0.5)
+        ax.boxplot(values, positions=np.arange(1, n_models + 1), widths=0.5)
 
         # Scatter per fold
         for fold in range(n_folds):
-            ax.scatter(np.arange(1, 5), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
+            ax.scatter(np.arange(1, n_models + 1), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
 
-        ax.set_xticks([1, 2, 3, 4])
+        ax.set_xticks(list(range(1, n_models + 1)))
+        # ax.set_xticks([1, 2, 3, 4, 5])
         ax.set_xticklabels(model_labels, rotation=20, ha="right")
         ax.set_title(metric_name)
         ax.set_ylabel(metric_name)
-
     # Add legend only once
-    axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    # Remove the last empty subplot
-    fig.delaxes(axes[-1])
-
+    # axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    fig.delaxes(axes[-1])  # Remove the last empty subplot
     plt.tight_layout()
     plt.show()
+
+    # # Plot all metrics in subplots
+    # fig, axes = plt.subplots(2, 3, figsize=(15, 8))  # 2 rows, 3 cols (last will be empty)
+    # axes = axes.flatten()
+    # for idx, (metric_name, metric_values) in enumerate(metrics.items()):
+    #     ax = axes[idx]
+    #     values = reshape_values(metric_values)
+    #     # Calculate statistics for each model
+    #     positions = np.arange(1, 5)
+    #     for i, pos in enumerate(positions):
+    #         model_values = values[:, i]  # All fold values for this model
+    #
+    #         # Calculate quartiles and mean
+    #         q1 = np.percentile(model_values, 25)
+    #         q3 = np.percentile(model_values, 75)
+    #         mean_val = np.mean(model_values)
+    #
+    #         # Plot mean as red line with black quartile error bars
+    #         ax.errorbar(pos, mean_val,
+    #                     yerr=[[mean_val - q1], [q3 - mean_val]],
+    #                     fmt='_r',
+    #                     ecolor='black',
+    #                     capsize=5,
+    #                     capthick=1,
+    #                     linewidth=1,
+    #                     markersize=20,
+    #                     markeredgewidth=2)
+    #
+    #     # Scatter per fold
+    #     for fold in range(n_folds):
+    #         ax.scatter(np.arange(1, 5), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
+    #
+    #     ax.set_xticks([1, 2, 3, 4])
+    #     ax.set_xlim(0.5, 4.5)
+    #     ax.set_xticklabels(model_labels, rotation=20, ha="right")
+    #     ax.set_title(metric_name)
+    #     ax.set_ylabel(metric_name)
+    # # Add legend only once
+    # # axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    # # Remove the last empty subplot
+    # fig.delaxes(axes[-1])
+    # plt.tight_layout()
+    # plt.show()
+
+    return
 
 
 def load_pickle(path):
@@ -510,37 +617,47 @@ def make_patient_df(patient_train_seqs, patient_train_data, bad_seqs, close_bad_
     return df
 
 
-def filter_sequences(df, low, high):
+def filter_sequences(df, low, high, option=1):
     """
     Filter sequences based on the following rules:
     - If data < low or data > high -> remove if in bad_seqs
     - If low <= data <= high -> remove if in close_bad_seqs
     """
-    mask_remove = (
-        ((df["data"] < low) | (df["data"] > high)) & df["is_bad"]
-    ) | (
-        (df["data"] >= low) & (df["data"] <= high) & df["is_close_bad"]
-    )
+    if option == 1:
+        # keep all below low and above high (don't remove), and remove middle if in bad_seqs (don't use close_bad_seqs)
+        mask_remove = ((df["data"] >= low) & (df["data"] <= high)) & df["is_bad"]
+    elif option == 2:
+        # keep all below low and above high (don't remove), and remove middle if in close_bad_seqs (don't use bad_seqs)
+        mask_remove = ((df["data"] >= low) & (df["data"] <= high)) & df["is_close_bad"]
+    elif option == 3:
+        # remove below low and above high if in bad_seqs, and remove middle if in close_bad_seqs
+        mask_remove = (
+            ((df["data"] < low) | (df["data"] > high)) & df["is_bad"]
+        ) | (
+            (df["data"] >= low) & (df["data"] <= high) & df["is_close_bad"]
+        )
+    else:
+        raise ValueError("Invalid option. Choose 1, 2, or 3.")
     return df[~mask_remove]  # keep only non-removed
 
 
-def get_filtered_data(train_seqs, train_data, bad_seqs, close_bad_seqs, low, high):
+def get_filtered_data(train_seqs, train_data, bad_seqs, close_bad_seqs, low, high, option=1):
     """
     Create a DataFrame, filter it according to the given bounds,
     and return only the 'data' column (floats) of the kept sequences.
     """
     df = make_patient_df(train_seqs, train_data, bad_seqs, close_bad_seqs)
-    filtered_df = filter_sequences(df, low, high)
+    filtered_df = filter_sequences(df, low, high, option=option)
     return filtered_df["data"].values
 
 
-def get_filtered_data_probs(test_seqs, test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound):
+def get_filtered_data_probs(test_seqs, test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound, option=1):
     test_probs_filtered = []
     for i, test_seq in enumerate(test_seqs):
         test_seqs = test_seq[1]
         test_prob = test_probs[i]
         # Filter patient test probabilities based on bad and close bad sequences
-        test_prob_filtered = get_filtered_data(test_seqs, test_prob, bad_seqs, close_bad_seqs, low_bound, high_bound)
+        test_prob_filtered = get_filtered_data(test_seqs, test_prob, bad_seqs, close_bad_seqs, low_bound, high_bound, option=option)
         test_probs_filtered.append(test_prob_filtered)
     return test_probs_filtered
 
@@ -554,11 +671,13 @@ def plot_classification_ablation():
     print("Loading inference ablation data...")
     files = os.listdir(reshef_inference_ablation_data)
     model_files = [f for f in files if f.startswith("reshef_inference_ablation_data_") and f.endswith(".pkl") and "ce_entropy" in f]
-    model_files = [f for f in model_files if 'fold-6_e' not in f and 'fold-7_e' not in f and 'fold-8_e' not in f]
+    model_files = [f for f in model_files if "_full_sequences" not in f]
+    # model_files = [f for f in model_files if 'fold-6_e' not in f and 'fold-7_e' not in f and 'fold-8_e' not in f]
 
     # Extract model_config_strs
     model_config_strs = [f[len("reshef_inference_ablation_data_"):-len(".pkl")] for f in model_files]
-
+    'reshef_inference_ablation_data_cvc_loss-ce_entropy_dataset-ms_tcrdb2_no_healthy_ms_fold-4_epochs-20_batch-330_ratio-10_weights-5.45002_lr-0.0023_regcoef-0.3_freeze-False_criterion-True_full_sequences.pkl'
+    'reshef_inference_ablation_data_cvc_loss-ce_entropy_dataset-ms_tcrdb2_no_healthy_ms_fold-4_epochs-20_batch-330_ratio-10_weights-5.45002_lr-0.0023_regcoef-0.3_freeze-False_criterion-True.pkl'
     all_data = {}
     for model_config_str in model_config_strs:
         model_dict = {}
@@ -615,241 +734,249 @@ def plot_classification_ablation():
     print(f"Done.")
 
     # Step 2: Iterate over all model_config_strs and perform GMM classification
-    print("Performing GMM classification ablation...")
-    all_results = []
-    low_bounds = [-1, 0, 0.05, 0.1, 0.2]
-    high_bounds = [0.75, 0.85, 0.9, 1.0, -1]
-    results_path = os.path.join(reshef_inference_ablation_data, "classification_ablation_results.pkl")
-    # Load from pickle if it exists
-    if os.path.exists(results_path):
-        with open(results_path, 'rb') as f:
-            all_results = pickle.load(f)
-        # check validity of all_results
-        if len(all_results) != len(low_bounds):
-            all_results = []
-        elif len(all_results[0]['accuracies']) != len(model_files):
-            all_results = []
-        if all_results:
-            print("Loaded existing classification results from pickle.")
-    if not all_results:  # recalculate if we did not find a proper save of the current results
-        first_do_not_filter = True
-        for low_bound, high_bound in zip(low_bounds, high_bounds[::-1]):
-            all_classification_names = []
-            all_cm_gmms = []
-            all_accuracies = []
-            for model_config, data in all_data.items():
-                classification_names = []
-                cm_gmms = []
-                accuracies = []
+    options = [1, 2, 3]
+    for option in options:
+        print(f"Performing GMM classification ablation (Option={option})...")
+        all_results = []
+        low_bounds = [-1, 0, 0.05, 0.1, 0.2]
+        high_bounds = [0.75, 0.85, 0.9, 1.0, -1]
+        results_path = os.path.join(reshef_inference_ablation_data, f"classification_ablation_results_option{option}.pkl")
+        # Load from pickle if it exists
+        if os.path.exists(results_path):
+            with open(results_path, 'rb') as f:
+                all_results = pickle.load(f)
+            # check validity of all_results
+            if len(all_results) != len(low_bounds):
+                all_results = []
+            elif len(all_results[0]['accuracies']) != len(model_files):
+                all_results = []
+            if all_results:
+                print("Loaded existing classification results from pickle.")
+        if not all_results:  # recalculate if we did not find a proper save of the current results
+            first_do_not_filter = True
+            for low_bound, high_bound in zip(low_bounds, high_bounds[::-1]):
+                all_classification_names = []
+                all_cm_gmms = []
+                all_accuracies = []
+                for model_config, data in all_data.items():
+                    classification_names = []
+                    cm_gmms = []
+                    accuracies = []
 
-                ablation_data = data['ablation_data']
-                patient_train_data = ablation_data['patient_train_data']
-                healthy_train_data = ablation_data['healthy_train_data']
+                    ablation_data = data['ablation_data']
+                    patient_train_data = ablation_data['patient_train_data']
+                    healthy_train_data = ablation_data['healthy_train_data']
 
-                sequences_data = data['sequences']
-                patient_train_seqs = np.concatenate([np.array(x[1]) for x in sequences_data['patient_train']])
-                healthy_train_seqs = np.concatenate([np.array(x[1]) for x in sequences_data['healthy_all']][:52])
+                    sequences_data = data['sequences']
+                    patient_train_seqs = np.concatenate([np.array(x[1]) for x in sequences_data['patient_train']])
+                    healthy_train_seqs = np.concatenate([np.array(x[1]) for x in sequences_data['healthy_all']][:52])
 
-                # Filter patient and healthy train data based on bad and close bad sequences
-                if not first_do_not_filter:
-                    patient_train_data = get_filtered_data(patient_train_seqs, patient_train_data.reshape((-1,)), bad_seqs, close_bad_seqs, low_bound, high_bound)
-                    healthy_train_data = get_filtered_data(healthy_train_seqs, healthy_train_data.reshape((-1,)), bad_seqs, close_bad_seqs, low_bound, high_bound)
+                    # Filter patient and healthy train data based on bad and close bad sequences
+                    if not first_do_not_filter:
+                        patient_train_data = get_filtered_data(patient_train_seqs, patient_train_data.reshape((-1,)), bad_seqs, close_bad_seqs, low_bound, high_bound, option=option)
+                        healthy_train_data = get_filtered_data(healthy_train_seqs, healthy_train_data.reshape((-1,)), bad_seqs, close_bad_seqs, low_bound, high_bound, option=option)
 
-                final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
-                final_patient_gmm.fit(patient_train_data.reshape((-1, 1)))
-                final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
-                final_healthy_gmm.fit(healthy_train_data.reshape((-1, 1)))
+                    final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
+                    final_patient_gmm.fit(patient_train_data.reshape((-1, 1)))
+                    final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
+                    final_healthy_gmm.fit(healthy_train_data.reshape((-1, 1)))
 
-                # Extract patient and healthy test probabilities
-                patient_test_probs = ablation_data['patient_test_probs']
-                healthy_test_probs = ablation_data['healthy_test_probs']
+                    # Extract patient and healthy test probabilities
+                    patient_test_probs = ablation_data['patient_test_probs']
+                    healthy_test_probs = ablation_data['healthy_test_probs']
 
-                patient_test_seqs = sequences_data['patient_test']
-                healthy_test_seqs = sequences_data['healthy_all'][52:]
+                    patient_test_seqs = sequences_data['patient_test']
+                    healthy_test_seqs = sequences_data['healthy_all'][52:]
 
-                # Filter patient and healthy test probabilities based on bad and close bad sequences
-                if not first_do_not_filter:
-                    patient_test_probs = get_filtered_data_probs(patient_test_seqs, patient_test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound)
-                    healthy_test_probs = get_filtered_data_probs(healthy_test_seqs, healthy_test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound)
+                    # Filter patient and healthy test probabilities based on bad and close bad sequences
+                    if not first_do_not_filter:
+                        patient_test_probs = get_filtered_data_probs(patient_test_seqs, patient_test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound, option=option)
+                        healthy_test_probs = get_filtered_data_probs(healthy_test_seqs, healthy_test_probs, bad_seqs, close_bad_seqs, low_bound, high_bound, option=option)
 
-                def calculate_all_differences():
-                    """Calculate all log-likelihood differences for percentile analysis"""
-                    all_differences = []
+                    def calculate_all_differences():
+                        """Calculate all log-likelihood differences for percentile analysis"""
+                        all_differences = []
 
-                    # Process patient test subjects
-                    for patient_probs in patient_test_probs:
-                        patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
-                        patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
-                        healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
-                        diff = patient_ll - healthy_ll
-                        all_differences.append(diff)
-
-                    # Process healthy test subjects
-                    for healthy_test_prob in healthy_test_probs:
-                        healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
-                        patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
-                        healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
-                        diff = patient_ll - healthy_ll
-                        all_differences.append(diff)
-
-                    return np.array(all_differences)
-
-                def get_gmm_predictions(threshold):
-                    """Helper function to get predictions for a given threshold"""
-                    test_predictions = []
-                    test_true_labels = []
-
-                    # Process patient test subjects
-                    for i, patient_probs in enumerate(patient_test_probs):
-                        patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
-
-                        # Calculate average log-likelihood for this patient across all their probability values
-                        patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
-                        healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
-
-                        # If threshold is set, classify based on the difference only if the abs difference is above the threshold
-                        if threshold > 0:
+                        # Process patient test subjects
+                        for patient_probs in patient_test_probs:
+                            patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
+                            patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
+                            healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
                             diff = patient_ll - healthy_ll
-                            if abs(diff) < threshold:
-                                continue
+                            all_differences.append(diff)
 
-                        # Classify as patient if closer to patient GMM
-                        prediction = 1 if patient_ll > healthy_ll else 0
-
-                        test_predictions.append(prediction)
-                        test_true_labels.append(1)  # True label is patient
-
-                    # Process healthy test subjects
-                    for i, healthy_test_prob in enumerate(healthy_test_probs):
-                        healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
-
-                        # Calculate average log-likelihood for this healthy subject across all their probability values
-                        patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
-                        healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
-
-                        # If threshold is set, classify based on the difference only if the abs difference is above the threshold
-                        if threshold > 0:
+                        # Process healthy test subjects
+                        for healthy_test_prob in healthy_test_probs:
+                            healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
+                            patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
+                            healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
                             diff = patient_ll - healthy_ll
-                            if abs(diff) < threshold:
-                                continue
+                            all_differences.append(diff)
 
-                        # Classify as patient if closer to patient GMM
-                        prediction = 1 if patient_ll > healthy_ll else 0
+                        return np.array(all_differences)
 
-                        test_predictions.append(prediction)
-                        test_true_labels.append(0)  # True label is healthy
+                    def get_gmm_predictions(threshold):
+                        """Helper function to get predictions for a given threshold"""
+                        test_predictions = []
+                        test_true_labels = []
 
-                    return np.array(test_predictions), np.array(test_true_labels)
+                        # Process patient test subjects
+                        for i, patient_probs in enumerate(patient_test_probs):
+                            patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
 
-                all_diffs = calculate_all_differences()
-                abs_diffs = np.abs(all_diffs)
+                            # Calculate average log-likelihood for this patient across all their probability values
+                            patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
+                            healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
 
-                percentiles = [90, 75, 50, 25]
-                percentiles = [100 - p for p in percentiles]  # Convert to 100 - percentile
-                percentile_values = np.percentile(abs_diffs, percentiles)
+                            # If threshold is set, classify based on the difference only if the abs difference is above the threshold
+                            if threshold > 0:
+                                diff = patient_ll - healthy_ll
+                                if abs(diff) < threshold:
+                                    continue
 
-                gmm_predictions, y_test = get_gmm_predictions(0)
-                cm_gmm = confusion_matrix(y_test, gmm_predictions)
-                accuracy = np.mean(gmm_predictions == y_test)
-                cm_gmms.append(cm_gmm)
-                accuracies.append(accuracy)
-                name_metadata = f" (l={low_bound},h={high_bound})" if not first_do_not_filter else ""
-                classification_names.append(f'normal{name_metadata}')
+                            # Classify as patient if closer to patient GMM
+                            prediction = 1 if patient_ll > healthy_ll else 0
 
-                for percentile, threshold in zip(percentiles, percentile_values):
-                    gmm_predictions, y_test = get_gmm_predictions(threshold)
+                            test_predictions.append(prediction)
+                            test_true_labels.append(1)  # True label is patient
+
+                        # Process healthy test subjects
+                        for i, healthy_test_prob in enumerate(healthy_test_probs):
+                            healthy_test_prob_reshaped = healthy_test_prob.flatten().reshape(-1, 1)
+
+                            # Calculate average log-likelihood for this healthy subject across all their probability values
+                            patient_ll = np.mean(final_patient_gmm.score_samples(healthy_test_prob_reshaped))
+                            healthy_ll = np.mean(final_healthy_gmm.score_samples(healthy_test_prob_reshaped))
+
+                            # If threshold is set, classify based on the difference only if the abs difference is above the threshold
+                            if threshold > 0:
+                                diff = patient_ll - healthy_ll
+                                if abs(diff) < threshold:
+                                    continue
+
+                            # Classify as patient if closer to patient GMM
+                            prediction = 1 if patient_ll > healthy_ll else 0
+
+                            test_predictions.append(prediction)
+                            test_true_labels.append(0)  # True label is healthy
+
+                        return np.array(test_predictions), np.array(test_true_labels)
+
+                    all_diffs = calculate_all_differences()
+                    abs_diffs = np.abs(all_diffs)
+
+                    percentiles = [90, 75, 50, 25]
+                    percentiles = [100 - p for p in percentiles]  # Convert to 100 - percentile
+                    percentile_values = np.percentile(abs_diffs, percentiles)
+
+                    gmm_predictions, y_test = get_gmm_predictions(0)
                     cm_gmm = confusion_matrix(y_test, gmm_predictions)
                     accuracy = np.mean(gmm_predictions == y_test)
                     cm_gmms.append(cm_gmm)
                     accuracies.append(accuracy)
-                    classification_names.append(f'{100 - percentile}th Percentile{name_metadata}')
+                    name_metadata = f" (l={low_bound},h={high_bound})" if not first_do_not_filter else ""
+                    classification_names.append(f'normal{name_metadata}')
 
-                # Append results for this model
-                all_classification_names.append(classification_names)
-                all_cm_gmms.append(cm_gmms)
-                all_accuracies.append(accuracies)
-            first_do_not_filter = False  # Only do not filter for the first model!
+                    for percentile, threshold in zip(percentiles, percentile_values):
+                        gmm_predictions, y_test = get_gmm_predictions(threshold)
+                        cm_gmm = confusion_matrix(y_test, gmm_predictions)
+                        accuracy = np.mean(gmm_predictions == y_test)
+                        cm_gmms.append(cm_gmm)
+                        accuracies.append(accuracy)
+                        classification_names.append(f'{100 - percentile}th Percentile{name_metadata}')
 
-            # create a dict of all_classification_names,...
-            results = {
-                'classification_names': all_classification_names,
-                'cm_gmms': all_cm_gmms,
-                'accuracies': all_accuracies,
-                'low_bound': low_bound,
-                'high_bound': high_bound
-            }
-            all_results.append(results)
-    print("Done.")
+                    # Append results for this model
+                    all_classification_names.append(classification_names)
+                    all_cm_gmms.append(cm_gmms)
+                    all_accuracies.append(accuracies)
+                first_do_not_filter = False  # Only do not filter for the first model!
 
-    # save results to pickle
-    with open(results_path, 'wb') as f:
-        pickle.dump(all_results, f)
+                # create a dict of all_classification_names,...
+                results = {
+                    'classification_names': all_classification_names,
+                    'cm_gmms': all_cm_gmms,
+                    'accuracies': all_accuracies,
+                    'low_bound': low_bound,
+                    'high_bound': high_bound
+                }
+                all_results.append(results)
+            # save results to pickle
+            with open(results_path, 'wb') as f:
+                pickle.dump(all_results, f)
+        print(f"Done (option {option}).")
 
-    # Step 3: Plot the results
-    ablation_results = []
-    ablation_names = []
+        # Step 3: Plot the results
+        ablation_results = []
+        ablation_names = []
 
-    for result in all_results:
-        classification_names = result['classification_names'][0]
-        accuracies = np.array(result['accuracies'])
+        for result in all_results:
+            classification_names = result['classification_names'][0]
+            accuracies = np.array(result['accuracies'])
 
-        for i, class_name in enumerate(classification_names):
-            ablation_results.append(accuracies[:, i])
-            ablation_names.append(class_name)
+            for i, class_name in enumerate(classification_names):
+                ablation_results.append(accuracies[:, i])
+                ablation_names.append(class_name)
 
-    def plot_grouped_ablation_subplots(ablation_results, ablation_names):
-        """
-        Group ablation results by the (l=...,h=...) part of their names (if any).
-        Create one subplot per group with a boxplot + scatter overlay.
-        """
-        # --- Group results by (l=...,h=...) pattern ---
-        grouped = defaultdict(list)
-        for results, name in zip(ablation_results, ablation_names):
-            match = re.search(r"\(l=.*?,h=.*?\)", name)
-            group = match.group(0) if match else "default"
-            grouped[group].append((name, results))
+        def plot_grouped_ablation_subplots(ablation_results, ablation_names):
+            """
+            Group ablation results by the (l=...,h=...) part of their names (if any).
+            Create one subplot per group with a boxplot + scatter overlay.
+            """
+            # --- Group results by (l=...,h=...) pattern ---
+            grouped = defaultdict(list)
+            for results, name in zip(ablation_results, ablation_names):
+                match = re.search(r"\(l=.*?,h=.*?\)", name)
+                group = match.group(0) if match else "default"
+                grouped[group].append((name, results))
 
-        group_labels = list(grouped.keys())
+            group_labels = list(grouped.keys())
 
-        # --- Setup subplots ---
-        n_groups = len(group_labels)
-        figsize = (2, 4 * n_groups)  # Adjust height based on number of groups
-        fig, axes = plt.subplots(n_groups, 1, figsize=(figsize[0] * n_groups, figsize[1]), squeeze=False)
-        axes = axes.flatten()
+            # --- Setup subplots ---
+            n_groups = len(group_labels)
+            figsize = (2, 5 * n_groups)  # Adjust height based on number of groups
+            fig, axes = plt.subplots(n_groups, 1, figsize=(figsize[0] * n_groups, figsize[1]), squeeze=False)
+            axes = axes.flatten()
 
-        # --- Plot each group ---
-        for idx, group in enumerate(group_labels):
-            ax = axes[idx]
-            group_items = grouped[group]
+            # --- Plot each group ---
+            for idx, group in enumerate(group_labels):
+                ax = axes[idx]
+                group_items = grouped[group]
 
-            # Extract data + labels
-            names = [n for n, _ in group_items]
-            data = [r for _, r in group_items]
+                # Extract data + labels
+                names = [n for n, _ in group_items]
+                data = [r for _, r in group_items]
 
-            # Boxplot
-            bp = ax.boxplot(data, positions=np.arange(len(names)), widths=0.5, patch_artist=True)
+                # Boxplot
+                bp = ax.boxplot(data, positions=np.arange(len(names)), widths=0.5, patch_artist=True)
 
-            # Make boxes transparent
-            for patch in bp['boxes']:
-                patch.set_facecolor("skyblue")
-                patch.set_alpha(0.3)
+                # Make boxes transparent
+                for patch in bp['boxes']:
+                    patch.set_facecolor("skyblue")
+                    patch.set_alpha(0.3)
 
-            # Scatter overlay for each class
-            for i, arr in enumerate(data):
-                x = np.random.normal(i, 0.05, size=len(arr))  # jitter
-                ax.scatter(x, arr, alpha=0.6, s=20)
+                # Scatter overlay for each class
+                for i, arr in enumerate(data):
+                    x = np.random.normal(i, 0.05, size=len(arr))  # jitter
+                    ax.scatter(x, arr, alpha=0.6, s=20)
 
-            ax.set_xticks(np.arange(len(names)))
-            ax.set_xticklabels(names, rotation=45, ha="right", fontsize=9)
-            ax.set_title(group)
-            ax.set_ylabel("Accuracy")
+                # Add mean text to each box
+                for i, arr in enumerate(data):
+                    mean_val = np.mean(arr)
+                    ax.text(i, mean_val + 0.02, f"{mean_val:.2f}", ha='center', va='bottom', fontsize=8, fontweight='bold')
 
-        plt.tight_layout()
-        plt.show()
+                ax.set_xticks(np.arange(len(names)))
+                ax.set_xticklabels(names, rotation=25, ha="right", fontsize=9)
+                ax.set_title(group)
+                ax.set_ylim(0, 1.05)
+                ax.set_ylabel("Accuracy")
 
-    # Plot the ablation results
-    plot_grouped_ablation_subplots(ablation_results, ablation_names)
+            plt.tight_layout()
+            plt.show()
 
+        # Plot the ablation results
+        plot_grouped_ablation_subplots(ablation_results, ablation_names)
+
+    print("All done.")
     return
 
 
@@ -857,5 +984,5 @@ if __name__ == '__main__':
     # plot_embeddings()
     # plot_average_embeddings()
     # calculations_for_poster()
-    # plot_ablation_on_folds()
-    plot_classification_ablation()
+    plot_ablation_on_folds()
+    # plot_classification_ablation()

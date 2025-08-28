@@ -357,6 +357,163 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 print(f"Loaded model state from epoch {epoch}")
                 break
 
+    do_inference_instead_of_train = True
+    if do_inference_instead_of_train:
+        from cache_handler import get_model_config_str
+        model_config_string = get_model_config_str(args)
+
+        import json
+        from itertools import product
+        from sklearn.neighbors import KNeighborsClassifier
+        from sklearn.metrics import f1_score, confusion_matrix, precision_score, recall_score
+
+        # -------- One-hot encoding helper --------
+        def one_hot_encode_sequences(seqs, alphabet=None, max_len=None):
+            """One-hot encode sequences with zero-padding to max_len, flatten for sklearn."""
+            if alphabet is None:
+                alphabet = sorted(set(''.join(seqs)))
+            if max_len is None:
+                max_len = max(len(s) for s in seqs)
+            char_index = {c: i for i, c in enumerate(alphabet)}
+            encoded = np.zeros((len(seqs), max_len, len(alphabet)), dtype=np.float32)
+            for i, seq in enumerate(seqs):
+                for j, c in enumerate(seq):
+                    if j < max_len and c in char_index:
+                        encoded[i, j, char_index[c]] = 1.0
+            return encoded.reshape(len(seqs), -1), alphabet, max_len
+
+        # -------- Get embeddings using trained model --------
+        def get_model_embeddings(model, seqs, device='cuda', batch_size=330):
+            """Get embeddings from model.get_embeddings for given sequences in batches."""
+            model.eval()
+            all_embs = []
+            with torch.no_grad():
+                for i in range(0, len(seqs), batch_size):
+                    batch = seqs[i:i + batch_size]
+                    emb = model.get_embeddings(batch)
+                    if isinstance(emb, torch.Tensor):
+                        emb = emb.to('cpu').numpy()
+                    all_embs.append(emb)
+            return np.concatenate(all_embs, axis=0)
+
+        # -------- Prepare one-hot encoded data --------
+        def prepare_onehot_data(train_pos, train_neg, valid_pos, valid_neg, test_pos, test_neg):
+            all_train = np.concatenate([train_pos, train_neg])
+            all_valid = np.concatenate([valid_pos, valid_neg])
+            all_test = np.concatenate([test_pos, test_neg])
+            alphabet = sorted(set(''.join(all_train) + ''.join(all_valid) + ''.join(all_test)))
+            max_len = max(len(s) for s in np.concatenate([all_train, all_valid, all_test]))
+
+            X_train, alphabet, max_len = one_hot_encode_sequences(all_train, alphabet, max_len)
+            y_train = np.concatenate([np.ones(len(train_pos)), np.zeros(len(train_neg))])
+
+            X_valid, _, _ = one_hot_encode_sequences(all_valid, alphabet, max_len)
+            y_valid = np.concatenate([np.ones(len(valid_pos)), np.zeros(len(valid_neg))])
+
+            X_test, _, _ = one_hot_encode_sequences(all_test, alphabet, max_len)
+            y_test = np.concatenate([np.ones(len(test_pos)), np.zeros(len(test_neg))])
+
+            return X_train, y_train, X_valid, y_valid, X_test, y_test
+
+        # -------- Prepare embedding-based data --------
+        def prepare_embedding_data(model, train_pos, train_neg, valid_pos, valid_neg, test_pos, test_neg, device='cuda',
+                                   batch_size=330):
+            X_train = get_model_embeddings(model, np.concatenate([train_pos, train_neg]), device, batch_size)
+            y_train = np.concatenate([np.ones(len(train_pos)), np.zeros(len(train_neg))])
+
+            X_valid = get_model_embeddings(model, np.concatenate([valid_pos, valid_neg]), device, batch_size)
+            y_valid = np.concatenate([np.ones(len(valid_pos)), np.zeros(len(valid_neg))])
+
+            X_test = get_model_embeddings(model, np.concatenate([test_pos, test_neg]), device, batch_size)
+            y_test = np.concatenate([np.ones(len(test_pos)), np.zeros(len(test_neg))])
+
+            return X_train, y_train, X_valid, y_valid, X_test, y_test
+
+        # -------- Generic KNN fitting and evaluation --------
+        def tune_and_evaluate_knn(X_train, y_train, X_valid, y_valid, X_test, y_test):
+            k_values = [1, 3, 5, 7, 9]
+            weights_options = ['uniform', 'distance']
+            best_f1, best_params, best_model = -1, None, None
+            best_tpr, best_tnr, best_fpr, best_fnr = -1, -1, -1, -1
+
+            for k, w in product(k_values, weights_options):
+                knn = KNeighborsClassifier(n_neighbors=k, weights=w, n_jobs=-1)
+                knn.fit(X_train, y_train)
+                y_val_pred = knn.predict(X_valid)
+                f1 = f1_score(y_valid, y_val_pred)
+                if f1 > best_f1:
+                    best_f1 = f1
+                    best_params = (k, w)
+                    best_model = knn
+                    tn, fp, fn, tp = confusion_matrix(y_valid, y_val_pred).ravel()
+                    best_tpr = tp / (tp + fn) if (tp + fn) > 0 else 0  # Sensitivity
+                    best_tnr = tn / (tn + fp) if (tn + fp) > 0 else 0  # Specificity
+                    best_fpr = fp / (fp + tn) if (fp + tn) > 0 else 0  # Fall-out
+                    best_fnr = fn / (fn + tp) if (fn + tp) > 0 else 0  # Miss Rate
+
+            y_test_pred = best_model.predict(X_test)
+            metrics = {
+                "best_validation_f1": best_f1,
+                "best_k": best_params[0],
+                "best_weights": best_params[1],
+                "test_f1": f1_score(y_test, y_test_pred),
+                "test_precision": precision_score(y_test, y_test_pred),
+                "test_recall": recall_score(y_test, y_test_pred),
+                "test_confusion_matrix": confusion_matrix(y_test, y_test_pred).tolist(),
+                "test_tpr": best_tpr,
+                "test_tnr": best_tnr,
+                "test_fpr": best_fpr,
+                "test_fnr": best_fnr
+            }
+            return metrics
+
+        # -------- Main pipeline for both versions --------
+        def run_and_save_all(model,
+                             train_pos_seqs, train_neg_seqs,
+                             valid_pos_seqs, valid_neg_seqs,
+                             test_pos_seqs, test_neg_seqs,
+                             model_config_string,
+                             device='cuda', batch_size=330):
+            # Ensure output folder exists
+            out_dir = os.path.join("naive_model_results", model_config_string)
+            os.makedirs(out_dir, exist_ok=True)
+
+            # 1) One-hot KNN
+            X_train, y_train, X_valid, y_valid, X_test, y_test = prepare_onehot_data(
+                train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs)
+            onehot_metrics = tune_and_evaluate_knn(X_train, y_train, X_valid, y_valid, X_test, y_test)
+
+            # Save one-hot results
+            with open(os.path.join(out_dir, "onehot_results.json"), "w") as f:
+                json.dump(onehot_metrics, f, indent=4)
+            print("One-hot KNN results saved.")
+
+            # 2) Embedding KNN
+            X_train, y_train, X_valid, y_valid, X_test, y_test = prepare_embedding_data(
+                model, train_pos_seqs, train_neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, device,
+                batch_size)
+            embedding_metrics = tune_and_evaluate_knn(X_train, y_train, X_valid, y_valid, X_test, y_test)
+
+            # Save embedding results
+            with open(os.path.join(out_dir, "embedding_results.json"), "w") as f:
+                json.dump(embedding_metrics, f, indent=4)
+
+            print(f"All results saved under: {out_dir}")
+            return onehot_metrics, embedding_metrics
+
+        onehot_metrics, embedding_metrics = run_and_save_all(model, train_pos_seqs, train_neg_seqs,
+                                                             valid_pos_seqs, valid_neg_seqs,
+                                                             test_pos_seqs, test_neg_seqs,
+                                                             model_config_string, device='cuda', batch_size=330)
+        exit(0)
+
+    # # TODO: This part is here in order to print a single validation before training, for testing purposes! Remove later!
+    # val_metrics = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
+    # val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
+    # # print f1 score, precision, recall, confusion matrix
+    # print(val_f1, val_precision, val_recall, val_tnr, val_tpr, val_fpr, val_fnr)
+    # exit(0)
+
     # Training loop
     for epoch in range(start_epoch, epochs):
         start_time = time.time()

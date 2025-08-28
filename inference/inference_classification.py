@@ -26,6 +26,7 @@ from models.cvc_ensemble_model import CVCEnsembleModel
 from sklearn.mixture import GaussianMixture
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import pickle
+import pandas as pd
 
 
 INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
@@ -869,13 +870,143 @@ def save_pickle(path, **kwargs):
         pickle.dump(kwargs, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def plot_gmm_hist_with_kde_gal(data, score_col, label_col, b_gmm=None, p_gmm=None, work_b_gmm=None, work_p_gmm=None,
+                           legend=False, n_bins=100, title='', outpath='gmm_dist.png', do_hist=False, uncertain_gmm=None, zoom_in=False):
+    # base_patient_color = "#558cad"
+    # base_healthy_color = "#ba7e0f"
+    # example_patient_color = "#7BC8F6"
+    # example_healthy_color = "#FFA500"
+
+    # base_patient_color = "#2c7bb6"
+    # example_patient_color = "#abd9e9"
+    # base_healthy_color = "#d7191c"
+    # example_healthy_color = "#fdae61"
+
+    base_patient_color = "#FFA500"
+    example_patient_color = "#d7191c"
+    base_healthy_color = "#7BC8F6"
+    example_healthy_color = "#2c7bb6"
+
+    uncertain_color = "#A9A9A9"
+
+    example_alpha = 0.6  # 0.7
+    uncertain_alpha = 0.5
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=600)
+    work = data[[score_col, label_col]].dropna().copy()
+    X_ben = work[work[label_col] == 0][score_col].to_numpy()
+    X_pat = work[work[label_col] == 1][score_col].to_numpy()
+    scores = work[score_col].to_numpy()
+    xmin, xmax = float(np.min(scores)), float(np.max(scores))
+    if work_b_gmm is not None and work_b_gmm is not None and do_hist:
+        edges = np.linspace(xmin, xmax, n_bins + 1)
+        # ax.hist(X_ben.ravel(), bins=edges, density=True, alpha=0.3, color="#4C72B0", label='Benign')
+        # ax.hist(X_pat.ravel(), bins=edges, density=True, alpha=0.3, color='#DA8BC3', label='Pathogenic')
+        bin_centers = (edges[:-1] + edges[1:]) / 2.0
+        width = edges[1] - edges[0]
+        X_ben_new = X_ben.ravel()
+        X_ben_new = X_ben_new[X_ben_new > 0.01]
+        X_pat_new = X_pat.ravel()
+        X_pat_new = X_pat_new[X_pat_new > 0.01]
+        counts_b, edges_b = np.histogram(X_ben_new, bins=edges)
+        counts_p, edges_p = np.histogram(X_pat_new, bins=edges)
+
+        # Use weights so that max bin height = 1
+        weights_b = counts_b / counts_b.max()
+        weights_p = counts_p / counts_p.max()
+
+        # To plot with normalized max height:
+        ax.bar(bin_centers, weights_b, width=width, alpha=0.3, color=example_healthy_color, label='Benign')
+        ax.bar(bin_centers, weights_p, width=width, alpha=0.3, color=example_patient_color, label='Pathogenic')
+
+    # thr = 0.5
+    # ax.vlines(x=thr, ymin=0, ymax=0.35 - 0.025, colors='black', linestyles='--', alpha=0.25)
+    # ax.text(thr, 0.335, f"{thr:.2f}", ha='center', va='bottom', fontsize=10)
+    # compute draw gmm_boundaries
+    def gmm_pdf_1d(gmm, xgrid):
+        means = gmm.means_.ravel()
+        weights = gmm.weights_.ravel()
+
+        # Handle covariance depending on covariance_type
+        if gmm.covariance_type == 'tied':
+            # covariances_ is shared: scalar if 1D or matrix if multi-D
+            if gmm.covariances_.ndim == 0:  # scalar variance
+                vars_ = np.repeat(gmm.covariances_, len(means))
+            elif gmm.covariances_.ndim == 2 and gmm.covariances_.shape == (1, 1):
+                vars_ = np.repeat(gmm.covariances_[0, 0], len(means))
+            elif gmm.covariances_.ndim == 2:  # 1D with tied cov stored as (1,1) matrix
+                vars_ = np.repeat(gmm.covariances_[0, 0], len(means))
+            else:
+                # If multi-dimensional, pick the variance (diagonal) for the feature being plotted
+                vars_ = np.repeat(np.diag(gmm.covariances_)[0], len(means))
+        else:
+            vars_ = gmm.covariances_.ravel()
+
+        pdf = np.zeros_like(xgrid, dtype=float)
+        for w, m, v in zip(weights, means, vars_):
+            coef = 1.0 / np.sqrt(2.0 * np.pi * v)
+            pdf += w * coef * np.exp(-0.5 * ((xgrid - m) ** 2) / v)
+        # area = np.trapz(pdf, xgrid)
+        # if area > 0:
+        #     pdf /= area
+        max_val = np.max(pdf)
+        if max_val > 0:
+            pdf /= max_val
+        return pdf
+
+    x = np.linspace(xmin, xmax, 1000)
+    if work_p_gmm is not None:
+        pdf_p_w = gmm_pdf_1d(work_p_gmm, x)
+        plt.plot(x, pdf_p_w, linewidth=2, color=example_patient_color, linestyle=(0, (5, 2)), label='Pathogenic GMM (pdf)', alpha=example_alpha - 0.1)
+    if p_gmm is not None:
+        pdf_p = gmm_pdf_1d(p_gmm, x)
+        plt.plot(x, pdf_p, linewidth=2, color=base_patient_color, linestyle='-', label='Pathogenic GMM (pdf)', alpha=0.9)
+    if uncertain_gmm is not None:
+        pdf_u = gmm_pdf_1d(uncertain_gmm, x)
+        plt.plot(x, pdf_u, linewidth=2, color='gray', linestyle='--', label='Uncertain GMM (pdf)', alpha=uncertain_alpha)
+    if b_gmm is not None:
+        pdf_b = gmm_pdf_1d(b_gmm, x)
+        plt.plot(x, pdf_b, linewidth=2, color=base_healthy_color, linestyle='-', label='Benign GMM (pdf)', alpha=0.9)
+    if work_b_gmm is not None:
+        pdf_b_w = gmm_pdf_1d(work_b_gmm, x)
+        plt.plot(x, pdf_b_w, linewidth=2, color=example_healthy_color, linestyle=(0, (5, 2)), label='Benign GMM (pdf)', alpha=example_alpha)
+    for spine in ax.spines.values():
+        spine.set_linewidth(1.0)
+        spine.set_color('black')
+    if zoom_in:
+        ax.set_ylim(0, 0.25)
+        ax.set_xlim(0.5, 1.0)
+    ax.set_xlabel('Score', fontsize=10)
+    ax.set_ylabel('Normalized Density', fontsize=10)
+    if legend:
+        ax.legend(
+            handles=[
+                plt.Line2D([0], [0], color=base_patient_color, linewidth=2, linestyle='-', label="Train MS GMM"),
+                plt.Line2D([0], [0], color=base_healthy_color, linewidth=2, linestyle='-', label="Train Healthy GMM"),
+                plt.Line2D([0], [0], color='none', label=""),
+                plt.Line2D([0], [0], color=example_patient_color, linewidth=2, linestyle='--', label="MS Patient GMM"),
+                plt.Line2D([0], [0], color=example_healthy_color, linewidth=2, linestyle='--', label="Healthy Control GMM"),
+                plt.Line2D([0], [0], color='none', label=""),
+                plt.Line2D([0], [0], color=uncertain_color, linewidth=2, linestyle='--', label="Uncertain Subject GMM"),
+            ],
+            loc='upper right',
+            frameon=False,
+            handlelength=2,
+            handletextpad=0.5,
+            labelspacing=0.3  # reduces vertical spacing between entries
+        )
+    ax.set_title(title, fontsize=10)
+    plt.tight_layout()
+    plt.show()
+    return
+
+
 def inference_classification_model_version2(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids,
                                             valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs, aaseq_to_ratio, to_ensemble, model_non_trained, device,
                                             add_ratio_to_vector=False, start_vec_from=0,
                                             vector_representation_bins=40, num_of_healthy_patients=68, num_of_healthy_test_patients=28, only_all_classifiers=False,
                                             to_display_mapping=False, samples_size=20000,
                                             k_fold_disease=1, chosen_components=2, to_savefig=True,
-                                            covariance_type='full', dont_cache_inference=False, filter_uncertain_seqs=False):
+                                            covariance_type='tied', dont_cache_inference=False, filter_uncertain_seqs=False):
     np.random.seed(42)
     # Take shuffle and divide the patient 1/3 such that k_fold_disease will choose which 1/3 of patients to take
     patient_valid_test_ids = np.concatenate([test_patient_ids, valid_patient_ids])
@@ -1035,27 +1166,27 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
             plt.show()
 
     save_data_pkl = None
-    if args.pos_weights == 5.45002:  # TODO: REMOVE THIS AFTER WE ARE DONE EXTRACTING DATA!
-        # Save all the data to a file for later use under reshef inference ablation:
-        reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
-        os.makedirs(reshef_inference_ablation_data, exist_ok=True)
-        save_data_pkl = os.path.join(reshef_inference_ablation_data, f"sequences_{'{}'}_{model_config_str}.pkl")
+    # if args.pos_weights == 5.45002:  # TODO: REMOVE THIS AFTER WE ARE DONE EXTRACTING DATA!
+    #     # Save all the data to a file for later use under reshef inference ablation:
+    #     reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
+    #     os.makedirs(reshef_inference_ablation_data, exist_ok=True)
+    #     save_data_pkl = os.path.join(reshef_inference_ablation_data, f"sequences_{'{}'}_{model_config_str}.pkl")
 
     # get the patient vectors
     # possible_seqs = set(np.concatenate([valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs]))
     patient_test_vectors, patient_test_probs = calc_patient_vectors(df_bld, caching_model, patient_valid_test_ids, vector_representation_bins,
                                                           add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_test"))
+                                                          possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_test") if save_data_pkl is not None else None)
 
     # get the train patient vectors
     patient_train_vectors, patient_train_probs = calc_patient_vectors(df_bld, caching_model, fold_patient_train_ids, vector_representation_bins,
                                                                       add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_train"))
+                                                                      possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_train") if save_data_pkl is not None else None)
 
     # get the validation patient vectors
     disease_validation_vectors, disease_validation_probs = calc_patient_vectors(df_bld_validation, caching_model, fold_patient_test_ids, vector_representation_bins,
                                                                                 add_ratio_to_vector, aaseq_to_ratio, unique_patient_ids=None,
-                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_validation"))
+                                                                                possible_seqs=None, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("patient_validation") if save_data_pkl is not None else None)
 
     # healthy vectors helping data
     healthy_patients = df_hlt["patient_id"].unique()
@@ -1063,7 +1194,7 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     healthy_patients = healthy_patients[:num_of_healthy_patients]
 
     healthy_vectors, healthy_probs = calc_patient_vectors(df_hlt, caching_model, healthy_patients, vector_representation_bins,
-                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("healthy_all"))
+                                           add_ratio_to_vector, aaseq_to_ratio, start_vec_from=start_vec_from, samples=samples_size, bad_seqs=bad_seqs, save_data_pkl=save_data_pkl.format("healthy_all") if save_data_pkl is not None else None)
     healthy_vectors, healthy_test_vectors = (healthy_vectors[:num_of_healthy_patients - num_of_healthy_test_patients],
                                              healthy_vectors[num_of_healthy_patients - num_of_healthy_test_patients:])
     healthy_probs, healthy_test_probs = (healthy_probs[:num_of_healthy_patients - num_of_healthy_test_patients],
@@ -1084,26 +1215,26 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
     patient_train_data = patient_train_probs_flat.reshape(-1, 1)
     healthy_train_data = healthy_train_probs_flat.reshape(-1, 1)
 
-    if args.pos_weights == 5.45002:
-        # Save all the data to a file for later use under reshef inference ablation:
-        reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
-        os.makedirs(reshef_inference_ablation_data, exist_ok=True)
-        # save with the model config string:
-        save_pickle(
-            os.path.join(reshef_inference_ablation_data, f"reshef_inference_ablation_data_{model_config_str}.pkl"),
-            patient_train_probs=patient_train_probs,
-            healthy_probs=healthy_probs,
-            healthy_test_probs=healthy_test_probs,
-            patient_train_data=patient_train_data,
-            healthy_train_data=healthy_train_data,
-            patient_test_probs=patient_test_probs,
-            disease_validation_probs=disease_validation_probs,
-            patient_test_vectors=patient_test_vectors,
-            patient_train_vectors=patient_train_vectors,
-            healthy_vectors=healthy_vectors,
-            healthy_test_vectors=healthy_test_vectors,
-        )
-        print(f"Saved reshef inference ablation data to {os.path.join(reshef_inference_ablation_data, f'reshef_inference_ablation_data_{model_config_str}.npz')}")
+    # if args.pos_weights == 5.45002:
+    #     # Save all the data to a file for later use under reshef inference ablation:
+    #     reshef_inference_ablation_data = os.path.join("cache", "reshef_inference", "ablation_data")
+    #     os.makedirs(reshef_inference_ablation_data, exist_ok=True)
+    #     # save with the model config string:
+    #     save_pickle(
+    #         os.path.join(reshef_inference_ablation_data, f"reshef_inference_ablation_data_{model_config_str}.pkl"),
+    #         patient_train_probs=patient_train_probs,
+    #         healthy_probs=healthy_probs,
+    #         healthy_test_probs=healthy_test_probs,
+    #         patient_train_data=patient_train_data,
+    #         healthy_train_data=healthy_train_data,
+    #         patient_test_probs=patient_test_probs,
+    #         disease_validation_probs=disease_validation_probs,
+    #         patient_test_vectors=patient_test_vectors,
+    #         patient_train_vectors=patient_train_vectors,
+    #         healthy_vectors=healthy_vectors,
+    #         healthy_test_vectors=healthy_test_vectors,
+    #     )
+    #     print(f"Saved reshef inference ablation data to {os.path.join(reshef_inference_ablation_data, f'reshef_inference_ablation_data_{model_config_str}.npz')}")
 
     print(f"Patient training probability values: {patient_train_data.shape[0]}")
     print(f"Healthy training probability values: {healthy_train_data.shape[0]}")
@@ -1126,6 +1257,42 @@ def inference_classification_model_version2(trained_model, args, df_bld, df_hlt,
 
     final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
     final_healthy_gmm.fit(healthy_train_data)
+
+    extra_plot_gmms_vs_single_patient_and_healthy = True
+    if extra_plot_gmms_vs_single_patient_and_healthy:
+        patient_scores = patient_train_probs[3]
+        healthy_scores = healthy_probs[5]
+        uncertain_healthy_scores = healthy_probs[8]  # The probabilities of this healthy person are hard to classify
+
+        # Create dataframe with scores and labels
+        data = pd.DataFrame({
+            'score': np.concatenate([healthy_scores, patient_scores]),
+            'label': np.concatenate([np.zeros_like(healthy_scores), np.ones_like(patient_scores)])
+        })
+
+        patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='tied')
+        patient_gmm.fit(patient_scores.reshape(-1, 1))
+        healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='tied')
+        healthy_gmm.fit(healthy_scores.reshape(-1, 1))
+        uncertain_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type='tied')
+        uncertain_healthy_gmm.fit(uncertain_healthy_scores.reshape(-1, 1))
+
+        # Now call the plotting function with the dataframe
+        plot_gmm_hist_with_kde_gal(
+            data=data,
+            score_col='score',
+            label_col='label',
+            b_gmm=final_healthy_gmm,
+            p_gmm=final_patient_gmm,
+            work_b_gmm=healthy_gmm,
+            work_p_gmm=patient_gmm,
+            legend=True,
+            n_bins=100,
+            title='GMM Distributions',
+            outpath='gmm_dist.png',
+            do_hist=False,
+            uncertain_gmm=uncertain_healthy_gmm
+        )
 
     print(f"Patient GMM - BIC: {final_patient_gmm.bic(patient_train_data):.2f}")
     print(f"Healthy GMM - BIC: {final_healthy_gmm.bic(healthy_train_data):.2f}")

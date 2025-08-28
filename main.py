@@ -64,8 +64,9 @@ INFERENCE_TO_RF_PLOT_DIST_PER_PATIENT = INFERENCE_TO_RANDOM_FOREST and False
 INFERENCE_TO_DISPLAY_OTHER_DATASET_DISTS = False
 INFERENCE_CLASSIFICATION_MODEL = False
 INFERENCE_TO_PLOT_EMBEDDING_MAPPINGS = False
-INFERENCE_TO_CLASSIFICATION_MODEL = True
-INFERENCE_RESHEF = True
+INFERENCE_TO_CLASSIFICATION_MODEL = False
+INFERENCE_RESHEF = False
+INFERENCE_MCPAS = True
 
 dataset_loader = None
 
@@ -1961,3 +1962,11 @@ if __name__ == '__main__':
             from inference.reshef_inference import reshef_inference
             to_save_train_data = False if reshef_filter_train else True
             reshef_inference(train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, reshef_negative_part, args, to_save_train_data=to_save_train_data)
+
+        if INFERENCE_MCPAS:
+            model_non_trained = CVCClassifierModel(batch_size=batch_size, ch_dropout=ch_dropout, cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora, ch_type=ch_type, device=device)
+            from inference.inference_mcpas import inference_mcpas
+            inference_mcpas(trained_model, args, df_bld, df_hlt,
+                            test_patient_ids, valid_patient_ids,
+                            valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs,
+                            aaseq_to_ratio, model_non_trained, device)

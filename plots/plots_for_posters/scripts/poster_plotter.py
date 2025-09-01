@@ -372,6 +372,43 @@ def calculations_for_poster():
         [[39, 1],
          [2, 3]]
     ]
+    # taken from: confusion_matrix_multi_threshold_fold-1_components-2_cvc_loss-ce_entropy_dataset-ms_tcrdb2_no_healthy_ms_fold-1_epochs-20_batch-330_ratio-10_weights-5.45002_lr-0.0023_regcoef-0.3_freeze-False_criterion-True
+    gmm_75_new_percentile_cms = [
+        [[36, 4],
+         [1, 4]],
+        [[38, 5],
+         [1, 1]],
+        [[37, 5],
+         [0, 3]],
+        [[36, 4],
+         [0, 5]],
+        [[37, 4],
+         [2, 2]],
+        [[37, 5],
+         [2, 1]],
+        [[37, 3],
+         [3, 2]],
+        [[37, 5],
+         [0, 3]],
+    ]
+    gmm_90_new_percentile_cms = [
+        [[40, 6],
+         [2, 6]],
+        [[41, 7],
+         [1, 5]],
+        [[41, 7],
+         [2, 4]],
+        [[41, 7],
+         [1, 5]],
+        [[42, 6],
+         [2, 4]],
+        [[41, 6],
+         [3, 4]],
+        [[41, 6],
+         [3, 4]],
+        [[41, 7],
+         [1, 5]],
+    ]
 
     print("Calculating Average Sensitivity and Specificity for GMM and SVM models:")
     gmm_sens, gmm_spec, tp, tn, fp, fn = compute_avg_sensitivity_specificity(gmm_75_percentile_cms)
@@ -380,6 +417,10 @@ def calculations_for_poster():
     print(f"GMM 90th Percentile - \nTP: {tp:.3f}, TN: {tn:.3f},\nFP: {fp:.3f}, FN: {fn:.3f}")
     svm_sens, svm_spec, tp, tn, fp, fn = compute_avg_sensitivity_specificity(svm_75_percentile_cms)
     print(f"SVM 75th Percentile - \nTP: {tp:.3f}, TN: {tn:.3f},\nFP: {fp:.3f}, FN: {fn:.3f}")
+    gmm_sens_new, gmm_spec_new, tp, tn, fp, fn = compute_avg_sensitivity_specificity(gmm_75_new_percentile_cms)
+    print(f"GMM 75th New Percentile - \nTP: {tp:.3f}, TN: {tn:.3f},\nFP: {fp:.3f}, FN: {fn:.3f}")
+    gmm_90_sens_new, gmm_90_spec_new, tp, tn, fp, fn = compute_avg_sensitivity_specificity(gmm_90_new_percentile_cms)
+    print(f"GMM 90th New Percentile - \nTP: {tp:.3f}, TN: {tn:.3f},\nFP: {fp:.3f}, FN: {fn:.3f}")
 
     print("\nAverage Sensitivity and Specificity Across Folds:")
     print(f"GMM 75th Percentile:\n"
@@ -388,14 +429,20 @@ def calculations_for_poster():
           f"\tsensitivity: {gmm_90_sens:.3f}, specificity: {gmm_90_spec:.3f}")
     print(f"SVM 75th Percentile:\n"
           f"\tsensitivity: {svm_sens:.3f}, specificity: {svm_spec:.3f}")
+    print(f"GMM 75th New Percentile:\n"
+            f"\tsensitivity: {gmm_sens_new:.3f}, specificity: {gmm_spec_new:.3f}")
+    print(f"GMM 90th New Percentile:\n"
+            f"\tsensitivity: {gmm_90_sens_new:.3f}, specificity: {gmm_90_spec_new:.3f}")
 
 
-def plot_ablation_on_folds(n_folds=8, n_models=5):
+def plot_ablation_on_folds(n_folds=8, n_models=4):
     val_f1 = [0.16036, 0.24463, 0.25254, 0.24101, 0.102, 0.16456, 0.16056, 0.15261, 0.11184, 0.17993, 0.19084, 0.2027, 0.12983, 0.20327, 0.19976, 0.19702, 0.11933, 0.18205, 0.17235, 0.17512, 0.11732, 0.16997, 0.17016, 0.17387, 0.13861, 0.23182, 0.20886, 0.22035, 0.13027, 0.18538, 0.18526, 0.18966]
     val_tpr = [0.73674, 0.67287, 0.67409, 0.69312, 0.68308, 0.54638, 0.54279, 0.5787, 0.66152, 0.60961, 0.57844, 0.57307, 0.70011, 0.53348, 0.541, 0.51593, 0.64883, 0.55895, 0.58, 0.58611, 0.67459, 0.51458, 0.49389, 0.49012, 0.62191, 0.59371, 0.61731, 0.61175, 0.67703, 0.62616, 0.6087, 0.60675]
     val_fnr = [1 - x for x in val_tpr]  # False Negative Rate
     val_tnr = [0.85941, 0.87868, 0.88388, 0.87138, 0.86852, 0.91396, 0.91186, 0.89857, 0.8742, 0.89346, 0.90755, 0.91584, 0.85513, 0.91243, 0.90866, 0.91229, 0.88305, 0.9084, 0.89704, 0.89789, 0.86821, 0.91411, 0.91845, 0.92154, 0.89829, 0.91784, 0.90002, 0.90824, 0.86027, 0.87712, 0.88111, 0.88521]
     val_fpr = [1 - x for x in val_tnr]  # False Positive Rate
+    val_acc = ['73.67361', '67.28745', '67.40891', '69.31174', '68.30797', '54.63794', '54.27887', '57.86954', '66.15233', '60.96108', '57.84353', '57.30739', '70.0105', '53.34765', '54.09953', '51.59327', '64.88306', '55.895', '57.99955', '58.61055', '67.45875', '51.45814', '49.38852', '49.01223', '62.19136', '59.37066', '61.73068', '61.17538', '67.70294', '62.61646', '60.86957', '60.67547']
+    val_acc = [float(x)/100 for x in val_acc]
 
     # (val_f1, val_precision, val_recall, val_tnr, val_tpr, val_fpr, val_fnr)
     # 0.05408282055546316 0.028450447928331467 0.5460040295500336 0.6482445804350856 0.5460040295500336 0.3517554195649144 0.4539959704499664
@@ -419,47 +466,104 @@ def plot_ablation_on_folds(n_folds=8, n_models=5):
         (0.0, 0.0, 1.0, 1.0, 0.0)
     ]
 
-    def interleave_untrained(metric_list, untrained_list):
+    def interleave_untrained(metric_list, untrained_list, n_model=4):
         """Insert untrained values at start and after every 4 trained values."""
         out = []
-        n_models = 4
         un_idx = 0
-        for i in range(0, len(metric_list), n_models):
+        for i in range(0, len(metric_list), n_model):
             if un_idx < len(untrained_list):
                 out.append(untrained_list[un_idx])
                 un_idx += 1
-            out.extend(metric_list[i:i + n_models])
+            out.extend(metric_list[i:i + n_model])
         return out
 
-    # Extract each metric column from untrained_vals
-    tmp_f1 = [x[0] for x in untrained_vals]
-    tmp_tpr = [x[1] for x in untrained_vals]
-    tmp_fnr = [x[2] for x in untrained_vals]
-    tmp_tnr = [x[3] for x in untrained_vals]
-    tmp_fpr = [x[4] for x in untrained_vals]
+    # # Extract each metric column from untrained_vals
+    # tmp_f1 = [x[0] for x in untrained_vals]
+    # tmp_tpr = [x[1] for x in untrained_vals]
+    # tmp_fnr = [x[2] for x in untrained_vals]
+    # tmp_tnr = [x[3] for x in untrained_vals]
+    # tmp_fpr = [x[4] for x in untrained_vals]
+    #
+    # # Interleave for each metric
+    # val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
+    # val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
+    # val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
+    # val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
+    # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
+    # n_models += 1
 
-    # Interleave for each metric
-    val_f1 = interleave_untrained(val_f1, tmp_f1)
-    val_tpr = interleave_untrained(val_tpr, tmp_tpr)
-    val_fnr = interleave_untrained(val_fnr, tmp_fnr)
-    val_tnr = interleave_untrained(val_tnr, tmp_tnr)
-    val_fpr = interleave_untrained(val_fpr, tmp_fpr)
+    # def add_model_results(to_get='embedding'):
+    #     tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = [], [], [], [], []
+    #     dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results"))
+    #     dir_content = sorted([x for x in dir_content if 'cvc' in x and '5.45001' in x])
+    #     for cvc_dir in dir_content:
+    #         # list files in cvc_dir and make sure that there are exactly 2 files
+    #         results_files = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir))
+    #         results_files = [x for x in results_files if to_get in x]
+    #         assert len(results_files) == 1, f"Expected 1 files in {cvc_dir}, but found {len(results_files)}"
+    #         for result_file in results_files:
+    #             # load all jsons in result_file with open
+    #             with open(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir, result_file), "r") as f:
+    #                 results = json.load(f)
+    #             f1 = results['best_validation_f1']
+    #             tpr = results['test_tpr']
+    #             fnr = results['test_fnr']
+    #             tnr = results['test_tnr']
+    #             fpr = results['test_fpr']
+    #
+    #             tmp_f1.append(f1)
+    #             tmp_fnr.append(fnr)
+    #             tmp_tpr.append(tpr)
+    #             tmp_tnr.append(tnr)
+    #             tmp_fpr.append(fpr)
+    #     return tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr
+    #
+    # tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='embedding')
+    # val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
+    # val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
+    # val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
+    # val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
+    # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
+    # n_models += 1
+    #
+    # tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='onehot')
+    # val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
+    # val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
+    # val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
+    # val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
+    # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
+    # n_models += 1
 
+    # # Adding only classification head training:  # TODO: Also insert the results of the last 8th fold! (for now, adding dummy values)
+    # only_ch_f1 = ['0.22382', '0.16173', '0.1836', '0.19224', '0.15023', '0.15732', '0.23612', '0.19']
+    # only_ch_tpr = ['0.70769', '0.59007', '0.62172', '0.64053', '0.6773', '0.64393', '0.54234', '0.6']
+    # only_ch_fnr = [1 - float(x) for x in only_ch_tpr]
+    # only_ch_tnr = ['0.85371', '0.90361', '0.89379', '0.88161', '0.85328', '0.87624', '0.92895', '0.9']
+    # only_ch_fpr = [1 - float(x) for x in only_ch_tnr]
+    #
+    # val_f1 = interleave_untrained(val_f1, [float(x) for x in only_ch_f1], n_model=n_models)
+    # val_tpr = interleave_untrained(val_tpr, [float(x) for x in only_ch_tpr], n_model=n_models)
+    # val_fnr = interleave_untrained(val_fnr, only_ch_fnr, n_model=n_models)
+    # val_tnr = interleave_untrained(val_tnr, [float(x) for x in only_ch_tnr], n_model=n_models)
+    # val_fpr = interleave_untrained(val_fpr, only_ch_fpr, n_model=n_models)
+    # n_models += 1
 
-    # list dir "naive_model_results"
-    dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results"))
-    dir_content = sorted([x for x in dir_content if 'cvc' in x])
-    for cvc_dir in dir_content:
-        # list files in cvc_dir and make sure that there are exactly 2 files
-        results_files = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir))
-        assert len(results_files) == 2, f"Expected 2 files in {cvc_dir}, but found {len(results_files)}"
-        for result_file in results_files:
-            # load all jsons in result_file with open
-            with open(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir, result_file), "r") as f:
-                results = json.load(f)
-            f1 = results['best_validation_f1']
-            # TODO: ADDING TPR AND SUCH...
+    # Now adding without inflation:
+    only_ch_no_inf_f1 = ['0.13226', '0.10874', '0.079243', '0.11531', '0.09123', '0.10541', '0.10297', '0.096386']
+    only_ch_no_inf_tpr = ['0.90934', '0.76097', '0.93336', '0.85557', '0.90787', '0.83894', '0.89892', '0.91595']
+    only_ch_no_inf_fnr = [1 - float(x) for x in only_ch_no_inf_tpr]
+    only_ch_no_inf_tnr = ['0.7766', '0.86264', '0.73248', '0.79295', '0.77187', '0.81115', '0.78471', '0.72606']
+    only_ch_no_inf_fpr = [1 - float(x) for x in only_ch_no_inf_tnr]
+    only_ch_no_inf_acc = ['90.93351', '76.09669', '93.33552', '85.55672', '90.78668', '83.89439', '89.89198', '91.5947']
+    only_ch_no_inf_acc = [float(x) / 100 for x in only_ch_no_inf_acc]
 
+    val_f1 = interleave_untrained(val_f1, [float(x) for x in only_ch_no_inf_f1], n_model=n_models)
+    val_tpr = interleave_untrained(val_tpr, [float(x) for x in only_ch_no_inf_tpr], n_model=n_models)
+    val_fnr = interleave_untrained(val_fnr, only_ch_no_inf_fnr, n_model=n_models)
+    val_tnr = interleave_untrained(val_tnr, [float(x) for x in only_ch_no_inf_tnr], n_model=n_models)
+    val_fpr = interleave_untrained(val_fpr, only_ch_no_inf_fpr, n_model=n_models)
+    val_acc = interleave_untrained(val_acc, only_ch_no_inf_acc, n_model=n_models)
+    n_models += 1
 
     # Dictionary to select which metric to plot
     metrics = {
@@ -468,15 +572,20 @@ def plot_ablation_on_folds(n_folds=8, n_models=5):
         "FNR": val_fnr,
         "TNR": val_tnr,
         "FPR": val_fpr,
+        "ACC": val_acc  # Added acc only for no inflation and first data
     }
 
     # Model labels
     model_labels = [
-        "Untrained CVC",
-        "Cross Entropy",
+        "Naive CVC",
+        # "CVC only trained head (with inflation)",
+        # "KNN one-hot",
+        # "KNN untrained CVC",
+        # "Untrained CVC+Head",
+        "Finetuned CVC",
         "Inflation",
         "Confidence Term",
-        "Repeating Sequences Term"
+        "Recurrence Term"
     ]
     assert n_models == len(model_labels), "Number of models does not match the number of labels."
 
@@ -486,12 +595,14 @@ def plot_ablation_on_folds(n_folds=8, n_models=5):
 
     # Plot all metrics in subplots
     fig, axes = plt.subplots(2, 3, figsize=(15, 8), dpi=600)  # 2 rows, 3 cols (last will be empty)
+    plt.rcParams.update({"font.size": 16})
     axes = axes.flatten()
     for idx, (metric_name, metric_values) in enumerate(metrics.items()):
         ax = axes[idx]
         values = reshape_values(metric_values)
 
         # Boxplots
+        plt.rcParams.update({"font.size": 16})
         ax.boxplot(values, positions=np.arange(1, n_models + 1), widths=0.5)
 
         # Scatter per fold
@@ -499,13 +610,12 @@ def plot_ablation_on_folds(n_folds=8, n_models=5):
             ax.scatter(np.arange(1, n_models + 1), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
 
         ax.set_xticks(list(range(1, n_models + 1)))
-        # ax.set_xticks([1, 2, 3, 4, 5])
         ax.set_xticklabels(model_labels, rotation=20, ha="right")
         ax.set_title(metric_name)
         ax.set_ylabel(metric_name)
     # Add legend only once
     # axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    fig.delaxes(axes[-1])  # Remove the last empty subplot
+    # fig.delaxes(axes[-1])  # Remove the last empty subplot
     plt.tight_layout()
     plt.show()
 
@@ -934,7 +1044,7 @@ def plot_classification_ablation():
             # --- Setup subplots ---
             n_groups = len(group_labels)
             figsize = (2, 5 * n_groups)  # Adjust height based on number of groups
-            fig, axes = plt.subplots(n_groups, 1, figsize=(figsize[0] * n_groups, figsize[1]), squeeze=False)
+            fig, axes = plt.subplots(n_groups, 1, figsize=(figsize[0] * n_groups, figsize[1]), squeeze=False, dpi=600)
             axes = axes.flatten()
 
             # --- Plot each group ---
@@ -971,18 +1081,153 @@ def plot_classification_ablation():
                 ax.set_ylabel("Accuracy")
 
             plt.tight_layout()
+            plt.savefig("classification.png")
             plt.show()
+            pass
 
         # Plot the ablation results
         plot_grouped_ablation_subplots(ablation_results, ablation_names)
+
+    def plot_single_ablation(grouped):
+        colors = [[0.12156863, 0.46666667, 0.70588235, 0.6],
+                  [1.        , 0.49803922, 0.05490196, 0.6],
+                  [0.17254902, 0.62745098, 0.17254902, 0.6],
+                  [0.83921569, 0.15294118, 0.15686275, 0.6],
+                  [0.58039216, 0.40392157, 0.74117647, 0.6],
+                  [0.54901961, 0.3372549 , 0.29411765, 0.6],
+                  [0.89019608, 0.46666667, 0.76078431, 0.6],
+                  [0.49803922, 0.49803922, 0.49803922, 0.6]]
+        group = "default"
+        group_items = grouped[group]
+
+        # Extract data + labels
+        names = [n for n, _ in group_items][:-1]
+        data = [r for _, r in group_items][:-1]
+        names[0] = 'Default'
+
+        plt.figure(figsize=(6, 6), dpi=600)
+
+        # Optional: set global font size
+        plt.rcParams.update({"font.size": 14})
+
+        # Boxplot
+        bp = plt.boxplot(data, positions=np.arange(len(names)), widths=0.5)
+
+        # Scatter overlay for each class
+        for i, arr in enumerate(data):
+            arr = np.array(arr)
+            min_val, max_val = arr.min(), arr.max()
+
+            # Use specific colors for each point
+            done_max, done_min = False, False
+            for j in range(len(arr)):
+                val = arr[j]
+                this_color = colors[j]
+                if val == min_val and not done_min:
+                    plt.scatter([i], [val], alpha=0.9, s=50, color=this_color, edgecolor="k", zorder=3)
+                    done_min = True
+                elif val == max_val and not done_max:
+                    plt.scatter([i], [val], alpha=0.9, s=50, color=this_color, edgecolor="k", zorder=3)
+                    done_max = True
+                else:
+                    x_jittered = np.random.normal(i, 0.05)
+                    plt.scatter([x_jittered], [val], alpha=0.6, s=40, color=this_color)
+
+            # # indices of min and max
+            # min_indices = np.where(arr == min_val)[0]
+            # max_indices = np.where(arr == max_val)[0]
+            #
+            # # choose ONE min and ONE max to "stick" (first occurrence)
+            # min_keep = min_indices[0]
+            # max_keep = max_indices[0]
+            #
+            # # mask: everything else goes to jitter (including duplicate min/max)
+            # mask = np.ones(len(arr), dtype=bool)
+            # mask[[min_keep, max_keep]] = False
+            #
+            # # jitter for remaining points
+            # x_jittered = np.random.normal(i, 0.05, size=mask.sum())
+            # sct = plt.scatter(x_jittered, arr[mask], alpha=0.6, s=40)
+            #
+            # # get color from scatter
+            # this_color = sct.get_facecolor()[0]
+            #
+            # # plot exactly one min and one max at edges
+            # plt.scatter([i], [min_val], alpha=0.9, s=50, color=this_color, edgecolor="k", zorder=3)
+            # plt.scatter([i], [max_val], alpha=0.9, s=50, color=this_color, edgecolor="k", zorder=3)
+
+        # Add mean text to each box
+        for i, arr in enumerate(data):
+            mean_val = np.mean(arr)
+            # if i < 2:
+            #     added_val = 0.45
+            # else:
+            #     added_val = -0.45
+            plt.text(i, np.max(arr) + 0.006, f"{mean_val:.2f}",
+                     ha='center', va='bottom', fontsize=12, fontweight='bold')
+
+        # Formatting
+        plt.xticks(np.arange(len(names)), names, rotation=25, ha="right", fontsize=14)
+        plt.title("Classification Accuracy", fontsize=16)
+        plt.ylim(0.79, 1.025)
+        plt.ylabel("Accuracy", fontsize=14)
+        plt.tight_layout()
+        plt.show()
 
     print("All done.")
     return
 
 
+def confusion_matrix_recalculation():
+    gmm_75th = [[36]]
+    pass
+
+
+# Need to run this in the main function where we have all of those params
+def plot_histogram_for_poster(df_bld, trained_model, train_pos_seqs, neg_seqs, test_patient_ids, test_pos_seqs, test_neg_seqs):
+    np.random.seed(42)
+    test_patient_id = test_patient_ids[0]
+    patient_sequences = df_bld[df_bld['patient_id'] == test_patient_id]['AASeq'].unique()
+    pos_train_sampled = np.random.choice(list(set(patient_sequences).intersection(test_pos_seqs)),
+                                         size=min(500, len(train_pos_seqs)), replace=False)
+    neg_train_sampled = np.random.choice(list(set(patient_sequences).intersection(test_neg_seqs)),
+                                         size=min(500, len(neg_seqs)), replace=False)
+
+    trained_model.eval()
+    with torch.no_grad():
+        pos_train_logits = trained_model(pos_train_sampled).cpu()
+        pos_train_probs = torch.softmax(pos_train_logits, dim=1)[:, 1].numpy()
+        neg_train_logits = trained_model(neg_train_sampled).cpu()
+        neg_train_probs = torch.softmax(neg_train_logits, dim=1)[:, 1].numpy()
+
+    # create histogram from probs with each histogram normalized separately to max=1
+    plt.figure(figsize=(6, 6), dpi=600)
+    plt.rcParams.update({"font.size": 16})
+    # compute densities
+    pos_counts, pos_bins = np.histogram(pos_train_probs, bins=20, density=True)
+    neg_counts, neg_bins = np.histogram(neg_train_probs, bins=20, density=True)
+
+    # normalize each separately
+    pos_counts = pos_counts / pos_counts.max()
+    neg_counts = neg_counts / neg_counts.max()
+
+    # plot normalized histograms
+    plt.hist(pos_bins[:-1], pos_bins, weights=pos_counts, alpha=0.5,
+             label='Positive Sequences', color='#77DD76')
+    plt.hist(neg_bins[:-1], neg_bins, weights=neg_counts, alpha=0.5,
+             label='Negative Sequences', color='#FF6962')
+
+    plt.xlabel('Score')
+    plt.ylabel('Normalized Density')
+    plt.title('Predicted sequence probabilities')
+    plt.legend()
+    plt.show()
+
+
 if __name__ == '__main__':
+    # calculations_for_poster()
     # plot_embeddings()
     # plot_average_embeddings()
     # calculations_for_poster()
-    plot_ablation_on_folds()
-    # plot_classification_ablation()
+    # plot_ablation_on_folds()
+    plot_classification_ablation()

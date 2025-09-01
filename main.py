@@ -1770,6 +1770,11 @@ if __name__ == '__main__':
         #                                           test_masks, valid_masks, positive_seqs, df_bld,
         #                                           df_hlt, model_type, log_wandb, args, device)
 
+    # sample from positive sequences
+    # pos_train_sampled = np.random.choice(train_pos_seqs, size=min(200, len(train_pos_seqs)), replace=False)
+    # neg_train_sampled = np.random.choice(neg_seqs, size=min(200, len(neg_seqs)), replace=False)
+    # sample from positive sequences test_pos_seqs, test_neg_seqs
+
     # Inference:
     # if not dont_inference and not force_retrain and not log_wandb:
     if not dont_inference:

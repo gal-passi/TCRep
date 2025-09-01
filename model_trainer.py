@@ -357,7 +357,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 print(f"Loaded model state from epoch {epoch}")
                 break
 
-    do_inference_instead_of_train = True
+    do_inference_instead_of_train = False
     if do_inference_instead_of_train:
         from cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)

@@ -1,7 +1,6 @@
 import os.path
 
-from definitions import *
-import wget
+from dataset_handlers.definitions import *
 from Curation import build_study
 import pandas as pd
 
@@ -20,23 +19,6 @@ def create_directories():
     for db in OBJECTS_TYPES:
         os.makedirs(db, exist_ok=True)
     os.chdir(BASE_DIRECTORY)
-    print('done')
-
-
-def download_studies():
-    print('downloading studies...')
-    for study_id in INIT_STUDIES:
-        study_file = study_id + '.tsv'
-        url = TCRDB_DOWNLOAD_URL + study_file
-        if os.path.exists(pjoin(TCR_DB_PATH, study_file)):
-            print(f"Study {study_file} already exists")
-            continue
-        print(f"Downloading: {url}")
-        try:
-            wget.download(url, out=TCR_DB_PATH)
-        except Exception as e:
-            print(f"Failed to download {study_file}: {e}\n"
-                  f"Please download the file manually from {url} and place it in {TCR_DB_PATH}")
     print('done')
 
 
@@ -72,9 +54,6 @@ def get_study_df(study_id, columns):
 if __name__ == '__main__':
     # Create directories and downloading studies
     create_directories()
-    download_studies()
-
-    # TODO: There might be a bug here when re-running this script after the studies have already been saved once.
 
     study_id = "PRJNA393498"
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition",

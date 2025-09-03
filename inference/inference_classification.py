@@ -6,11 +6,10 @@ import seaborn as sns
 import itertools
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix
 from models.cvc_cacheing_model import CVCCachingModel
-from models.cvc_df_caching_model import CVCDFCachingModel
 from models.cvc_basic_cacheing_model import CVCBasicCachingModel
-from cache_handler import get_model_config_str
+from utils.cache_handler import get_model_config_str
 from sklearn.manifold import TSNE
 import umap.umap_ as umap
 from sklearn.decomposition import PCA
@@ -21,10 +20,9 @@ from sklearn.naive_bayes import GaussianNB
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance, ks_2samp
 from multiprocessing import Pool, cpu_count
-from cache_handler import load_model_state
+from utils.cache_handler import load_model_state
 from models.cvc_ensemble_model import CVCEnsembleModel
 from sklearn.mixture import GaussianMixture
-from sklearn.metrics import accuracy_score, precision_recall_fscore_support
 import pickle
 import pandas as pd
 
@@ -829,7 +827,7 @@ def inference_classification_model_combined(trained_model, args, to_ensemble, ge
 
         # Load the model state for the current fold
         if to_ensemble:
-            from cache_handler import get_model_dir
+            from utils.cache_handler import get_model_dir
             cache_dir = get_model_dir(args)
             trained_model = CVCEnsembleModel(args, device, cache_dir=cache_dir, default_to_return='min')
         else:

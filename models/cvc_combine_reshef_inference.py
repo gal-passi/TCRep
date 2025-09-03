@@ -1,11 +1,7 @@
-import os
 import torch
 import torch.nn as nn
-import numpy as np
-from cache_handler import get_model_config_str
-from inference.reshef_inference import load_parameters, probability_for_confidence
 from models.cvc_model import CVCClassifierModel
-from cache_handler import load_model_state
+from utils.cache_handler import load_model_state
 
 
 class CVCCombinedReshefModel(nn.Module):

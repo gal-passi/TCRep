@@ -1,18 +1,17 @@
-import os
 import pandas as pd
 from numpy.f2py.auxfuncs import throw_error
 
-from utils import *
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
 import random
 import functools
 import operator
 from transformers import AutoTokenizer
-from trainer import build_datasets
-from definitions import *
+from dataset_handlers.trainer import build_datasets
+from dataset_handlers.definitions import *
 import numpy as np
 import shutil
+import json
 
 
 class TCRdb():
@@ -138,9 +137,9 @@ class Study:
         # from pandas.core.common import SettingWithCopyWarning
         # warnings.simplefilter(action="ignore", category=SettingWithCopyWarning)
         if data_source == 'tcrdb':
-            self._data_path = os.path.join(os.path.dirname(__file__), TCR_DB_PATH)
+            self._data_path = TCR_DB_PATH
         elif data_source == 'tcrdb2':
-            self._data_path = os.path.join(os.path.dirname(__file__), TCR_DB2_PATH)
+            self._data_path = TCR_DB2_PATH
         else:
             raise ValueError("data_source must be 'tcrdb' or 'tcrdb2'!")
 
@@ -905,7 +904,6 @@ def build_study_PRJNA273698(study_id, study_df, study_desc, usable, uncertain, b
 def build_study_immunoSEQ139(study_id, study_df, study_desc, usable, uncertain, background):
     found_usable = []
 
-    import re
     study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
@@ -927,7 +925,6 @@ def build_study_immunoSEQ139(study_id, study_df, study_desc, usable, uncertain, 
 def build_study_immunoSEQ21(study_id, study_df, study_desc, usable, uncertain, background):
     found_usable = []
 
-    import re
     study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
@@ -949,7 +946,6 @@ def build_study_immunoSEQ21(study_id, study_df, study_desc, usable, uncertain, b
 def build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, background):
     found_usable = []
 
-    import re
     study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
@@ -984,7 +980,6 @@ def build_study_immunoSEQ54(study_id, study_df, study_desc, usable, uncertain, b
 def build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, background):
     found_usable = []
 
-    import re
     study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():
@@ -1009,7 +1004,6 @@ def build_study_immunoSEQ03(study_id, study_df, study_desc, usable, uncertain, b
 def build_study_immunoSEQ68(study_id, study_df, study_desc, usable, uncertain, background):
     found_usable = []
 
-    import re
     study = Study(study_id, to_rebuild=True)
     study._desc = study_desc
     for row_ind, row in study_df.iterrows():

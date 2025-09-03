@@ -4,17 +4,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import pandas as pd
-from torch.utils.data import TensorDataset, DataLoader, Dataset, Sampler
+from torch.utils.data import DataLoader, Dataset, Sampler
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score
-from Curation import Study
+from datasets.Curation import Study
 from collections import Counter
 import pickle
-from itertools import combinations, chain
-from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
+from itertools import combinations
+from utils import pairwise_scores, levenshtein_dist_non_bin
 from models.cvc_model import CVCClassifierModel
-from typing import List, Tuple, Dict, Optional
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 import random
@@ -273,7 +272,7 @@ def train_vae(base_model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_se
     """
     # Create datasets
     print("Preparing datasets...")
-    os.makedirs('cache/vae/model_saves', exist_ok=True)
+    os.makedirs('../cache/vae/model_saves', exist_ok=True)
     os.makedirs(f'cache/vae/{embedding_type}', exist_ok=True)
 
     # Extract embeddings
@@ -535,7 +534,7 @@ def evaluate_vae_distributions(vae_model, base_model, pos_seqs, neg_seqs, embedd
     """
     Evaluate how well the VAE separates positive and negative samples
     """
-    os.makedirs('plots/vae', exist_ok=True)
+    os.makedirs('../plots/vae', exist_ok=True)
     vae_model.eval()
 
     # Extract embeddings
@@ -1135,7 +1134,7 @@ def main():
         lr=1e-5,
         beta=1.0,
         device=device,
-        checkpoint_path='cache/vae/model_saves/vae_checkpoint.pt',
+        checkpoint_path='../cache/vae/model_saves/vae_checkpoint.pt',
         positive_weights=3.0,
     )
 
@@ -1154,7 +1153,7 @@ def main():
     combined_model = CVCVAEModel(base_model, vae_model, device=device)
 
     # Save combined model
-    torch.save(combined_model.state_dict(), 'cache/vae/model_saves/combined_model.pt')
+    torch.save(combined_model.state_dict(), '../cache/vae/model_saves/combined_model.pt')
 
     print("Training and evaluation complete!")
 

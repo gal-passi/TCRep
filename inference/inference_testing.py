@@ -7,16 +7,15 @@ import matplotlib.pyplot as plt
 from sklearn.neighbors import KernelDensity
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance, ks_2samp
-from sklearn.preprocessing import KBinsDiscretizer
-from cache_handler import get_model_config_str
+from utils.cache_handler import get_model_config_str
 import pandas as pd
 from tqdm import tqdm
-from utils import pairwise_scores, levenshtein_dist_non_bin
+from utils.utils import pairwise_scores, levenshtein_dist_non_bin
 import seaborn as sns
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score, accuracy_score
-from cache_handler import get_embedding_save_path
-from inference.plot_handler import kde_normalizer
+from utils.cache_handler import get_embedding_save_path
+from inference.plot_training import kde_normalizer
 
 
 def calculate_probas(df, trained_model, patient_ids, to_print=True):
@@ -596,7 +595,6 @@ def t1d_inference_other_dataset(trained_model, dataset_type):
     def get_t1d_tcrs():
         import pandas as pd
         import re
-        import io
 
         def extract_t1d_tcr_beta_chains_from_excel(file_path):
             """

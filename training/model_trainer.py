@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc
 import time
 import wandb
-from cache_handler import save_model_state, load_model_state
+from utils.cache_handler import save_model_state, load_model_state
 from torch.optim.lr_scheduler import StepLR, ReduceLROnPlateau, CosineAnnealingLR, ExponentialLR
 
 
@@ -270,17 +270,17 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 raise ValueError(f"reshef_negative_part {reshef_negative_part} is too large for the number of negative sequences {len(neg_seqs)}.")
             train_neg_seqs = neg_seqs[start:end]
 
-        from cache_handler import get_model_config_str
+        from utils.cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)
         if reshef_negative_part > 0:
-            reshef_cache_folder = os.path.join("cache", "reshef_inference", f"partition_{reshef_negative_part}", model_config_string)
+            reshef_cache_folder = os.path.join("../cache", "reshef_inference", f"partition_{reshef_negative_part}", model_config_string)
         else:
-            reshef_cache_folder = os.path.join("cache", "reshef_inference", model_config_string)
+            reshef_cache_folder = os.path.join("../cache", "reshef_inference", model_config_string)
         os.makedirs(reshef_cache_folder, exist_ok=True)
 
         if reshef_filter_train:
             reshef_inference_data_path = os.path.join(reshef_cache_folder, "reshef_inference_data.npz")
-            combined_cache_folder = os.path.join("cache", "reshef_inference", "combined_partitions", "combined_reshef_inference_data.npz")
+            combined_cache_folder = os.path.join("../cache", "reshef_inference", "combined_partitions", "combined_reshef_inference_data.npz")
             if os.path.exists(combined_cache_folder) and reshef_negative_part == 0:
                 print(f"Loading Reshef inference data from combined cache: {combined_cache_folder}")
                 # load to neg_seqs_to_train & pos_seqs_to_train
@@ -359,7 +359,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
 
     do_inference_instead_of_train = False
     if do_inference_instead_of_train:
-        from cache_handler import get_model_config_str
+        from utils.cache_handler import get_model_config_str
         model_config_string = get_model_config_str(args)
 
         import json
@@ -475,7 +475,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                              model_config_string,
                              device='cuda', batch_size=330):
             # Ensure output folder exists
-            out_dir = os.path.join("naive_model_results", model_config_string)
+            out_dir = os.path.join("../naive_model_results", model_config_string)
             os.makedirs(out_dir, exist_ok=True)
 
             # 1) One-hot KNN
@@ -506,13 +506,6 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                                                              test_pos_seqs, test_neg_seqs,
                                                              model_config_string, device='cuda', batch_size=330)
         exit(0)
-
-    # # TODO: This part is here in order to print a single validation before training, for testing purposes! Remove later!
-    # val_metrics = evaluate_model(model, valid_pos_seqs, valid_neg_seqs, criterion, device)
-    # val_loss, val_acc, val_auc, val_prauc, val_tp, val_fp, val_tn, val_fn, val_pos_acc, val_neg_acc, val_precision, val_recall, val_tpr, val_tnr, val_fpr, val_fnr, val_f1 = val_metrics
-    # # print f1 score, precision, recall, confusion matrix
-    # print(val_f1, val_precision, val_recall, val_tnr, val_tpr, val_fpr, val_fnr)
-    # exit(0)
 
     # Training loop
     for epoch in range(start_epoch, epochs):

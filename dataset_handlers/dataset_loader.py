@@ -1,6 +1,5 @@
 import os
 import pickle
-from cProfile import label
 
 import torch
 import numpy as np
@@ -8,15 +7,13 @@ import pandas as pd
 from collections import Counter
 from itertools import combinations, chain
 
-from networkx import all_neighbors
 from tqdm import tqdm
-from Curation import Study, filter_df
-from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
+from dataset_handlers.Curation import Study, filter_df
+from utils.utils import pairwise_scores, levenshtein_dist_non_bin
 import hashlib
 from collections import defaultdict
 import random
 import matplotlib.pyplot as plt
-from definitions import TCR_DB2_PATH
 import multiprocessing as mp
 from functools import partial
 
@@ -46,7 +43,7 @@ HEALTHY_STUDY_ID7 = STUDY_ID13
 HEALTHY_STUDY_ID8 = STUDY_ID14
 HEALTHY_STUDY_ID9 = STUDY_ID15
 STUDIES = [STUDY_ID, STUDY_ID2, STUDY_ID3, STUDY_ID4, STUDY_ID5, STUDY_ID6, STUDY_ID7]
-TCRDB2_PATH = 'db/tcrdb2'
+TCRDB2_PATH = '../db/tcrdb2'
 
 
 def helper_function_common_aaseq_analysis(df, lev_dist_accept, only_valid=False, verbose=True):
@@ -160,275 +157,241 @@ class DatasetLoader:
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
 
-        # Plotting top p inference if needed
-        if top_percent is not None and False:  # Setting this to false because it takes too much time to plot in regular runs!
-            self.top_p_inference_plotting('Multiple sclerosis', dataset_type)
-
         disease = 'Multiple sclerosis'
         print('Loading Disease:')
         df = self.get_all_usable_disease_data(disease=disease, dataset_type=dataset_type)
         print('Loading Healthy:')
         df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
-        # Choosing cell type
-        cell_type = ['DC8', 'CD4', 'ALL'][2]
-        if cell_type != 'ALL' and dataset_type == 'ms':
-            # reading blood samples
-            df_bld = df[df['cell_type'] == cell_type]
-            # reading healthy study:
-            df_hlt = df_h[df_h['cell_type'] == cell_type]
-        else:
-            save_folder = "cache/valid_sequences/multiple_sclerosis"
-            saved_dataset_path = os.path.join(save_folder, f"{dataset_type}_df.pkl")
-            saved_df = None
-            if os.path.exists(saved_dataset_path):
-                with open(saved_dataset_path, 'rb') as f:
-                    saved_df = pickle.load(f)
-            # if 'ms_tcrdb2_no_healthy_ms_plus_hlt_article' in dataset_type:
-            #     df_bld, df_hlt = df, df_h
-            #     # add healthy from article
-            #     df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-            #     df_article_hlt = df_article[df_article["condition"] == "Healthy"]
-            #     if top_n_seqs is not None:
-            #         topk = int(top_n_seqs * 1000)
-            #         if len(df_article_hlt) >= topk:
-            #             df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
-            #             threshold = df_top['cloneFraction'].min()
-            #             threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
-            #             df_article_hlt = threshold_df
-            #     elif top_percent is not None and 100 > top_percent > 0:
-            #         threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
-            #         df = df[df['cloneFraction'] >= threshold]
-            #     df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
-            if dataset_type == 'ms' or dataset_type == 'ms_no_healthy_ms' or 'ms_tcrdb2' in dataset_type:
-                df_bld, df_hlt = df, df_h
+        # load from saved dataset if exists
+        save_folder = "cache/valid_sequences/multiple_sclerosis"
+        saved_dataset_path = os.path.join(save_folder, f"{dataset_type}_df.pkl")
+        saved_df = None
+        if os.path.exists(saved_dataset_path):
+            with open(saved_dataset_path, 'rb') as f:
+                saved_df = pickle.load(f)
 
-                # Special case for TCRDB2 datasets!
-                if 'tcrdb2' in dataset_type:
+        if dataset_type == 'ms'  or 'ms_tcrdb2' in dataset_type or dataset_type == 'ms_no_healthy_ms':
+            df_bld, df_hlt = df, df_h
+            # Special case for TCRDB2 datasets!
+            if 'tcrdb2' in dataset_type:
+                if 'plus_hlt_article' in dataset_type:
+                    # add healthy from article
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+                    if top_n_seqs is not None:
+                        topk = int(top_n_seqs * 1000)
+                        if len(df_article_hlt) >= topk:
+                            df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
+                            threshold = df_top['cloneFraction'].min()
+                            threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
+                            df_article_hlt = threshold_df
+                    elif top_percent is not None and 100 > top_percent > 0:
+                        threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+                        df = df[df['cloneFraction'] >= threshold]
+                    df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+                if 'extra_ms' in dataset_type:
+                    # Add to Blood df
+                    df_extra_bld = self.get_ms_extra_bld_dataframe(top_percent=top_percent, top_n_seqs=top_n_seqs, df_bld=df_bld)
+                    df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+                if 'hlt_as_ms' in dataset_type:
+                    # take 1 patient from each healthy study_id
+                    chosen_patient_ids = []
+                    for study_id in df_hlt['study_id'].unique():
+                        patient_ids = df_hlt[df_hlt['study_id'] == study_id]['patient_id'].unique()
+                        if len(patient_ids) > 0:
+                            chosen_patient_ids.append(np.random.choice(patient_ids))
+                    df_excess_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
+                    df_excess_hlt['patient_id'] = df_excess_hlt['patient_id'].astype(str) + '_hlt_as_ms'
+                    # remove from hlt those patients that were picked
+                    df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
+                if 'hlt_article' in dataset_type:
+                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                    df_hlt_tmp = df_article[df_article["condition"] == "Healthy"]
                     if 'plus_hlt_article' in dataset_type:
-                        # add healthy from article
-                        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                        df_article_hlt = df_article[df_article["condition"] == "Healthy"]
-                        if top_n_seqs is not None:
-                            topk = int(top_n_seqs * 1000)
-                            if len(df_article_hlt) >= topk:
-                                df_top = df_article_hlt.nlargest(topk, 'cloneFraction')
-                                threshold = df_top['cloneFraction'].min()
-                                threshold_df = df_article_hlt[df_article_hlt['cloneFraction'] >= threshold]
-                                df_article_hlt = threshold_df
-                        elif top_percent is not None and 100 > top_percent > 0:
-                            threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
-                            df = df[df['cloneFraction'] >= threshold]
-                        df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
-                    if 'extra_ms' in dataset_type:
-                        # Add to Blood df
-                        df_extra_bld = self.get_ms_extra_bld_dataframe(top_percent=top_percent, top_n_seqs=top_n_seqs, df_bld=df_bld)
-                        df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
-                    if 'hlt_as_ms' in dataset_type:
-                        # take 1 patient from each healthy study_id
-                        chosen_patient_ids = []
-                        for study_id in df_hlt['study_id'].unique():
-                            patient_ids = df_hlt[df_hlt['study_id'] == study_id]['patient_id'].unique()
-                            if len(patient_ids) > 0:
-                                chosen_patient_ids.append(np.random.choice(patient_ids))
-                        df_excess_hlt = df_hlt[df_hlt['patient_id'].isin(chosen_patient_ids)]
-                        df_excess_hlt['patient_id'] = df_excess_hlt['patient_id'].astype(str) + '_hlt_as_ms'
-                        # remove from hlt those patients that were picked
-                        df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
-                    if 'hlt_article' in dataset_type:
-                        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                        df_hlt_tmp = df_article[df_article["condition"] == "Healthy"]
-                        if 'plus_hlt_article' in dataset_type:
-                            df_hlt = pd.concat([df_hlt, df_hlt_tmp], axis=0, ignore_index=True)
-                        else:
-                            df_hlt = df_hlt_tmp
-                        df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-            elif dataset_type == 'ms_hlt_article':
-                df_bld, df_hlt = df, df_h
-                # Only Healthy df from article
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=True, get_all=True)
-                # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                        df_hlt = pd.concat([df_hlt, df_hlt_tmp], axis=0, ignore_index=True)
+                    else:
+                        df_hlt = df_hlt_tmp
+                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+        elif dataset_type == 'ms_hlt_article':
+            df_bld, df_hlt = df, df_h
+            # Only Healthy df from article
+            df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=True, get_all=True)
+            # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            df_hlt = df_article[df_article["condition"] == "Healthy"]
+        elif dataset_type == 'ms_plus_hlt_article':
+            df_bld, df_hlt = df, df_h
+            df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+            df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+        elif dataset_type == 'ms_extra':
+            df_bld, df_hlt = df, df_h
+            # Add to Blood df
+            df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+            df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+        elif dataset_type == 'ms_extra_hlt_article':
+            df_bld, df_hlt = df, df_h
+            # Add to Blood df
+            df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+            df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+            # Only Healthy df from article
+            df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            df_hlt = df_article[df_article["condition"] == "Healthy"]
+        elif dataset_type == 'ms_extra_plus_hlt_article':
+            df_bld, df_hlt = df, df_h
+            # Add to Blood df
+            df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+            df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
+            # Add to Healthy df
+            df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            df_article_hlt = df_article[df_article["condition"] == "Healthy"]
+            df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
+        elif dataset_type == 'article':
+            df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+            df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+            df_hlt = df_article[df_article["condition"] == "Healthy"]
+            # TODO: This might be problematic: adding the other healthy dataset to the article healthy dataset!
+            #  This can cause problems because the healthy people from a different study might be too different from healthy people from this dataset.
+            #  So it might be too easy for the model to separate between them.
+            df_hlt = pd.concat([df_hlt, df_h[['AASeq', 'patient_id', 'tissue', 'condition']]], axis=0, ignore_index=True)
+        elif dataset_type == 'cmv':
+            df_cmv = self.get_all_usable_disease_data(disease='CMV', get_all=True)
+            df_bld = df_cmv[df_cmv["condition"] == "CMV"]
+            filtered_patient_ids = [x[0] for x in df_bld.groupby("patient_id")["AASeq"] if len(x[1]) >= 2000]  # this leaves 25 patients
+            df_bld = df_bld[df_bld["patient_id"].isin(filtered_patient_ids)]
+            df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
+            # df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)  # According to Dina, it might be problematic to add healthy from different studies
+        elif dataset_type == 'article_sle':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
-            elif dataset_type == 'ms_plus_hlt_article':
-                df_bld, df_hlt = df, df_h
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
+            if saved_df is None:
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
-                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
-            elif dataset_type == 'ms_extra':
-                df_bld, df_hlt = df, df_h
-                # Add to Blood df
-                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
-                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
-            elif dataset_type == 'ms_extra_hlt_article':
-                df_bld, df_hlt = df, df_h
-                # Add to Blood df
-                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
-                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
-                # Only Healthy df from article
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
+            if saved_df is None:
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
-            elif dataset_type == 'ms_extra_plus_hlt_article':
-                df_bld, df_hlt = df, df_h
-                # Add to Blood df
-                df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
-                df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
-                # Add to Healthy df
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                df_article_hlt = df_article[df_article["condition"] == "Healthy"]
-                df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
-            elif dataset_type == 'article':
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 't1d':
+            if saved_df is None:
                 df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
                 df_hlt = df_article[df_article["condition"] == "Healthy"]
-                # TODO: This might be problematic: adding the other healthy dataset to the article healthy dataset!
-                #  This can cause problems because the healthy people from a different study might be too different from healthy people from this dataset.
-                #  So it might be too easy for the model to separate between them.
-                df_hlt = pd.concat([df_hlt, df_h[['AASeq', 'patient_id', 'tissue', 'condition']]], axis=0, ignore_index=True)
-            elif dataset_type == 'cmv':
-                df_cmv = self.get_all_usable_disease_data(disease='CMV', get_all=True)
-                df_bld = df_cmv[df_cmv["condition"] == "CMV"]
-                filtered_patient_ids = [x[0] for x in df_bld.groupby("patient_id")["AASeq"] if len(x[1]) >= 2000]  # this leaves 25 patients
-                df_bld = df_bld[df_bld["patient_id"].isin(filtered_patient_ids)]
-                df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
-                # df_hlt = pd.concat([df_hlt, df_h], axis=0, ignore_index=True)  # According to Dina, it might be problematic to add healthy from different studies
-            elif dataset_type == 'article2':
-                df_bld = self.get_full_article2_dataframe()
-                df_hlt = df_h
-            elif dataset_type == 'article_sle':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                    df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                    df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                    df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 't1d':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                    df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-                    df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-                    df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'article_hiv':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "HIV"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'article_covid19':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "Covid19"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'article_influenza':
-                if saved_df is None:
-                    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-                    df_bld = df_article[df_article["condition"] == "Influenza"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
-                    df_hlt = df_article[df_article["condition"] == "Healthy"]
-                    df_bld = filter_df(df_bld, top_percent, top_n_seqs)
-                    df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
-                    if extra_filter:
-                        df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-                    with open(saved_dataset_path, 'wb') as f:
-                        pickle.dump((df_bld, df_hlt), f)
-                else:
-                    df_bld, df_hlt = saved_df
-            elif dataset_type == 'ms_plus_article2_ms':
-                df_bld_article2 = self.get_full_article2_dataframe()
-                df_bld = pd.concat([df, df_bld_article2], axis=0, ignore_index=True)
-                df_hlt = df_h
-            elif dataset_type == 'jia_tcrdb2':
-                raise NotImplementedError("JIA TCRDB2 dataset is not implemented yet!")
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
             else:
-                raise ValueError("Invalid dataset type")
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
+                df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+                df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'article_hiv':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "HIV"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'article_covid19':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Covid19"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'article_influenza':
+            if saved_df is None:
+                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_bld = df_article[df_article["condition"] == "Influenza"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
+                df_hlt = df_article[df_article["condition"] == "Healthy"]
+                df_bld = filter_df(df_bld, top_percent, top_n_seqs)
+                df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
+                if extra_filter:
+                    df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+                with open(saved_dataset_path, 'wb') as f:
+                    pickle.dump((df_bld, df_hlt), f)
+            else:
+                df_bld, df_hlt = saved_df
+        elif dataset_type == 'jia_tcrdb2':
+            raise NotImplementedError("JIA TCRDB2 dataset is not implemented yet!")
+        else:
+            raise ValueError("Invalid dataset type")
         if verbose:
             print('Done loading datasets.')
 
@@ -512,15 +475,15 @@ class DatasetLoader:
 
         if verbose:
             print('Calculating positive and negative sequences...')
-        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        train_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids, dataset_type, "ALL", num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         # Calculate positive valid sequences
         train_and_valid_ids = np.concatenate((train_patient_ids, valid_patient_ids))
-        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        valid_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids, dataset_type, "ALL", num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]["AASeq"].unique()
         valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
         # Calculate positive test sequences
         train_and_test_ids = np.concatenate((train_patient_ids, test_patient_ids))
-        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
+        test_pos_seqs, _ = self.calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids, dataset_type, "ALL", num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, filter_to_inflate=filter_to_inflate, verbose=verbose)
         test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]["AASeq"].unique()
         test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -746,7 +709,6 @@ class DatasetLoader:
                 test_inds = test_inds & ~valid_test_inds
             train_inds = (~test_inds) & (~valid_inds)
 
-
         # Option for AASeq to nneighbors incorporated into loss:
         if use_nneighbors_loss:
             self.build_nnegihbours_df([df_bld[df_bld['patient_id'].isin(train_patient_ids)],
@@ -799,31 +761,115 @@ class DatasetLoader:
         self.aaseq_to_ratio = aaseq_to_ratio if ratio else None
         self.aaseq_to_distance = aaseq_to_distance if dist_loss_type != 'none' else None
         self.aaseq_to_nneighbors = aaseq_to_nneighbors if use_nneighbors_loss else None
-        # [set(positive_seqs).intersection(set(df_hlt[df_hlt['patient_id'] == p]['AASeq'].values)) for p in df_hlt['patient_id'].unique()]
 
-        # Note: looks like when we have less sequences in the set and when we take only seqs that appear in i patients,
-        # and not in i healthy people, then when i rises the variance lowers.
-        if False:
-            def plot_lev(seqs, title_info=''):
-                pwc_mat = pairwise_scores(seqs, seqs, score=levenshtein_dist_non_bin)
-                similarities = np.mean(pwc_mat, axis=0)
-                # similarities = np.min(pwc_mat + np.eye(len(pwc_mat)) * 100, axis=0)
-                plt.hist(similarities, bins=10, edgecolor='black')
-                plt.xlabel('Minimum Levenshtein Distance')
-                plt.ylabel('Frequency')
-                plt.title(f'Histogram of Minimum Levenshtein Distances - {title_info}\nMean: {similarities.mean():.3f}')
-                plt.grid(axis='y', linestyle='--', alpha=0.7)
-                plt.tight_layout()
-                plt.show()
-            plot_lev(positive_seqs, 'Normal')
-            for i in range(3, 12, 2):
-                pos_seqs, _ =self.calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_patient_ids,
-                                                              dataset_type, cell_type, num_of_patients=i, special_test=True)
-                plot_lev(pos_seqs, f'num_of_patients f{i}')
 
+    def build_distance_df(self, df_bld, train_pos_seqs, dataset_type='ms', batch_size=1000):
+        sorted_seqs = sorted(list(df_bld["AASeq"].unique()))
+        # create hash of the df_dist in order to save or load it
+
+        hash_str = "_".join(sorted_seqs)
+        hash_of_df = hashlib.sha256(hash_str.encode()).hexdigest()
+
+        # check if the df_dist already exists
+        df_dist_filename = f"cache/distance_df_cache/{dataset_type}/df_dist_{hash_of_df}.pkl"
+        if os.path.exists(df_dist_filename):
+            # load the df_dist from the file
+            df_dist = pd.read_pickle(df_dist_filename)
+            self.df_aaseq_to_distance = df_dist
+            return
+
+        seqs = [(len(seq), seq) for seq in df_bld["AASeq"].unique()]
+        possible_lens = set([x[0] for x in seqs])
+        all_distances = []
+        corresponding_seqs = []
+        for possible_len in tqdm(possible_lens):
+            seqs_in_this_len = [x[1] for x in seqs if x[0] == possible_len]
+            num_seqs = len(seqs_in_this_len)
+            # Process in batches if the number of sequences is large
+            if num_seqs > batch_size:
+                batched_min_dists = []
+                for i in range(0, num_seqs, batch_size):
+                    batch_end = min(i + batch_size, num_seqs)
+                    batch_seqs = seqs_in_this_len[i:batch_end]
+
+                    # Calculate pairwise distance for this batch
+                    batch_pwc_mat = pairwise_scores(batch_seqs, train_pos_seqs, score=levenshtein_dist_non_bin)
+
+                    # Get minimum distance for each sequence in the batch
+                    batch_min_dist = np.min(batch_pwc_mat, axis=1)
+                    batched_min_dists.append(batch_min_dist)
+
+                min_dist = np.concatenate(batched_min_dists)
+            else:
+                # Original calculation for small sequence sets
+                pwc_mat = pairwise_scores(seqs_in_this_len, train_pos_seqs, score=levenshtein_dist_non_bin)
+                min_dist = np.min(pwc_mat, axis=1)
+            all_distances.append(min_dist)
+            corresponding_seqs.append(seqs_in_this_len)
+        combined_distances = np.concatenate(all_distances)
+        combined_seqs = np.concatenate(corresponding_seqs)
+        # create a df that will be used to map the sequences to the distances
+        df_dist = pd.DataFrame({'AASeq': combined_seqs, 'distance': combined_distances})
+        self.df_aaseq_to_distance = df_dist
+
+        # save the df_dist to the file
+        os.makedirs(os.path.dirname(df_dist_filename), exist_ok=True)
+        df_dist.to_pickle(df_dist_filename)
+
+    def build_clone_fraction_df(self, df_bld, method='max'):
+        """
+        Create a DataFrame with unique AASeqs and their aggregated cloneFraction.
+
+        Parameters:
+        - df_bld (pd.DataFrame): Original DataFrame with 'AASeq' and 'cloneFraction'.
+        - method (str): 'max', 'min', or 'avg' for aggregation.
+
+        Returns:
+        - pd.DataFrame: With columns 'AASeq' and 'cloneFraction'.
+        """
+        method_map = {
+            'max': 'max',
+            'min': 'min',
+            'avg': 'mean',
+            'med': 'median',
+        }
+        if method not in method_map:
+            raise ValueError("method must be one of 'max', 'min', or 'avg'")
+
+        df_norm = df_bld.copy()
+        df_norm['cloneFraction'] = df_norm.groupby('patient_id')['cloneFraction'].transform(
+            lambda x: (x - x.min()) / (x.max() - x.min()) if x.max() != x.min() else 0.0
+        )
+        df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
+        self.df_aaseq_to_ratio = df_unique
+
+    def build_nnegihbours_df(self, dfs):
+        """
+            Builds self.df_aaseq_to_nneighbors: a DataFrame with unique AASeqs and their
+            number of neighbors (i.e., how many times they appear) across a list of DataFrames.
+            Counts are aggregated across all provided DataFrames, but duplicates within a
+            single patient in a DataFrame are only counted once.
+
+            Args:
+                dfs (list of pd.DataFrame): Each DataFrame must have columns ['patient_id', 'AASeq']
+        """
+        # Step 1: Count unique AASeqs per patient in each DF
+        all_counts = Counter()
+        for df in dfs:
+            # For each patient, get the unique AASeqs and count each one once per patient
+            patient_groups = df.groupby('patient_id')['AASeq'].unique()
+            for aaseq_list in patient_groups:
+                all_counts.update(aaseq_list)
+
+        # Step 2: Convert Counter to DataFrame
+        self.df_aaseq_to_nneighbors = (
+            pd.DataFrame.from_dict(all_counts, orient='index', columns=['nneighbors'])
+            .reset_index()
+            .rename(columns={'index': 'AASeq'})
+        )
 
     def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
-        similar_neg_cache_path = 'cache/ms'
+        similar_neg_cache_path = '../cache/ms'
         os.makedirs(similar_neg_cache_path, exist_ok=True)
         # Check if the file already exists
         similar_neg_seqs_path = os.path.join(similar_neg_cache_path, "similar_negatives.npy")
@@ -929,112 +975,8 @@ class DatasetLoader:
 
         return neg_seqs
 
-    def build_distance_df(self, df_bld, train_pos_seqs, dataset_type='ms', batch_size=1000):
-        sorted_seqs = sorted(list(df_bld["AASeq"].unique()))
-        # create hash of the df_dist in order to save or load it
-
-        hash_str = "_".join(sorted_seqs)
-        hash_of_df = hashlib.sha256(hash_str.encode()).hexdigest()
-
-        # check if the df_dist already exists
-        df_dist_filename = f"cache/{dataset_type}/df_dist_{hash_of_df}.pkl"
-        if os.path.exists(df_dist_filename):
-            # load the df_dist from the file
-            df_dist = pd.read_pickle(df_dist_filename)
-            self.df_aaseq_to_distance = df_dist
-            return
-
-        seqs = [(len(seq), seq) for seq in df_bld["AASeq"].unique()]
-        possible_lens = set([x[0] for x in seqs])
-        all_distances = []
-        corresponding_seqs = []
-        for possible_len in tqdm(possible_lens):
-            seqs_in_this_len = [x[1] for x in seqs if x[0] == possible_len]
-            num_seqs = len(seqs_in_this_len)
-            # Process in batches if the number of sequences is large
-            if num_seqs > batch_size:
-                batched_min_dists = []
-                for i in range(0, num_seqs, batch_size):
-                    batch_end = min(i + batch_size, num_seqs)
-                    batch_seqs = seqs_in_this_len[i:batch_end]
-
-                    # Calculate pairwise distance for this batch
-                    batch_pwc_mat = pairwise_scores(batch_seqs, train_pos_seqs, score=levenshtein_dist_non_bin)
-
-                    # Get minimum distance for each sequence in the batch
-                    batch_min_dist = np.min(batch_pwc_mat, axis=1)
-                    batched_min_dists.append(batch_min_dist)
-
-                min_dist = np.concatenate(batched_min_dists)
-            else:
-                # Original calculation for small sequence sets
-                pwc_mat = pairwise_scores(seqs_in_this_len, train_pos_seqs, score=levenshtein_dist_non_bin)
-                min_dist = np.min(pwc_mat, axis=1)
-            all_distances.append(min_dist)
-            corresponding_seqs.append(seqs_in_this_len)
-        combined_distances = np.concatenate(all_distances)
-        combined_seqs = np.concatenate(corresponding_seqs)
-        # create a df that will be used to map the sequences to the distances
-        df_dist = pd.DataFrame({'AASeq': combined_seqs, 'distance': combined_distances})
-        self.df_aaseq_to_distance = df_dist
-
-        # save the df_dist to the file
-        os.makedirs(os.path.dirname(df_dist_filename), exist_ok=True)
-        df_dist.to_pickle(df_dist_filename)
-
-    def build_clone_fraction_df(self, df_bld, method='max'):
-        """
-        Create a DataFrame with unique AASeqs and their aggregated cloneFraction.
-
-        Parameters:
-        - df_bld (pd.DataFrame): Original DataFrame with 'AASeq' and 'cloneFraction'.
-        - method (str): 'max', 'min', or 'avg' for aggregation.
-
-        Returns:
-        - pd.DataFrame: With columns 'AASeq' and 'cloneFraction'.
-        """
-        method_map = {
-            'max': 'max',
-            'min': 'min',
-            'avg': 'mean',
-            'med': 'median',
-        }
-        if method not in method_map:
-            raise ValueError("method must be one of 'max', 'min', or 'avg'")
-
-        df_norm = df_bld.copy()
-        df_norm['cloneFraction'] = df_norm.groupby('patient_id')['cloneFraction'].transform(
-            lambda x: (x - x.min()) / (x.max() - x.min()) if x.max() != x.min() else 0.0
-        )
-        df_unique = df_norm.groupby('AASeq', as_index=False)['cloneFraction'].agg(method_map[method])
-        self.df_aaseq_to_ratio = df_unique
-
-    def build_nnegihbours_df(self, dfs):
-        """
-            Builds self.df_aaseq_to_nneighbors: a DataFrame with unique AASeqs and their
-            number of neighbors (i.e., how many times they appear) across a list of DataFrames.
-            Counts are aggregated across all provided DataFrames, but duplicates within a
-            single patient in a DataFrame are only counted once.
-
-            Args:
-                dfs (list of pd.DataFrame): Each DataFrame must have columns ['patient_id', 'AASeq']
-        """
-        # Step 1: Count unique AASeqs per patient in each DF
-        all_counts = Counter()
-        for df in dfs:
-            # For each patient, get the unique AASeqs and count each one once per patient
-            patient_groups = df.groupby('patient_id')['AASeq'].unique()
-            for aaseq_list in patient_groups:
-                all_counts.update(aaseq_list)
-
-        # Step 2: Convert Counter to DataFrame
-        self.df_aaseq_to_nneighbors = (
-            pd.DataFrame.from_dict(all_counts, orient='index', columns=['nneighbors'])
-            .reset_index()
-            .rename(columns={'index': 'AASeq'})
-        )
-
-    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
+    def calculate_pos_neg_sequences(self, df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type,
+                                    num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
         if filter_to_inflate:
             lev_dist_accept = 1  # for now its always lev distance 1
             save_folder = "cache/valid_sequences/multiple_sclerosis"
@@ -1179,10 +1121,9 @@ class DatasetLoader:
             all_neighbors.update(neighbors)
         return all_neighbors
 
-
     def get_all_usable_disease_data(self, disease='Multiple sclerosis', dataset_type=None, get_all=False):
         disease_clean = disease.lower().replace(' ', '_')
-        cache_dir = os.path.join("cache", "valid_sequences", disease_clean)
+        cache_dir = os.path.join("../cache", "valid_sequences", disease_clean)
         os.makedirs(cache_dir, exist_ok=True)
 
         cache_path = None
@@ -1233,7 +1174,7 @@ class DatasetLoader:
 
     def get_all_usable_healthy_data(self, dataset_type='ms'):
         # Set up cache path
-        cache_dir = os.path.join("cache", "valid_sequences", "healthy")
+        cache_dir = os.path.join("../cache", "valid_sequences", "healthy")
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = None
         if dataset_type is not None:
@@ -1425,36 +1366,6 @@ class DatasetLoader:
 
         return df_unique
 
-    # TODO: There is a major problem with loading this dataset. The current way doesn't use information from "file_key" so its unusable now..
-    def get_full_article2_dataframe(self):
-        article2_data_folder = 'db/test_db/data_tcrb'
-        article2_data_files = os.listdir(article2_data_folder)
-        article2_data_files = [x for x in article2_data_files if 'CDR3_list' in x and x.endswith('2.csv')]
-        # Open all files and read the contents
-        all_article2_dfs = []
-        for file_name in article2_data_files:
-            # read the file as .csv (include header as well)
-            file_path = os.path.join(article2_data_folder, file_name)
-            df = pd.read_csv(file_path, names=['AASeq', 'col 1', 'col 2', 'cloneFraction'])
-
-            # normalize the cloneFraction column
-            df['cloneFraction'] -= df['cloneFraction'].min()
-            df['cloneFraction'] /= df['cloneFraction'].max()
-
-            # add patient_id as 5th and 6th columns
-            patient_id = file_name.split('_')[0]
-            df['patient_id'] = patient_id
-            df['study_id'] = 'article2'
-
-            # modify AASeq to start with 'C' and end with 'F'
-            df['AASeq'] = 'C' + df['AASeq'] + 'F'
-
-            # add the sequences to the set
-            all_article2_dfs.append(df)
-        article2_df = pd.concat(all_article2_dfs, ignore_index=True)
-        patients_with_samples = [x[0] for x in article2_df.groupby('patient_id')['AASeq'] if len(x[1]) >= 2000]
-        return article2_df[article2_df['patient_id'].isin(patients_with_samples)]
-
     def find_all_common_sequences(self, df, num_of_patients=3):
         # Step 1: Group by 'patient_id' and get unique AASeqs
         grouped = df.groupby('patient_id')['AASeq'].unique()
@@ -1576,7 +1487,7 @@ class DatasetLoader:
 
             if lev_dist_accept >= 1:
                 temp_df = df[df['patient_id'].isin(combination)]
-                masks = self.helper_function_common_aaseq_analysis(temp_df, lev_dist_accept)
+                masks = helper_function_common_aaseq_analysis(temp_df, lev_dist_accept)
                 # TODO: This will always increase when we look at more patients... this isnt the calculation that we want here
                 num_common = np.sum(np.any(masks == 1, axis=0))
                 print("Using lev_dist_accept >= 1, there might be a problem in the implementation here!!")
@@ -1616,15 +1527,13 @@ class DatasetLoader:
 
         return mean_results, std_values
 
-    # TODO: This code does not contain the filtering of the data! that should be when loading data from TCRdb2!
     def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):
-        # TODO: Changed from .tsv to .csv (downloaded from TCRdb2)
-        extra_ms_path = 'db/tcrdb/special2'
+        extra_ms_path = '../db/tcrdb/special2'
         extra_ms_files = [x for x in os.listdir(extra_ms_path) if x.endswith('Pre.csv')]
         extra_ms_dfs = []
 
         def print_names_and_tags():
-            extra_ms_path = 'db/tcrdb/special'
+            extra_ms_path = '../db/tcrdb/special'
             file_path = os.path.join(extra_ms_path, 'information/names_and_tags.txt')
             output_path = os.path.join(extra_ms_path, 'information/parsed_names_and_tags/pairs.pickle')
 
@@ -1773,281 +1682,6 @@ class DatasetLoader:
         extra_ms_df = Study.do_tcrdb2_threshold_filtering(extra_ms_df, top_percent, top_n_seqs)
 
         return extra_ms_df
-
-    def average_dicts(self, outer_list):
-        # The number of inner lists
-        num_inner_lists = len(outer_list)
-
-        # Initialize a list to store the averaged dictionaries
-        averaged_list = []
-
-        # Iterate through each inner list
-        for i in range(len(outer_list[0])):  # assuming all inner lists have the same length
-            # Initialize a defaultdict to accumulate values for each key
-            accumulator = defaultdict(int)
-
-            # Iterate through the outer list and accumulate the sum for each key in each dict
-            for inner_list in outer_list:
-                accumulator_dict = inner_list[i][0]  # Get the dict at index i
-                for key, value in accumulator_dict.items():
-                    accumulator[key] += value
-
-            # Now average the values by dividing by the number of inner lists
-            averaged_dict = {key: value / num_inner_lists for key, value in accumulator.items()}
-
-            # Add the averaged dict to the result list
-            averaged_list.append(averaged_dict)
-
-        return averaged_list
-
-    def combine_to_dataframe(self, metrics_data, additional_values):
-        """
-        Combines two variables into a single pandas DataFrame.
-
-        Parameters:
-        metrics_data (list): List of dictionaries containing metrics
-        additional_values (list): List of additional values to be added as a column
-
-        Returns:
-        pandas.DataFrame: Combined DataFrame with all data
-        """
-        # Convert the first variable (list of dictionaries) to a DataFrame
-        df = pd.DataFrame(metrics_data)
-
-        # Add the second variable as a new column
-        df['std'] = additional_values
-
-        # Ensure the length of additional_values matches the number of rows in the DataFrame
-        if len(additional_values) != len(df):
-            raise ValueError(
-                f"Length mismatch: metrics_data has {len(df)} entries but additional_values has {len(additional_values)} entries")
-
-        return df
-
-    def generate_patient_samples(self, df1, all_seqs_h: np.ndarray, patient_seqs_len: int) -> pd.DataFrame:
-        """
-        Generate a DataFrame where 'patient_id' ranges from H1 to H10, and 'AASeq' contains
-        randomly sampled sequences from all_seqs_h for each patient.
-
-        Parameters:
-        - all_seqs_h (np.ndarray): Unique sequences.
-        - patient_seqs_len (int): Number of sequences to sample per patient.
-
-        Returns:
-        - pd.DataFrame: DataFrame with 'patient_id' and 'AASeq' columns.
-        """
-        data = []
-        for i in range(1, 15):  # Generate 10 samples
-            sampled_seqs = np.random.choice(all_seqs_h, patient_seqs_len, replace=False)
-            for seq in sampled_seqs:
-                data.append((f"H{i}", seq))
-
-        dfh = pd.DataFrame(data, columns=["patient_id", "AASeq"])
-        return pd.concat([df1, dfh], ignore_index=True)
-
-    def display_common_sequences_figure(self, df, df_h, dataset_type, l=8, log_space=True, to_replot=False):
-        base_plot_save_path = f"plots/common_seqs/{dataset_type}"
-        os.makedirs(base_plot_save_path, exist_ok=True)
-
-        if os.path.exists(os.path.join(base_plot_save_path, 'plot_common_sequences.png')) and not to_replot:
-            print(f"Common Sequences plot already exists for dataset {dataset_type}, skipping...")
-            return
-        else:
-            print(f"Generating Common Sequences plot for dataset {dataset_type}...")
-
-        # find max len of uniques patient_id
-        if l == None:
-            l = min(1 + len(df_h['patient_id'].unique()), len(df['patient_id'].unique())) + 1
-
-        # check if study_id is in the df
-        if dataset_type == 'cmv':
-            study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-            rand_patients = [np.random.choice(x, size=min(15, len(x)), replace=False) for x in study_groups]
-            rand_patients = list(chain(*rand_patients))
-        elif 'study_id' in df.columns and df.iloc[0]['study_id'] == 'article2':
-            rand_patients = np.random.choice(df['patient_id'].unique(), size=15, replace=False)
-        elif 'study_id' in df.columns:
-            study_groups = df.groupby('study_id')['patient_id'].unique().apply(list)
-            rand_patients = [np.random.choice(x, size=min(10, len(x)), replace=False) for x in study_groups]
-            rand_patients = list(chain(*rand_patients))
-        else:
-            # random patients from the df
-            rand_patients = np.random.choice(df['patient_id'].unique(), size=min(len(df['patient_id'].unique()), 40), replace=False)
-        df = df[df['patient_id'].isin(rand_patients)]
-
-        # calculate common sequences in disease and healthy samples
-        value_to_take = "percent_of_total"  # "percent_of_total" or "num_common"
-        x_disease_list = [self.common_aaseq_analysis(df, num_of_patients=i, mode=1) for i in range(2, l)]
-        x_disease = np.array([x[0][value_to_take] for x in x_disease_list])
-        x_disease_std = np.array([x[1] for x in x_disease_list])
-        # Extract total sequences for disease
-        x_disease_total = np.array([x[0]['num_total_seqs'] for x in x_disease_list])
-
-        def calculate_common_healthy(patient_id_bld, option=1):
-            df1 = df[df["patient_id"] == patient_id_bld]
-            if option == 1:
-                # First Option: Adding all healthy samples to the df as is (samples stays the same for each patient)
-                random_patients = np.random.choice(df_h['patient_id'].unique(), size=50, replace=False)
-                df_h_temp = df_h[df_h['patient_id'].isin(random_patients)]
-                df_h_comb = pd.concat([df1, df_h_temp], ignore_index=True)
-            else:
-                # Second Option: Adding random samples from healthy to the df (of the same length as the patient with disease samples)
-                patient_seqs_len = len(df1)
-                all_seqs_h = df_h["AASeq"]
-                df_h_comb = self.generate_patient_samples(df1, all_seqs_h, patient_seqs_len)
-            x_healthy = [self.common_aaseq_analysis(df_h_comb, num_of_patients=i, mode=2) for i in range(2, l)]
-            return x_healthy
-
-        # Average the results of all patients with disease
-        x_healthy_list_all = [calculate_common_healthy(patient_id_bld) for patient_id_bld in df['patient_id'].unique()]
-        x_healthy_list = [[y[0][value_to_take] for y in x] for x in x_healthy_list_all]
-        x_healthy_list_std = [[y[1] for y in x] for x in x_healthy_list_all]
-        # Extract total sequences for healthy
-        x_healthy_list_total = [[y[0]['num_total_seqs'] for y in x] for x in x_healthy_list_all]
-        x_healthy = np.array(x_healthy_list).mean(axis=0)
-        x_healthy_std = np.array(x_healthy_list_std).mean(axis=0)
-        x_healthy_total = np.array(x_healthy_list_total).mean(axis=0)
-
-        # Average the results of all patients with disease and healthy then save them to a csv file
-        x_avg_hlt = self.average_dicts(x_healthy_list_all)
-        disease_df = self.combine_to_dataframe([x[0] for x in x_disease_list], x_disease_std)
-        healthy_df = self.combine_to_dataframe(x_avg_hlt, x_healthy_std)
-        # Save the dfs
-        # disease_df.to_csv("cache/disease_df.csv", index=False)
-        # healthy_df.to_csv("cache/healthy_df.csv", index=False)
-
-        if log_space:
-            x_disease = np.log(x_disease)
-            x_healthy = np.log(x_healthy)
-
-        # Figure without legend
-        plt.figure(figsize=(6, 6), dpi=600)
-        ax = plt.gca()
-        for spine in ax.spines.values():
-            spine.set_edgecolor('black')
-            spine.set_linewidth(0.75)
-        plt.plot(range(2, len(x_disease) + 2), x_disease, label="Patients", color="#FFA500")
-        plt.plot(range(2, len(x_healthy) + 2), x_healthy, label="Healthy", color="#7BC8F6")
-        plt.fill_between(range(2, len(x_disease) + 2), x_disease - x_disease_std, x_disease + x_disease_std,
-                         color="#FFA500", alpha=0.2)
-        plt.fill_between(range(2, len(x_healthy) + 2), x_healthy - x_healthy_std, x_healthy + x_healthy_std,
-                         color="#7BC8F6", alpha=0.2)
-        # add the percentage of common sequences in the plot with rounded values and total sequences
-        for i, txt in enumerate(x_disease):
-            plt.annotate(f"{txt:.3f}\n(n={int(x_disease_total[i])})", (i + 2, x_disease[i]), textcoords="offset points", xytext=(0, 10), ha='center')
-        for i, txt in enumerate(x_healthy):
-            plt.annotate(f"{txt:.3f}\n(n={int(x_healthy_total[i])})", (i + 2, x_healthy[i]), textcoords="offset points", xytext=(0, 10), ha='center')
-        plt.xlabel("Number of Patients")
-        plt.ylabel("Percentage of Common Sequences")
-        plt.title("Percentage of Common Sequences in Patients" + (" (Log Scale)" if log_space else ""))
-        plt.ylim(min(min(x_disease), min(x_healthy)),
-                 max(max(x_disease + x_disease_std), max(x_healthy + x_healthy_std)) * 1.)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
-        plt.tight_layout()
-        plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences_nolegend.png'))
-        plt.legend(framealpha=1.0)
-        plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
-        plt.show()
-
-    def top_p_inference_plotting(self, disease, dataset_type):
-        old_top_percent = self.top_percent
-
-        seqs_per_patient_disease = []
-        seqs_per_patient_disease_min = []
-        seqs_per_patient_disease_max = []
-        seqs_per_patient_healthy = []
-        seqs_per_patient_healthy_min = []
-        seqs_per_patient_healthy_max = []
-
-        top_p_list = [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.1]
-        for top_p in tqdm(top_p_list):
-            # get data with top percent of top_p
-            self.top_percent = top_p * 100
-            self.dataset_type = f"ms_tcrdb2_top_{int(self.top_percent)}"
-
-            # Disease
-            df_d = self.get_all_usable_disease_data(disease=disease)
-            counts_per_patient_d = df_d.groupby("patient_id")["AASeq"].nunique()
-            seqs_per_patient_disease.append(counts_per_patient_d.mean())
-            seqs_per_patient_disease_min.append(counts_per_patient_d.min())
-            seqs_per_patient_disease_max.append(counts_per_patient_d.max())
-
-            # Healthy
-            df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
-            counts_per_patient_h = df_h.groupby("patient_id")["AASeq"].nunique()
-            seqs_per_patient_healthy.append(counts_per_patient_h.mean())
-            seqs_per_patient_healthy_min.append(counts_per_patient_h.min())
-            seqs_per_patient_healthy_max.append(counts_per_patient_h.max())
-
-            # Extra Figure: displaying common sequence figure with this loaded data:
-            self.display_common_sequences_figure(df_d, df_h, dataset_type)
-
-            # create a bar graph of the following vals:
-            self.plot_per_patient_histogram(
-                dfs=[df_d, df_h],
-                labels=['Disease', 'Healthy'],
-                colors=['salmon', 'lightblue'],
-                disease=disease,
-                to_add_top_percent=True
-            )
-
-        # Convert top percentages to strings for x-axis labels
-        x_labels = [f"{int(p * 100)}%" for p in top_p_list]
-        x = np.arange(len(top_p_list))
-
-        # Disease Figure
-        plt.figure(figsize=(12, 6))
-        bars_d = plt.bar(x, seqs_per_patient_disease, capsize=5, color="salmon")
-        plt.xticks(x, x_labels)
-        plt.xlabel("Top % CloneFraction")
-        plt.ylabel("Avg Unique AASeqs per Patient")
-        plt.title("Disease: Avg Unique AASeqs per Patient with Min/Max Range")
-
-        for i, bar in enumerate(bars_d):
-            height = bar.get_height()
-            min_val = seqs_per_patient_disease_min[i]
-            max_val = seqs_per_patient_disease_max[i]
-
-            # Display mean value on top of bar
-            plt.text(bar.get_x() + bar.get_width() / 2., height,
-                     f"μ: {height:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold')
-
-            # Display min/max range below the mean
-            plt.text(bar.get_x() + bar.get_width() / 2., height + 1500,
-                     f"({min_val:.0f}-{max_val:.0f})", ha='center', va='bottom', fontsize=8,
-                     style='italic', color='darkred')
-
-        # plt.tight_layout()
-        plt.show()
-
-        # Healthy Figure
-        plt.figure(figsize=(12, 6))
-        bars_h = plt.bar(x, seqs_per_patient_healthy, capsize=5, color="lightblue")
-        plt.xticks(x, x_labels)
-        plt.xlabel("Top % CloneFraction")
-        plt.ylabel("Avg Unique AASeqs per Patient")
-        plt.title("Healthy: Avg Unique AASeqs per Patient with Min/Max Range")
-
-        for i, bar in enumerate(bars_h):
-            height = bar.get_height()
-            min_val = seqs_per_patient_healthy_min[i]
-            max_val = seqs_per_patient_healthy_max[i]
-
-            # Display mean value on top of bar
-            plt.text(bar.get_x() + bar.get_width() / 2., height,
-                     f"μ: {height:.1f}", ha='center', va='bottom', fontsize=9, fontweight='bold')
-
-            # Display min/max range below the mean
-            plt.text(bar.get_x() + bar.get_width() / 2., height + 1000,
-                     f"({min_val:.0f}-{max_val:.0f})", ha='center', va='bottom', fontsize=8,
-                     style='italic', color='darkblue')
-
-        # plt.tight_layout()
-        plt.show()
-
-        # Reset the top percent to the old value
-        self.top_percent = old_top_percent
 
     def plot_per_patient_histogram(self, dfs, labels, colors, disease, to_add_top_percent=False, to_add_bar_vals=False):
         bar_vals = []

@@ -3,8 +3,7 @@ import pandas as pd
 import torch
 import numpy as np
 import torch.nn as nn
-from hashlib import md5
-from cache_handler import get_model_dir
+from utils.cache_handler import get_model_dir
 
 
 class CVCDFCachingModel(nn.Module):

@@ -3,10 +3,8 @@ import json
 import torch
 import numpy as np
 import torch.nn as nn
-import random
-from tqdm import tqdm
 from models.cvc_model import CVCClassifierModel
-from cache_handler import load_model_state
+from utils.cache_handler import load_model_state
 from hashlib import md5
 
 

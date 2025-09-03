@@ -1,24 +1,10 @@
 import warnings
 warnings.simplefilter("ignore", category=FutureWarning)
-from Curation import Study
 import pandas as pd
 import numpy as np
 import torch
 import os
-import math
 from tqdm import tqdm
-from utils import pairwise_scores, levenshtein_dist, levenshtein_dist_non_bin
-import pickle
-import argparse
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import KFold
-from sklearn.metrics import accuracy_score
-from itertools import combinations, chain
-import multiprocessing as mp
-from collections import Counter
-from esm.sdk.api import ESMProtein, SamplingConfig, LogitsConfig
 
 
 class SingleSeqProcessing:
@@ -120,9 +106,7 @@ class SingleSeqProcessing:
 
 
 def train_vae_eve_model():
-    import sys
     import json
-    from other_models.eve.utils import data_utils
     from other_models.eve.EVE.VAE_model import VAE_model
 
     # Define the base path

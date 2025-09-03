@@ -2,7 +2,7 @@ import os
 import numpy as np
 import torch
 import matplotlib.pyplot as plt
-from cache_handler import get_model_config_str
+from utils.cache_handler import get_model_config_str
 import seaborn as sns
 
 

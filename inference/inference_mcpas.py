@@ -7,7 +7,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from cache_handler import get_model_config_str
+from utils.cache_handler import get_model_config_str
 
 
 BASE_MCPAS_CACHE = "db/ms_related/cache"

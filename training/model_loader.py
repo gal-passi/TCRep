@@ -2,6 +2,7 @@ from models.cvc_ensemble_model import CVCEnsembleModel
 from utils.cache_handler import load_model_state, get_model_dir
 from training.model_trainer import train_model
 
+
 def load_or_train_model(model, args,
                         train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                         test_pos_seqs, test_neg_seqs,
@@ -18,28 +19,23 @@ def load_or_train_model(model, args,
     Either load a previously trained model (if available and allowed),
     or train a new one and return it.
     """
-
     trained_model = None
 
     if not args.force_retrain:
         if args.combine_classification:
             trained_model = model
-
         elif args.to_ensemble:
             cache_dir = get_model_dir(args)
             trained_model = CVCEnsembleModel(args, device,
                                              cache_dir=cache_dir,
                                              default_to_return="min")  # or "weighted_sum"
-
         elif args.test_mode_epoch >= 0:
             trained_model = load_model_state(model, args, args.test_mode_epoch, device)
             if trained_model is None:
                 print(f"Model for epoch {args.test_mode_epoch} is not available!")
                 exit(1)
-
         elif model_type == "cvc_combined_reshef":
             trained_model = model
-
         else:
             trained_model = load_model_state(model, args, args.epochs - 1, device)
 

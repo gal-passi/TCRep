@@ -8,7 +8,7 @@ import functools
 import operator
 from transformers import AutoTokenizer
 from dataset_handlers.trainer import build_datasets
-from dataset_handlers.definitions import *
+from dataset_handlers.constants import *
 import numpy as np
 import shutil
 import json

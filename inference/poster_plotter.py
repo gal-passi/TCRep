@@ -494,7 +494,7 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
 
     # def add_model_results(to_get='embedding'):
     #     tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = [], [], [], [], []
-    #     dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results"))
+    #     dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "cache/run_for_poster_results/naive_model_results"))
     #     dir_content = sorted([x for x in dir_content if 'cvc' in x and '5.45001' in x])
     #     for cvc_dir in dir_content:
     #         # list files in cvc_dir and make sure that there are exactly 2 files

@@ -1,6 +1,6 @@
 import os.path
 
-from dataset_handlers.definitions import *
+from dataset_handlers.constants import *
 from Curation import build_study
 import pandas as pd
 

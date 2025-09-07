@@ -10,10 +10,11 @@ from utils.utils import pairwise_scores, levenshtein_dist_non_bin
 
 class LossPreprocessor:
     def __init__(self, df_bld, df_hlt, train_pos_seqs, train_patient_ids, test_patient_ids, valid_patient_ids,
-                 filter_num_of_patients, ratio, dataset_type, dist_loss_type, use_nneighbors_loss):
+                 filter_num_of_patients, ratio, dataset_type, dist_loss_type, use_nneighbors_loss, cache_path):
         self.aaseq_to_ratio = None
         self.aaseq_to_distance = None
         self.aaseq_to_nneighbors = None
+        self.cache_path = cache_path
 
         if ratio and dataset_type not in ['article', 'article_sle']:
             self.aaseq_to_ratio = self.build_aaseq_to_ratio_func(df_bld, df_hlt, dataset_type)
@@ -91,7 +92,7 @@ class LossPreprocessor:
         hash_of_df = hashlib.sha256(hash_str.encode()).hexdigest()
 
         # check if the df_dist already exists
-        df_dist_filename = f"cache/distance_df_cache/{dataset_type}/df_dist_{hash_of_df}.pkl"
+        df_dist_filename = os.path.join(self.cache_path, f"distance_df_cache/{dataset_type}/df_dist_{hash_of_df}.pkl")
         if os.path.exists(df_dist_filename):
             # load the df_dist from the file
             df_dist = pd.read_pickle(df_dist_filename)

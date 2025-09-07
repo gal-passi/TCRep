@@ -6,7 +6,7 @@ from collections import Counter
 
 from inference.plot_dataset import display_common_sequences_figure, display_ratio_figures
 from inference.plot_training import (
-    plot_output_distributions_per_patient_new,
+    plot_average_individual_distributions,
     plot_output_distributions_per_patient,
     # plot_output_distributions_claude,
     # plot_output_distributions_unseen_ms,
@@ -106,19 +106,19 @@ def plot_all_training(trained_model, args,
 
     # Output distributions
     np.random.seed(42)
-    print("Plotting the output distributions per patient (New)")
-    plot_output_distributions_per_patient_new(
-        trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-        test_masks, valid_masks, positive_seqs, df_bld, df_hlt,
-        args.model_type, args.log_wandb, args, device
-    )
-
-    np.random.seed(42)
     print("Plotting the output distributions per patient")
     plot_output_distributions_per_patient(
         trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
         test_masks, valid_masks, positive_seqs, df_bld, df_hlt,
         args.model_type, args.log_wandb, sample_plots, args, device
+    )
+
+    np.random.seed(42)
+    print("Plotting the average individual distributions per patient")
+    plot_average_individual_distributions(
+        trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+        test_masks, valid_masks, positive_seqs, df_bld, df_hlt,
+        args.model_type, args.log_wandb, args, device
     )
 
 

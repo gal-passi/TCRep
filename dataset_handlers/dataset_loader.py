@@ -21,8 +21,7 @@ from dataset_handlers.dataset_builder import build_ms_dataset, build_sle_dataset
 
 # TODO: Formatting changes:
 #  1. remove redundant unused functions
-#  2. change (somehow) directory/names of cache files in: "valid_sequences"
-#  3. remove some more stuff from the init function of the DatasetLoader class
+#  2. move more code from the init function of the DatasetLoader class (to other files)
 class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
@@ -34,6 +33,14 @@ class DatasetLoader:
         self.top_n_seqs = top_n_seqs
         self.losses_preprocessor = None
 
+        # cache folder members
+        self.cache_path = 'cache'
+        self.cache_dataframes_path = os.path.join(self.cache_path, "dataloader_cache/dataframes")
+        self.cache_dataframes_healthy_path = os.path.join(self.cache_path, "dataloader_cache/dataframes_healthy")
+        self.saved_dataframe_path = os.path.join(self.cache_dataframes_path, f"{dataset_type}_df.pkl")
+        self.cache_sequences_path = os.path.join(self.cache_path, "dataloader_cache/processed_sequences")
+        self.synapse_db_path = "data/db/synapse_Mal_ID"
+
         disease = 'Multiple sclerosis'
         print('Loading Disease:')
         df = self.get_all_usable_disease_data(disease=disease, dataset_type=dataset_type)
@@ -41,20 +48,18 @@ class DatasetLoader:
         df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
         # load from saved dataset if exists
-        save_folder = "cache/valid_sequences/multiple_sclerosis"  # TODO: Refactor this part by changing multiple sclerosis folder to a different name
-        saved_dataset_path = os.path.join(save_folder, f"{dataset_type}_df.pkl")
         saved_df = None
-        if os.path.exists(saved_dataset_path):
-            with open(saved_dataset_path, 'rb') as f:
+        if os.path.exists(self.saved_dataframe_path):
+            with open(self.saved_dataframe_path, 'rb') as f:
                 saved_df = pickle.load(f)
 
         dataset = build_ms_dataset(self, df, df_h, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
         if dataset is None:
-            dataset = build_sle_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
+            dataset = build_sle_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
         if dataset is None:
-            dataset = build_t1d_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
+            dataset = build_t1d_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
         if dataset is None:
-            dataset = build_other_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
+            dataset = build_other_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
         if dataset is None:
             raise ValueError("Invalid dataset type")
         elif 'hlt_as_ms' in dataset_type:
@@ -103,7 +108,7 @@ class DatasetLoader:
         train_patient_ids, valid_patient_ids, test_patient_ids, unique_patient_ids, df_bld = split_patients_out
 
         # calculate positive sequences of train, validation and test sets
-        pos_seqs_res = calculate_positive_sequences(df_bld, df_hlt, dataset_type,
+        pos_seqs_res = calculate_positive_sequences(df_bld, df_hlt, dataset_type, self.cache_sequences_path,
                                                     train_patient_ids, valid_patient_ids, test_patient_ids,
                                                     filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
                                                     extra_filter, k_fold, top_percent, top_n_seqs, verbose)
@@ -260,7 +265,7 @@ class DatasetLoader:
         # loss preprocessor
         self.losses_preprocessor = LossPreprocessor(df_bld, df_hlt, train_pos_seqs, train_patient_ids, test_patient_ids,
                                                     valid_patient_ids, filter_num_of_patients, ratio, dataset_type,
-                                                    dist_loss_type, use_nneighbors_loss)
+                                                    dist_loss_type, use_nneighbors_loss, self.cache_path)
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -294,7 +299,7 @@ class DatasetLoader:
         self.aaseq_to_nneighbors = self.losses_preprocessor.aaseq_to_nneighbors
 
     def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
-        similar_neg_cache_path = '../cache/ms'
+        similar_neg_cache_path = os.path.join(self.cache_path, '/similar_negatives')
         os.makedirs(similar_neg_cache_path, exist_ok=True)
         # Check if the file already exists
         similar_neg_seqs_path = os.path.join(similar_neg_cache_path, "similar_negatives.npy")
@@ -425,8 +430,7 @@ class DatasetLoader:
         return self.train_masks, self.valid_masks, self.test_masks
 
     def get_all_usable_disease_data(self, disease='Multiple sclerosis', dataset_type=None, get_all=False):
-        disease_clean = disease.lower().replace(' ', '_')
-        cache_dir = os.path.join("../cache", "valid_sequences", disease_clean)
+        cache_dir = self.cache_dataframes_path
         os.makedirs(cache_dir, exist_ok=True)
 
         cache_path = None
@@ -477,7 +481,7 @@ class DatasetLoader:
 
     def get_all_usable_healthy_data(self, dataset_type='ms'):
         # Set up cache path
-        cache_dir = os.path.join("../cache", "valid_sequences", "healthy")
+        cache_dir = self.cache_dataframes_healthy_path
         os.makedirs(cache_dir, exist_ok=True)
         cache_path = None
         if dataset_type is not None:
@@ -594,12 +598,11 @@ class DatasetLoader:
     # This function loads the synapse dataframe of Mal-ID of only TCR and healthy samples for sure.
     def get_full_healthy_synapse_mal_id_dataframe(self, to_recalculate=False, get_all=False):
         # Defining constants
-        synapse_db_folder = "db/synapse_Mal_ID"
-        synapse_metadata_file = os.path.join(synapse_db_folder, "metadata.tsv")
+        synapse_metadata_file = os.path.join(self.synapse_db_path, "metadata.tsv")
 
         # Define the filename based on the get_all flag
         file_suffix = "_all" if get_all else "_healthy_only"
-        df_filename = os.path.join(synapse_db_folder, f"synapse_mal_id_dataframe{file_suffix}.pkl")
+        df_filename = os.path.join(self.synapse_db_path, f"synapse_mal_id_dataframe{file_suffix}.pkl")
         # Check if the DataFrame is already saved
         if not to_recalculate:
             if os.path.exists(df_filename):
@@ -611,12 +614,12 @@ class DatasetLoader:
         synapse_metadata = pd.read_csv(synapse_metadata_file, sep='\t')
 
         # Reading and interpreting data files
-        synapse_datafiles = [x for x in os.listdir(synapse_db_folder) if x.endswith(".bz2")]
+        synapse_datafiles = [x for x in os.listdir(self.synapse_db_path) if x.endswith(".bz2")]
         # lupus_ids
         healthy_samples = []
         for datafile in tqdm(synapse_datafiles, desc="Processing data files", total=len(synapse_datafiles)):
             datafile_id = datafile.split("_")[-1][:-4]
-            datafile_path = os.path.join(synapse_db_folder, datafile)
+            datafile_path = os.path.join(self.synapse_db_path, datafile)
 
             # Reading metadata and data
             metadata = synapse_metadata[synapse_metadata['participant_label'] == datafile_id]
@@ -698,22 +701,6 @@ class DatasetLoader:
         # The result is a set of valid sequences
         return valid_seqs_set
 
-    # TODO: consider removing the following function if we are not using it
-    def calculate_valid_near_sequences(self, df, save_name, lev_dist_accept=1, num_of_patients=3, all_common_seqs=None):
-        save_folder = "cache/valid_sequences/multiple_sclerosis"
-        save_file = os.path.join(save_folder, f"{save_name}_valid_seqs_dist_{lev_dist_accept}.pkl")
-        if not os.path.exists(save_file):
-            if all_common_seqs is None:
-                all_common_seqs = self.find_all_common_sequences(df, num_of_patients=num_of_patients)
-            valid_seqs = self.process_in_batches(df, all_common_seqs, 512, lev_dist_accept)
-            os.makedirs(save_folder, exist_ok=True)
-            with open(save_file, "wb") as f:
-                pickle.dump(valid_seqs, f)
-        else:
-            with open(save_file, "rb") as f:
-                valid_seqs = pickle.load(f)
-        return valid_seqs
-
     def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=50000, std_val='percent_of_total'):
 
         # Select the unique patients
@@ -793,12 +780,12 @@ class DatasetLoader:
         return mean_results, std_values
 
     def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):
-        extra_ms_path = '../db/tcrdb/special2'
+        extra_ms_path = '../data/db/tcrdb/special2'
         extra_ms_files = [x for x in os.listdir(extra_ms_path) if x.endswith('Pre.csv')]
         extra_ms_dfs = []
 
         def print_names_and_tags():
-            extra_ms_path = '../db/tcrdb/special'
+            extra_ms_path = '../data/db/tcrdb/special'
             file_path = os.path.join(extra_ms_path, 'information/names_and_tags.txt')
             output_path = os.path.join(extra_ms_path, 'information/parsed_names_and_tags/pairs.pickle')
 

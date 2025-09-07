@@ -435,7 +435,164 @@ def plot_output_distributions_per_patient(trained_model, test_patient_inds, vali
         plt.show()
 
 
-def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+def plot_average_individual_distributions(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                          test_masks, valid_masks, positive_seqs, df_bld,
+                                          df_hlt, model_type, log_wandb, args, device='cuda'):
+    """
+    Create a comprehensive visualization of model output distributions across validation,
+    training, and healthy patient sets.
+    Parameters:
+    - trained_model: The trained neural network model
+    - Various data-related parameters to extract sequences and patient sets
+    """
+    # Get X random healthy patients for average healthy distribution
+    healthy_patients = df_hlt["patient_id"].unique()
+    rng = np.random.default_rng(42)  # For reproducibility
+    healthy_patients = sorted(healthy_patients)
+    healthy_patients = rng.permutation(healthy_patients)
+    healthy_to_take = min(len(healthy_patients) // 2, len(test_patient_inds) + len(valid_patient_inds))
+    healthy_patients = healthy_patients[:healthy_to_take]
+
+    # Prepare combined test and validation indices
+    test_inds = np.concatenate([test_patient_inds, valid_patient_inds])
+
+    sample_rng = np.random.default_rng(42)  # For reproducibility
+    def sample_seqs(sequences, sample_size=20000):
+        """Helper function to sample sequences for plotting"""
+        if isinstance(sequences, list):
+            sequences = np.array(sequences)
+        sequences = np.sort(sequences)
+        if len(sequences) > sample_size:
+            indices = sample_rng.choice(len(sequences), size=sample_size, replace=False)
+            sequences = sequences[indices]
+        return sequences
+
+    # Collect distributions
+    healthy_dists = []
+    disease_dists = []
+    individual_disease_dists = []
+    individual_disease_labels = []
+
+    # Process healthy patients to create average distribution
+    for patient in healthy_patients:
+        healthy_seqs = df_hlt.loc[df_hlt["patient_id"] == patient, "AASeq"].values
+        healthy_seqs = sample_seqs(healthy_seqs)
+
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            healthy_logits = trained_model(healthy_seqs)
+
+        # Convert to probabilities
+        healthy_probs = torch.softmax(healthy_logits, dim=1)[:, 1].cpu().numpy()
+        healthy_dists.append(healthy_probs)
+
+    # Process disease patients
+    for i, patient_ind in enumerate(test_inds):
+        # Get disease sequences for this patient
+        disease_seqs = df_bld.loc[df_bld["patient_id"] == unique_patient_ids[patient_ind], "AASeq"].values
+        disease_seqs = sample_seqs(disease_seqs)
+
+        # Get model outputs
+        trained_model.to(device)
+        trained_model.eval()
+        with torch.no_grad():
+            disease_logits = trained_model(disease_seqs)
+
+        # Convert to probabilities
+        disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+
+        # Add to collections
+        disease_dists.append(disease_probs)
+
+        # Store individual distributions with labels (test or validation)
+        individual_disease_dists.append(disease_probs)
+        if i < len(test_patient_inds):
+            individual_disease_labels.append(f"Test Patient {i}")
+        else:
+            individual_disease_labels.append(f"Valid Patient {i - len(test_patient_inds)}")
+
+    save_data_as_pickle = False
+    if save_data_as_pickle:
+        # save to "plots/plots_for_posters/data/"
+        import pickle
+        with open(f"plots/plots_for_posters/data/average_distribution_plot_data.pkl", "wb") as f:
+            pickle.dump({
+                "healthy_dists": healthy_dists,
+                "disease_dists": disease_dists,
+            }, f)
+
+    # FIGUREs variables:
+    xlim = (-0.15, 1.05)
+    ylim = (-0.02, 1.2)
+    dpi = 600
+
+    # FIGURE 2: Individual patient distributions vs healthy average
+    fig2, ax2 = plt.subplots(figsize=(6, 6))
+    for spine in ax2.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(0.75)
+    fig2.suptitle(f"Individual Patient Distributions for {model_type} Model", fontsize=16)
+    # Plot average healthy distribution with std (same as figure 1)
+    plot_average_dist_with_std(ax2, healthy_dists, color="#7BC8F6", label="Healthy Distribution")
+    # Plot each individual disease patient
+    # Use colormap for differentiation between patients
+    for i, (dist, label) in enumerate(zip(individual_disease_dists, individual_disease_labels)):
+        if i == 0:
+            kde = sns.kdeplot(
+                dist,
+                ax=ax2,
+                color="#FFA500",
+                label="Patients Distribution",
+                common_norm=True
+            )
+        else:
+            kde = sns.kdeplot(
+                dist,
+                ax=ax2,
+                color="#FFA500",
+                common_norm=True
+            )
+        # Get the last line (the KDE curve just added)
+        line = kde.get_lines()[-1]
+        # Get the data from the KDE curve
+        y_data = line.get_ydata()
+        # Normalize by dividing by max value
+        max_value = np.max(y_data)
+        if max_value > 0:
+            normalized_y = y_data / max_value
+            # Update the line with normalized values
+            line.set_ydata(normalized_y)
+    ax2.set_xlabel("Predicted Probability for Positive Class")
+    ax2.set_ylabel("Density")
+    ax2.set_xlim(xlim[0], xlim[1])  # Focus on the set range
+    ax2.set_ylim(ylim[0], ylim[1])  # Focus on the set range
+    ax2.set_xticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.1
+    ax2.set_yticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.2
+    # Create a custom legend with better spacing
+    box = ax2.get_position()
+    ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
+
+    # Save figure 2
+    plt.tight_layout()
+    fig2_path = f"plots/{model_type}_model/dist_model_output/individual_distributions_nolegend_{get_model_config_str(args)}.png"
+    plt.savefig(fig2_path, dpi=dpi)
+    ax2.legend(loc='upper right', framealpha=1.0)
+    fig2_path = f"plots/{model_type}_model/dist_model_output/individual_distributions_{get_model_config_str(args)}.png"
+    plt.savefig(fig2_path, dpi=dpi)
+
+    # Log to wandb if requested
+    if log_wandb:
+        wandb.log({
+            "individual_distributions": wandb.Image(fig2)
+        })
+    else:
+        plt.show()
+
+    plt.close(fig2)
+
+def plot_average_gmm_distributions(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
                                               test_masks, valid_masks, positive_seqs, df_bld,
                                               df_hlt, model_type, log_wandb, args, device='cuda'):
     """
@@ -607,71 +764,15 @@ def plot_output_distributions_per_patient_new(trained_model, test_patient_inds, 
     fig1_path = f"plots/{model_type}_model/dist_model_output/average_distributions_{get_model_config_str(args)}.png"
     plt.savefig(fig1_path, dpi=dpi)
 
-    # FIGURE 2: Individual patient distributions vs healthy average
-    fig2, ax2 = plt.subplots(figsize=(6, 6))
-    for spine in ax2.spines.values():
-        spine.set_edgecolor('black')
-        spine.set_linewidth(0.75)
-    fig2.suptitle(f"Individual Patient Distributions for {model_type} Model", fontsize=16)
-    # Plot average healthy distribution with std (same as figure 1)
-    plot_average_dist_with_std(ax2, healthy_dists, color="#7BC8F6", label="Healthy Distribution")
-    # Plot each individual disease patient
-    # Use colormap for differentiation between patients
-    for i, (dist, label) in enumerate(zip(individual_disease_dists, individual_disease_labels)):
-        if i == 0:
-            kde = sns.kdeplot(
-                dist,
-                ax=ax2,
-                color="#FFA500",
-                label="Patients Distribution",
-                common_norm=True
-            )
-        else:
-            kde = sns.kdeplot(
-                dist,
-                ax=ax2,
-                color="#FFA500",
-                common_norm=True
-            )
-        # Get the last line (the KDE curve just added)
-        line = kde.get_lines()[-1]
-        # Get the data from the KDE curve
-        y_data = line.get_ydata()
-        # Normalize by dividing by max value
-        max_value = np.max(y_data)
-        if max_value > 0:
-            normalized_y = y_data / max_value
-            # Update the line with normalized values
-            line.set_ydata(normalized_y)
-    ax2.set_xlabel("Predicted Probability for Positive Class")
-    ax2.set_ylabel("Density")
-    ax2.set_xlim(xlim[0], xlim[1])  # Focus on the set range
-    ax2.set_ylim(ylim[0], ylim[1])  # Focus on the set range
-    ax2.set_xticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.1
-    ax2.set_yticks(np.arange(0.0, 1.1, 0.2))  # Ticks from 0.0 to 1.0 with step 0.2
-    # Create a custom legend with better spacing
-    box = ax2.get_position()
-    ax2.set_position([box.x0, box.y0, box.width * 0.8, box.height])
-
-    # Save figure 2
-    plt.tight_layout()
-    fig2_path = f"plots/{model_type}_model/dist_model_output/individual_distributions_nolegend_{get_model_config_str(args)}.png"
-    plt.savefig(fig2_path, dpi=dpi)
-    ax2.legend(loc='upper right', framealpha=1.0)
-    fig2_path = f"plots/{model_type}_model/dist_model_output/individual_distributions_{get_model_config_str(args)}.png"
-    plt.savefig(fig2_path, dpi=dpi)
-
     # Log to wandb if requested
     if log_wandb:
         wandb.log({
-            "average_distributions": wandb.Image(fig1),
-            "individual_distributions": wandb.Image(fig2)
+            "average_distributions": wandb.Image(fig1)
         })
     else:
         plt.show()
 
     plt.close(fig1)
-    plt.close(fig2)
 
 
 def plot_average_dist_with_std(ax, distributions, color, label, bins=50, min_val=0, max_val=1):

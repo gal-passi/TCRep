@@ -94,12 +94,12 @@ def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=
     return df_bld, df_hlt
 
 
-def build_sle_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
+def build_sle_dataset(dataset_loader, saved_df, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
     if saved_df is not None:
         df_bld, df_hlt = saved_df
         return df_bld, df_hlt
 
-    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+    df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
     if dataset_type == 'article_sle':
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
@@ -108,14 +108,14 @@ def build_sle_dataset(self, saved_df, saved_dataset_path, dataset_type, top_perc
     elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-        df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+        df_hlt = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
     elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-        df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+        df_hlt_ms = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
         df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
@@ -124,18 +124,18 @@ def build_sle_dataset(self, saved_df, saved_dataset_path, dataset_type, top_perc
 
     if extra_filter:
         df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-    with open(saved_dataset_path, 'wb') as f:
+    with open(dataset_loader.saved_dataframe_path, 'wb') as f:
         pickle.dump((df_bld, df_hlt), f)
 
     return df_bld, df_hlt
 
 
-def build_t1d_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
+def build_t1d_dataset(dataset_loader, saved_df, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
     if saved_df is not None:
         df_bld, df_hlt = saved_df
         return df_bld, df_hlt
 
-    df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+    df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
     if dataset_type == 't1d':
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
@@ -144,14 +144,14 @@ def build_t1d_dataset(self, saved_df, saved_dataset_path, dataset_type, top_perc
     elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-        df_hlt = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+        df_hlt = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
     elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
-        df_hlt_ms = self.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
+        df_hlt_ms = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
         df_hlt = pd.concat([df_hlt, df_hlt_ms], axis=0, ignore_index=True)
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
@@ -160,15 +160,15 @@ def build_t1d_dataset(self, saved_df, saved_dataset_path, dataset_type, top_perc
 
     if extra_filter:
         df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-    with open(saved_dataset_path, 'wb') as f:
+    with open(dataset_loader.saved_dataframe_path, 'wb') as f:
         pickle.dump((df_bld, df_hlt), f)
 
     return df_bld, df_hlt
 
 
-def build_other_dataset(self, saved_df, saved_dataset_path, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
+def build_other_dataset(dataset_loader, saved_df, dataset_type, top_percent=None, top_n_seqs=None, extra_filter=False):
     if dataset_type == 'cmv':
-        df_cmv = self.get_all_usable_disease_data(disease='CMV', get_all=True)
+        df_cmv = dataset_loader.get_all_usable_disease_data(disease='CMV', get_all=True)
         df_bld = df_cmv[df_cmv["condition"] == "CMV"]
         filtered_patient_ids = [x[0] for x in df_bld.groupby("patient_id")["AASeq"] if len(x[1]) >= 2000]  # this leaves 25 patients
         df_bld = df_bld[df_bld["patient_id"].isin(filtered_patient_ids)]
@@ -179,19 +179,19 @@ def build_other_dataset(self, saved_df, saved_dataset_path, dataset_type, top_pe
         df_bld, df_hlt = saved_df
         return df_bld, df_hlt
     if dataset_type == 'article_hiv':
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "HIV"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
     elif dataset_type == 'article_covid19':
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "Covid19"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
         df_hlt = filter_df(df_hlt, top_percent, top_n_seqs)
     elif dataset_type == 'article_influenza':
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "Influenza"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         df_bld = filter_df(df_bld, top_percent, top_n_seqs)
@@ -203,7 +203,7 @@ def build_other_dataset(self, saved_df, saved_dataset_path, dataset_type, top_pe
 
     if extra_filter:
         df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-    with open(saved_dataset_path, 'wb') as f:
+    with open(dataset_loader.saved_dataframe_path, 'wb') as f:
         pickle.dump((df_bld, df_hlt), f)
 
     return df_bld, df_hlt

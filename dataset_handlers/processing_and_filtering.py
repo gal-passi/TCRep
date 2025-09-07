@@ -131,11 +131,11 @@ def get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_
     return positive_seqs, negative_seqs
 
 
-def calculate_pos_neg_sequences(df_bld, df_hlt, df_name, patient_ids, dataset_type, cell_type, top_percent, top_n_seqs,
+def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, patient_ids, dataset_type, cell_type, top_percent, top_n_seqs,
                                 num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
     if filter_to_inflate:
         lev_dist_accept = 1  # for now its always lev distance 1
-        save_folder = "cache/valid_sequences/multiple_sclerosis"
+        save_folder = cache_sequences_path
         save_name = f"{df_name}_disease_{dataset_type}_{cell_type}_neighbours{num_of_patients}"
         if num_of_healthy != 3:
             save_name += f"_healthy{num_of_healthy}"
@@ -181,7 +181,7 @@ def calculate_pos_neg_sequences(df_bld, df_hlt, df_name, patient_ids, dataset_ty
         return positive_seqs, negative_seqs
 
 
-def calculate_positive_sequences(df_bld, df_hlt, dataset_type, train_ids, valid_ids, test_ids,
+def calculate_positive_sequences(df_bld, df_hlt, dataset_type, cache_sequences_path, train_ids, valid_ids, test_ids,
                                  filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
                                  extra_filter, k_fold, top_percent, top_n_seqs, verbose):
     """Compute train/valid/test pos and neg sequences with overlaps resolved."""
@@ -202,13 +202,13 @@ def calculate_positive_sequences(df_bld, df_hlt, dataset_type, train_ids, valid_
     if verbose:
         print('Calculating positive and negative sequences...')
 
-    train_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, "train" + name_metadata, train_ids,
+    train_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "train" + name_metadata, train_ids,
                                                          dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
                                                          num_of_healthy=num_of_healthy,
                                                          filter_to_inflate=filter_to_inflate, verbose=verbose)
     # Calculate positive valid sequences
     train_and_valid_ids = np.concatenate((train_ids, valid_ids))
-    valid_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, "valid" + name_metadata, train_and_valid_ids,
+    valid_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "valid" + name_metadata, train_and_valid_ids,
                                                          dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
                                                          num_of_healthy=num_of_healthy,
                                                          filter_to_inflate=filter_to_inflate, verbose=verbose)
@@ -216,7 +216,7 @@ def calculate_positive_sequences(df_bld, df_hlt, dataset_type, train_ids, valid_
     valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
     # Calculate positive test sequences
     train_and_test_ids = np.concatenate((train_ids, test_ids))
-    test_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, "test" + name_metadata, train_and_test_ids,
+    test_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "test" + name_metadata, train_and_test_ids,
                                                         dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
                                                         num_of_healthy=num_of_healthy,
                                                         filter_to_inflate=filter_to_inflate, verbose=verbose)

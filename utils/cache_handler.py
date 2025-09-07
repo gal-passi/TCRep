@@ -23,7 +23,7 @@ def get_model_config_str(args):
 
 def get_model_dir(args, make_dirs=True):
     # Define the base directory for saving models
-    base_dir = "../cache/models"
+    base_dir = "cache/models"
     if make_dirs:
         os.makedirs(base_dir, exist_ok=True)
 

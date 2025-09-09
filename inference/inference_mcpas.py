@@ -10,7 +10,8 @@ from sklearn.preprocessing import StandardScaler
 from utils.cache_handler import get_model_config_str
 
 
-BASE_MCPAS_CACHE = "db/ms_related/cache"
+BASE_MCPAS_PATH = "data/db/ms_related"
+BASE_MCPAS_CACHE = os.path.join(BASE_MCPAS_PATH, "cache")
 
 
 def inference_mcpas(trained_model, args, df_bld, df_hlt, test_patient_ids, valid_patient_ids, valid_pos_seqs,
@@ -26,13 +27,13 @@ def inference_mcpas(trained_model, args, df_bld, df_hlt, test_patient_ids, valid
     # aggregate_and_save_mcpas_results(args)
     # print('Done saving McPAS!')
 
-    # read the .xlsx file "db/ms_related/IEDB_MS_AB.xlsx"
-    df_iedb = pd.read_excel("db/ms_related/IEDB_MS_AB.xlsx")
-    seqs_iedb_chain1 = df_iedb["Chain 1 CDR3"].values  # TODO: I think chain 1 is not necessary related to our sequences.
-    seqs_iedb_chain2 = df_iedb["Chain 2 CDR3"].values
+    # read the .xlsx file "IEDB_MS_AB.xlsx"
+    # df_iedb = pd.read_excel(os.path.join(BASE_MCPAS_PATH, "IEDB_MS_AB.xlsx"))
+    # seqs_iedb_chain1 = df_iedb["Chain 1 CDR3"].values  # TODO: I think chain 1 is not necessary related to our sequences.
+    # seqs_iedb_chain2 = df_iedb["Chain 2 CDR3"].values
 
-    # read the .csv file "db/ms_related/McPAS-TCR_MS_seqs.csv"
-    df_mcpas_ms = pd.read_csv("db/ms_related/McPAS-TCR_MS_seqs.csv")
+    # read the .csv file "McPAS-TCR_MS_seqs.csv"
+    df_mcpas_ms = pd.read_csv(os.path.join(BASE_MCPAS_PATH, "McPAS-TCR_MS_seqs.csv"))
     seqs_mcpas_ms = df_mcpas_ms["CDR3.beta.aa"].unique()
     seqs_mcpas_ms = [seq for seq in seqs_mcpas_ms if 10 < len(seq) < 20]
     seqs_mcpas_ms = [seq for seq in seqs_mcpas_ms if seq.startswith('C') and seq.endswith('F')]
@@ -43,8 +44,8 @@ def inference_mcpas(trained_model, args, df_bld, df_hlt, test_patient_ids, valid
     print(f"McPAS MS sequences: Mean: {probs.mean():.4f}, Std: {probs.std():.4f}, Count: {len(seqs_mcpas_ms)}")
     print(f"McPAS MS sequences with prob > 0.5: {np.sum(probs > 0.5)}")
 
-    # read the .csv file "db/ms_related/McPAS-TCR.csv"
-    df_mcpas = pd.read_csv("db/ms_related/McPAS-TCR.csv", low_memory=False)
+    # read the .csv file "McPAS-TCR.csv"
+    df_mcpas = pd.read_csv(os.path.join(BASE_MCPAS_PATH, "McPAS-TCR.csv"), low_memory=False)
     df_mcpas = df_mcpas[df_mcpas['Species'] == 'Human']
     # remove nans from "CDR3.beta.aa" column
     df_mcpas = df_mcpas.dropna(subset=['CDR3.beta.aa'])

@@ -24,7 +24,7 @@ class ControlVAE(nn.Module):
 
         # Amino acid vocabulary (20 standard amino acids + padding)
         self.vocab_size = 21
-        self.aa_to_idx = {aa: i for i, aa in enumerate('ACDEFGHIKLMNPQRSTVWYP')}  # P for padding
+        self.aa_to_idx = {aa: i for i, aa in enumerate('ACDEFGHIKLMNPQRSTVWYX')}  # X for padding
         self.idx_to_aa = {i: aa for aa, i in self.aa_to_idx.items()}
 
         # Encoder
@@ -72,7 +72,7 @@ class ControlVAE(nn.Module):
                 if aa in self.aa_to_idx:
                     encoded[i, j, self.aa_to_idx[aa]] = 1.0
                 else:
-                    encoded[i, j, self.aa_to_idx['P']] = 1.0  # Use padding for unknown AA
+                    encoded[i, j, self.aa_to_idx['X']] = 1.0  # Use padding for unknown AA
 
         return encoded.view(batch_size, -1)  # Flatten
 
@@ -86,7 +86,7 @@ class ControlVAE(nn.Module):
             seq = ""
             for j in range(self.max_seq_len):
                 aa_idx = torch.argmax(x[i, j]).item()
-                if aa_idx < len(self.idx_to_aa) and self.idx_to_aa[aa_idx] != 'P':
+                if aa_idx < len(self.idx_to_aa) and self.idx_to_aa[aa_idx] != 'X':
                     seq += self.idx_to_aa[aa_idx]
                 else:
                     break  # Stop at padding
@@ -131,7 +131,7 @@ def vae_loss_function(recon_x, x, mu, logvar, beta=1.0):
     return BCE + beta * KLD, BCE, KLD
 
 
-def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
+def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, device):
     """
     Train ControlVAE on positive sequences
     """
@@ -139,13 +139,13 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
 
     # Hyperparameters
     max_seq_len = max(len(seq) for seq in positive_sequences)
-    max_seq_len = min(max_seq_len, 30)  # Cap at reasonable length
-    latent_dim = 64
-    control_dim = 32
+    max_seq_len = min(max_seq_len, 21)  # Cap at reasonable length
+    latent_dim = 32
+    control_dim = 16
     hidden_dim = 256
-    batch_size = args.batch_size // 4  # Smaller batch for VAE
-    epochs = args.epochs * 2  # More epochs for VAE
-    learning_rate = args.learning_rate
+    batch_size = 512
+    epochs = 20
+    learning_rate = 0.00001
     beta = 1.0  # KL divergence weight
 
     # Initialize model
@@ -161,6 +161,8 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
     # Prepare data
     train_encoded = model.encode_sequences(positive_sequences).to(device)
     valid_encoded = model.encode_sequences(valid_pos_seqs).to(device)
+    valid_neg_seqs = np.random.choice(valid_neg_seqs, size=min(len(valid_neg_seqs), len(valid_pos_seqs)), replace=False)
+    valid_neg_encoded = model.encode_sequences(valid_neg_seqs).to(device)
 
     train_dataset = TensorDataset(train_encoded)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -174,6 +176,7 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
         epoch_loss = 0
         epoch_bce = 0
         epoch_kld = 0
+        epoch_num_samples = 0
 
         for batch_idx, (data,) in enumerate(train_loader):
             optimizer.zero_grad()
@@ -189,6 +192,7 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
             optimizer.step()
 
             epoch_loss += loss.item()
+            epoch_num_samples += data.size(0)
             epoch_bce += bce.item()
             epoch_kld += kld.item()
 
@@ -197,23 +201,25 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
         with torch.no_grad():
             val_recon, val_mu, val_logvar, _ = model(valid_encoded)
             val_loss, val_bce, val_kld = vae_loss_function(val_recon, valid_encoded, val_mu, val_logvar, beta)
+            # normalize val_loss  # TODO: Check if this effects the scheduler
+            val_loss = val_loss / len(valid_encoded)
             valid_losses.append(val_loss.item())
         model.train()
 
         # Record losses
-        avg_loss = epoch_loss / len(train_loader.dataset)
-        avg_bce = epoch_bce / len(train_loader.dataset)
-        avg_kld = epoch_kld / len(train_loader.dataset)
+        avg_loss = epoch_loss / epoch_num_samples
+        avg_bce = epoch_bce / epoch_num_samples
+        avg_kld = epoch_kld / epoch_num_samples
         train_losses.append(avg_loss)
 
         scheduler.step(val_loss.item())
 
-        if epoch % 10 == 0:
+        if epoch % 5 == 0:
             print(
                 f'Epoch {epoch:3d}/{epochs}: Loss={avg_loss:.4f} (BCE={avg_bce:.4f}, KLD={avg_kld:.4f}), Val Loss={val_loss.item() / len(valid_encoded):.4f}')
 
     # Save model
-    model_path = f'cache/controlvae_model_{args.dataset_type}.pth'
+    model_path = f'cache/vae_cache/controlvae_model_{args.dataset_type}.pth'
     torch.save({
         'model_state_dict': model.state_dict(),
         'args': args,
@@ -242,12 +248,13 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
     with torch.no_grad():
         train_mu, train_logvar = model.encode(train_encoded)
         valid_mu, valid_logvar = model.encode(valid_encoded)
+        neg_mu, neg_logvar = model.encode(valid_neg_encoded)
 
         # Combine for visualization
-        all_mu = torch.cat([train_mu, valid_mu], dim=0)
-        labels = ['Train'] * len(train_mu) + ['Validation'] * len(valid_mu)
+        all_mu = torch.cat([train_mu, valid_mu, neg_mu], dim=0)
+        labels = ['Train'] * len(train_mu) + ['Validation'] * len(valid_mu) + ['Neg'] * len(neg_mu)
 
-        # PCA visualization
+        # PCA visualization  # TODO: Display same amount of negatives as positives here!
         plt.subplot(1, 2, 2)
         if latent_dim > 2:
             pca = PCA(n_components=2)
@@ -255,21 +262,30 @@ def train_controlvae(positive_sequences, valid_pos_seqs, args, device):
         else:
             mu_2d = all_mu.cpu().numpy()
 
-        colors = ['blue' if l == 'Train' else 'red' for l in labels]
+        # colors = ['blue' if l == 'Train' else 'red' for l in labels]
+        colors = []
+        for l in labels:
+            if l == 'Train':
+                colors.append('blue')
+            elif l == 'Validation':
+                colors.append('green')
+            else:
+                colors.append('red')
         plt.scatter(mu_2d[:, 0], mu_2d[:, 1], c=colors, alpha=0.6, s=20)
         plt.xlabel('Latent Dim 1')
         plt.ylabel('Latent Dim 2')
         plt.title('Latent Space (PCA)')
-        plt.legend(['Training', 'Validation'])
-        plt.grid(True)
+        plt.legend(['Training', 'Validation', 'Negative'])
+        # plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig(f'cache/controlvae_training_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'cache/vae_cache/controlvae_training_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
     plt.show()
 
+    # TODO: Turned off inference for faster testing
     # Inference and generation
-    print("\nPerforming VAE inference...")
-    perform_vae_inference(model, positive_sequences, valid_pos_seqs, args, device)
+    # print("\nPerforming VAE inference...")
+    # perform_vae_inference(model, positive_sequences, valid_pos_seqs, args, device)
 
     return model
 
@@ -335,7 +351,7 @@ def perform_vae_inference(model, train_pos_seqs, valid_pos_seqs, args, device):
 
         # Combine train and validation
         all_mu = torch.cat([train_mu, valid_mu], dim=0)
-        all_sequences = train_pos_seqs + valid_pos_seqs
+        all_sequences = np.concatenate([train_pos_seqs, valid_pos_seqs])  #  train_pos_seqs + valid_pos_seqs
         labels = ['Train'] * len(train_pos_seqs) + ['Valid'] * len(valid_pos_seqs)
 
         # t-SNE visualization if we have enough samples
@@ -370,7 +386,7 @@ def perform_vae_inference(model, train_pos_seqs, valid_pos_seqs, args, device):
             plt.grid(True)
 
             plt.tight_layout()
-            plt.savefig(f'cache/controlvae_inference_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
+            plt.savefig(f'cache/vae_cache/controlvae_inference_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
             plt.show()
 
         # 5. Sequence diversity analysis
@@ -408,7 +424,7 @@ def run_vae_training_and_inference(args, dataset_loader, device):
     print(f"Test positive sequences: {len(test_pos_seqs)}")
 
     # Train ControlVAE
-    trained_vae = train_controlvae(train_pos_seqs, valid_pos_seqs, args, device)
+    trained_vae = train_controlvae(train_pos_seqs, valid_pos_seqs, valid_neg_seqs, args, device)
 
     print("=== ControlVAE Training and Inference Completed ===")
     exit(0)

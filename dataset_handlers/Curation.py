@@ -153,37 +153,8 @@ class Study:
             df = self.load_study_df_tcrdb2(is_immunoseq_data)
 
             merged_df = self._calculate_merged_df(df, sample_ids, condition, is_immunoseq_data)
-            # merged_df_first = self._calculate_merged_df(df, sample_ids, condition, is_immunoseq_data)
-
-            # Filter DF
-            merged_df = filter_df(merged_df, top_percent, top_n_seqs, self._data_path, self._id)
-
-            # Check that the old df contain the same parameters as the new df:
-            # print(f"Study: {self._id}")
-            # merged_df_old = self._calculate_merged_df(df_old, sample_ids, condition, False)
-            # for patient_id in merged_df['patient_id'].unique():
-            #     patient_seqs_raw = merged_df_first[merged_df_first['patient_id'] == patient_id]
-            #     # patient_seqs = merged_df[merged_df['patient_id'] == patient_id]
-            #     patient_seqs_filtered = merged_df_old[merged_df_old['patient_id'] == patient_id]
-            #     # intersection = set(patient_seqs['AASeq']).intersection(patient_seqs_old['AASeq'])
-            #     print(f"Patient {patient_id}: Raw len {len(patient_seqs_raw['AASeq'].unique())}, Filtered len {len(patient_seqs_filtered['AASeq'].unique())}, "
-            #           f"Filtered - Raw = {len(set(patient_seqs_filtered['AASeq']) - set(patient_seqs_raw['AASeq']))}.")
-            # print()
-
-            # TODO: TESTING!
-            # patient_id = 'MS3'
-            # patient_seqs_unfilter = merged_df_first[merged_df_first['patient_id'] == patient_id]
-            # patient_seqs_filtered = merged_df[merged_df['patient_id'] == patient_id]
-            # patient_seqs_old = merged_df_old[merged_df_old['patient_id'] == patient_id]
-            #
-            # # Intersection of old and unfiltered
-            # seqs_in_old_and_unfilter = set(patient_seqs_old['AASeq']).intersection(patient_seqs_unfilter['AASeq'])
-            # patient_seqs_unfilter_and_old = patient_seqs_unfilter[patient_seqs_unfilter['AASeq'].isin(seqs_in_old_and_unfilter)]
-            # # sort by cloneFraction:
-            # patient_seqs_unfilter_and_old = patient_seqs_unfilter_and_old.sort_values(by='cloneFraction', ascending=False)
-            # smallest_clone_fraction = patient_seqs_unfilter_and_old.iloc[-1, :]
-
-            # TODO: End TESTING.
+            # Filter DF (Removed because we are doing this in a different location in the code - after loading dataset).
+            # merged_df = filter_df(merged_df, top_percent, top_n_seqs, self._data_path, self._id)
 
         # return only the specified columns (or all columns if not specified)
         if ret_columns:
@@ -193,18 +164,6 @@ class Study:
         else:
             ret_columns = merged_df.columns
         return merged_df[ret_columns]
-
-    @staticmethod
-    def do_tcrdb2_threshold_filtering(df, top_percent, top_n_seqs, data_path='', id='', to_save=False):
-        patient_ids = df['patient_id'].unique()
-        df_filtered = []
-        for patient_id in patient_ids:
-            df_per_patient = df[df['patient_id'] == patient_id]
-            df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs,
-                                                              data_path=data_path, id=id, to_save=to_save)
-            df_filtered.append(df_per_patient)
-        df = pd.concat(df_filtered, ignore_index=True)
-        return df
 
     def load_study_df_tcrdb2(self, is_immunoseq_data):
         last_col = 'patient_id' if is_immunoseq_data else 'RunId'
@@ -286,63 +245,6 @@ class Study:
         df_grouped.to_parquet(save_path, index=False)
         return df_grouped
 
-    @staticmethod
-    def tcrdb2_threshold_filtering(df, patient_id, top_percent, top_n_seqs, data_path='', id='', to_save=True):
-        if data_path != '' and id != '':
-            study_folder = os.path.join(data_path, id, "cache")
-            os.makedirs(study_folder, exist_ok=True)
-        else:
-            to_save = False
-        if to_save and top_n_seqs is None:
-            save_path = os.path.join(study_folder, f"{id}_{patient_id}_top_{top_percent}.parquet")
-
-            # If file exists, load and validate it
-            if os.path.exists(save_path):
-                cached_df = pd.read_parquet(save_path)  # TODO: Fix this part of the code!
-                # Check that all AASeqs in cached_df exist in current df
-                # input_aaseqs = set(df['AASeq'].unique())
-                # cached_aaseqs = set(cached_df['AASeq'].unique())
-                # if not cached_aaseqs.issubset(input_aaseqs):
-                    # print("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
-                    # raise ValueError("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
-                return cached_df
-
-        # Keep only CDR3 sequences that start with C and end with F and don't contain stop codons (*)
-        df = df[df['AASeq'].str.match(r'^C[ACDEFGHIKLMNPQRSTVWY]*F$')]
-
-        # Ensure column order and presence
-        required_cols = ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion',
-                         'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
-        for col in required_cols:
-            if col not in df.columns:
-                df[col] = np.nan
-
-        df = df[required_cols]
-
-        if top_n_seqs is None and top_percent is None:
-            return df
-
-        # calculate the topxk sequences by cloneFraction
-        if top_n_seqs is not None:
-            topk = int(top_n_seqs * 1000)
-            if len(df) < topk:
-                return df
-            else:
-                df_top = df.nlargest(topk, 'cloneFraction')
-                threshold = df_top['cloneFraction'].min()
-                threshold_df = df[df['cloneFraction'] >= threshold]
-                # if len(threshold_df) > topk + 10000:
-                #     return df.nlargest(topk + 10000, 'cloneFraction')
-                return threshold_df
-
-        if 100 > top_percent > 0:
-            threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
-            df = df[df['cloneFraction'] >= threshold]
-
-        # Save to disk
-        if to_save and top_n_seqs is None:
-            df.to_parquet(save_path, index=False)
-        return df
 
     def build_train_test_classification(self, pos_examples=None, neg_examples=None, seq_identity_threshold=1.0,
                                         validation_ration=0.1, test_ratio=0.1, save=True, path=None):
@@ -1048,18 +950,6 @@ def build_study_immunoSEQ68(study_id, study_df, study_desc, usable, uncertain, b
 #
 #     study.save()
 #     return study
-
-
-def filter_df(df, top_percent, top_n_seqs, data_path='', id=''):
-    patient_ids = df['patient_id'].unique()
-    df_filtered = []
-    for patient_id in patient_ids:
-        df_per_patient = df[df['patient_id'] == patient_id]
-        df_per_patient = Study.tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs, data_path=data_path, id=id)
-        # df_per_patient = self.tcrdb2_filtering(df_per_patient, patient_id)
-        df_filtered.append(df_per_patient)
-    df = pd.concat(df_filtered, ignore_index=True)
-    return df
 
 
 if __name__ == '__main__':

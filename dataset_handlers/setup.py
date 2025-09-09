@@ -53,7 +53,7 @@ def get_study_df(study_id, columns):
 
 if __name__ == '__main__':
     # Create directories and downloading studies
-    create_directories()
+    # create_directories()
 
     study_id = "PRJNA393498"
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition",

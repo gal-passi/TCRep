@@ -6,7 +6,7 @@ import pandas as pd
 from collections import Counter
 from itertools import combinations
 from tqdm import tqdm
-from dataset_handlers.Curation import Study, filter_df
+from dataset_handlers.Curation import Study
 from utils.utils import pairwise_scores, levenshtein_dist_non_bin
 import hashlib
 import random
@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from dataset_handlers.constants import *
 from dataset_handlers.helpers import helper_function_common_aaseq_analysis, process_combination, run_multiprocess_analysis
 from dataset_handlers.processing_and_filtering import (apply_extra_filter, validate_required_columns, split_patients,
-                                      calculate_positive_sequences, build_patient_masks, finalize_pos_neg_seqs)
+                                                       calculate_positive_sequences, build_patient_masks, finalize_pos_neg_seqs, filter_df)
 from dataset_handlers.losses_utils import LossPreprocessor
 from dataset_handlers.dataset_builder import build_ms_dataset, build_sle_dataset, build_t1d_dataset, build_other_dataset
 
@@ -24,14 +24,16 @@ from dataset_handlers.dataset_builder import build_ms_dataset, build_sle_dataset
 #  2. move more code from the init function of the DatasetLoader class (to other files)
 class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
-                 dist_loss_type='none', neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
+                 use_dist_loss='none', dist_param=0.0, neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
                  remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False,
-                 use_nneighbors_loss=False, display_extra_plots=False, loss_version=0, run_on_full_data=False, num_test_patients=8, verbose=True):
+                 use_recurrence_loss=False, recurrence_gamma=1.0, display_extra_plots=False,
+                 loss_version=0, run_on_full_data=False, num_test_patients=8, sweep_loader_mode=False, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
         self.losses_preprocessor = None
+        self.extra_filter = extra_filter
 
         # cache folder members
         self.cache_path = 'cache'
@@ -40,10 +42,10 @@ class DatasetLoader:
         self.saved_dataframe_path = os.path.join(self.cache_dataframes_path, f"{dataset_type}_df.pkl")
         self.cache_sequences_path = os.path.join(self.cache_path, "dataloader_cache/processed_sequences")
         self.synapse_db_path = "data/db/synapse_Mal_ID"
+        self.extra_ms_path = 'data/db/tcrdb/special2'
 
-        disease = 'Multiple sclerosis'
         print('Loading Disease:')
-        df = self.get_all_usable_disease_data(disease=disease, dataset_type=dataset_type)
+        df = self.get_all_usable_disease_data(disease='Multiple sclerosis', dataset_type=dataset_type)
         print('Loading Healthy:')
         df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
@@ -53,19 +55,37 @@ class DatasetLoader:
             with open(self.saved_dataframe_path, 'rb') as f:
                 saved_df = pickle.load(f)
 
-        dataset = build_ms_dataset(self, df, df_h, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
-        if dataset is None:
-            dataset = build_sle_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
-        if dataset is None:
-            dataset = build_t1d_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
-        if dataset is None:
-            dataset = build_other_dataset(self, saved_df, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter)
-        if dataset is None:
-            raise ValueError("Invalid dataset type")
-        elif 'hlt_as_ms' in dataset_type:
-            df_bld, df_excess_hlt, df_hlt = dataset
+        if saved_df is None:
+            # TODO: Extract following to methods (loading and filtering)
+            dataset = build_ms_dataset(self, df, df_h, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+            if dataset is None:
+                dataset = build_sle_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+            if dataset is None:
+                dataset = build_t1d_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+            if dataset is None:
+                dataset = build_other_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+            if dataset is None:
+                raise ValueError("Invalid dataset type")
+            elif 'hlt_as_ms' in dataset_type:
+                df_bld, df_excess_hlt, df_hlt = dataset
+                df_excess_hlt = filter_df(df_excess_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
+            else:
+                df_bld, df_hlt = dataset
+
+            # TODO: Check that filtering here will not crash due to large amounts of data
+            # Filtering dataframes
+            df_bld = filter_df(df_bld, top_percent, top_n_seqs, extra_filter=extra_filter)
+            df_hlt = filter_df(df_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
+
+            # Applying additional filtering if needed
+            if extra_filter:
+                df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
+
+            # saving dataframes to file
+            with open(self.saved_dataframe_path, 'wb') as f:
+                pickle.dump((df_bld, df_hlt), f)
         else:
-            df_bld, df_hlt = dataset
+            df_bld, df_hlt = saved_df
 
         if verbose:
             print('Done loading datasets.')
@@ -111,7 +131,7 @@ class DatasetLoader:
         pos_seqs_res = calculate_positive_sequences(df_bld, df_hlt, dataset_type, self.cache_sequences_path,
                                                     train_patient_ids, valid_patient_ids, test_patient_ids,
                                                     filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
-                                                    extra_filter, k_fold, top_percent, top_n_seqs, verbose)
+                                                    extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, verbose)
         train_pos_seqs, valid_pos_seqs, test_pos_seqs = pos_seqs_res
 
         # TODO: This code is for the case where we tested adding healthy to the MS dataset and only then running the code. Consider removing now!
@@ -193,7 +213,7 @@ class DatasetLoader:
 
         # finalize positive and negative sequences
         res = finalize_pos_neg_seqs(df_bld, train_patient_ids, valid_patient_ids, test_patient_ids,
-                                    positive_seqs, train_inds, valid_inds, test_inds)
+                                    positive_seqs, train_inds, valid_inds, test_inds, train_pos_seqs, valid_pos_seqs, test_pos_seqs, sweep_loader_mode)
         train_pos_seqs, valid_pos_seqs, test_pos_seqs, neg_seqs, valid_neg_seqs, test_neg_seqs = res
 
         if verbose:
@@ -265,7 +285,7 @@ class DatasetLoader:
         # loss preprocessor
         self.losses_preprocessor = LossPreprocessor(df_bld, df_hlt, train_pos_seqs, train_patient_ids, test_patient_ids,
                                                     valid_patient_ids, filter_num_of_patients, ratio, dataset_type,
-                                                    dist_loss_type, use_nneighbors_loss, self.cache_path)
+                                                    use_dist_loss, dist_param, use_recurrence_loss, recurrence_gamma, self.cache_path)
 
         # set sequences as class attributes
         self.test_pos_seqs = test_pos_seqs
@@ -296,7 +316,7 @@ class DatasetLoader:
         self.df_hlt = df_hlt
         self.aaseq_to_ratio = self.losses_preprocessor.aaseq_to_ratio
         self.aaseq_to_distance = self.losses_preprocessor.aaseq_to_distance
-        self.aaseq_to_nneighbors = self.losses_preprocessor.aaseq_to_nneighbors
+        self.aaseq_to_recurrence = self.losses_preprocessor.aaseq_to_recurrence
 
     def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
         similar_neg_cache_path = os.path.join(self.cache_path, '/similar_negatives')
@@ -411,8 +431,8 @@ class DatasetLoader:
     def get_aaseq_to_distance_func(self):
         return self.aaseq_to_distance
 
-    def get_aaseq_to_nneighbors_func(self):
-        return self.aaseq_to_nneighbors
+    def get_aaseq_to_recurrence_func(self):
+        return self.aaseq_to_recurrence
 
     def get_seqs(self):
         return self.train_pos_seqs, self.train_neg_seqs, self.valid_pos_seqs, self.valid_neg_seqs, self.test_pos_seqs, self.test_neg_seqs
@@ -780,7 +800,7 @@ class DatasetLoader:
         return mean_results, std_values
 
     def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):
-        extra_ms_path = '../data/db/tcrdb/special2'
+        extra_ms_path = self.extra_ms_path
         extra_ms_files = [x for x in os.listdir(extra_ms_path) if x.endswith('Pre.csv')]
         extra_ms_dfs = []
 
@@ -931,7 +951,7 @@ class DatasetLoader:
         # extra_ms_df = extra_ms_df[extra_ms_df['cell_type'] != 'Unknown']
         # extra_ms_df = extra_ms_df.drop_duplicates(subset=['patient_id', 'AASeq'])
 
-        extra_ms_df = Study.do_tcrdb2_threshold_filtering(extra_ms_df, top_percent, top_n_seqs)
+        extra_ms_df = filter_df(extra_ms_df, top_percent, top_n_seqs, extra_filter=self.extra_filter)
 
         return extra_ms_df
 

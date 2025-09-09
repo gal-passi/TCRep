@@ -6,12 +6,6 @@ from dataset_handlers.constants import *
 
 
 def apply_extra_filter(df_bld, df_hlt, top_n_seqs):
-    # Filtering sequences by length
-    df_bld = df_bld[df_bld['AASeq'].str.len() > 10]  # remove sequences that are too short
-    df_bld = df_bld[df_bld['AASeq'].str.len() < 20]  # remove sequences that are too long
-    df_hlt = df_hlt[df_hlt['AASeq'].str.len() > 10]  # remove sequences that are too short
-    df_hlt = df_hlt[df_hlt['AASeq'].str.len() < 20]  # remove sequences that are too long
-
     # Filtering patients with 5k sequences less than top_n_seqs (if it exists)
     if top_n_seqs is not None:
         # Each patient with unique AASeqs less than 1000 * top_n_seqs should be completely removed:
@@ -70,6 +64,7 @@ def generate_neighbors(sequences, valid_letters):
     valid_letters = set(valid_letters)  # Ensure valid letters are a set for quick lookup
     neighbor_set = set(sequences)  # Start with the original sequences
 
+    # TODO: Notice that the first and last letter should remain the same (C and F for TCRs), but for now we ignore this condition
     for seq in sequences:
         seq_len = len(seq)
 
@@ -106,20 +101,23 @@ def generate_full_neighbors(seqs, valid_letters):
 
 
 # Loading all valid sequences for disease and healthy samples
-def get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=3, num_of_healthy=3, verbose=True):
+def get_positive_negative(df_bld, df_hlt, valid_seqs_healthy_lst, seqs_healthy_neighbours_lst, num_of_patients=3, num_of_healthy=3, verbose=True):
+    if not valid_seqs_healthy_lst and not seqs_healthy_neighbours_lst:
+        valid_seqs_healthy_lst.append(find_all_common_sequences(df_hlt, num_of_patients=num_of_healthy))
+        seqs_healthy_neighbours_lst.append(generate_full_neighbors(valid_seqs_healthy_lst[0], valid_letters=set(''.join(valid_seqs_healthy_lst[0]))))
+    valid_seqs_healthy = valid_seqs_healthy_lst[0]  # H*
+    seqs_healthy_neighbours = seqs_healthy_neighbours_lst[0]  # Ih
+
+
     all_common_seqs = find_all_common_sequences(df_bld, num_of_patients=num_of_patients)
-    valid_seqs_healthy = find_all_common_sequences(df_hlt, num_of_patients=num_of_healthy)
     all_common_seqs = all_common_seqs - valid_seqs_healthy
 
-    # TODO: The following code was added to try to speed up the process of finding valid sequences!
-    #  Check that it works the same!
     # Faster way to get the same results (ONLY WHEN LEV DISTANCE IS 1):
     valid_seqs_disease = set(all_common_seqs)  # D*
     valid_seqs_healthy = set(valid_seqs_healthy)  # H*
 
     seqs_disease_neighbours = generate_full_neighbors(valid_seqs_disease, valid_letters=set(''.join(valid_seqs_disease)))  # Id (unfiltered)
     seqs_disease_neighbours = set(seqs_disease_neighbours).intersection(set(df_bld['AASeq'].unique()))  # Id
-    seqs_healthy_neighbours = generate_full_neighbors(valid_seqs_healthy, valid_letters=set(''.join(valid_seqs_healthy)))  # Ih
 
     # return (D* \ H*) U (Id \ Ih), H*
     positive_seqs = set(valid_seqs_disease) - set(valid_seqs_healthy)
@@ -132,7 +130,7 @@ def get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_
 
 
 def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, patient_ids, dataset_type, cell_type, top_percent, top_n_seqs,
-                                num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
+                                valid_seqs_healthy=None, seqs_healthy_neighbours=None, num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
     if filter_to_inflate:
         lev_dist_accept = 1  # for now its always lev distance 1
         save_folder = cache_sequences_path
@@ -153,7 +151,7 @@ def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, p
             return positive_seqs, negative_seqs
         else:
             df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
-            positive_seqs, negative_seqs = get_positive_negative(df_bld, df_hlt, df_name, dataset_type, cell_type, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, verbose=verbose)
+            positive_seqs, negative_seqs = get_positive_negative(df_bld, valid_seqs_healthy, seqs_healthy_neighbours, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, verbose=verbose)
             # Save the positive and negative sequences to a file
             os.makedirs(save_folder, exist_ok=True)
             with open(save_file, 'wb') as f:
@@ -183,7 +181,7 @@ def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, p
 
 def calculate_positive_sequences(df_bld, df_hlt, dataset_type, cache_sequences_path, train_ids, valid_ids, test_ids,
                                  filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
-                                 extra_filter, k_fold, top_percent, top_n_seqs, verbose):
+                                 extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, verbose):
     """Compute train/valid/test pos and neg sequences with overlaps resolved."""
     if k_fold > 0:
         name_metadata = f"_fold_{k_fold}"
@@ -202,24 +200,47 @@ def calculate_positive_sequences(df_bld, df_hlt, dataset_type, cache_sequences_p
     if verbose:
         print('Calculating positive and negative sequences...')
 
+    if sweep_loader_mode:
+        # do calculate positives on all the df_bld train+valid+test parts
+        all_ids = np.concatenate((train_ids, valid_ids, test_ids))
+        pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "all" + name_metadata, all_ids,
+                                                  dataset_type, "ALL", top_percent, top_n_seqs,
+                                                  num_of_patients=num_of_patients, num_of_healthy=num_of_healthy,
+                                                  filter_to_inflate=filter_to_inflate, verbose=verbose)
+
+        # create a local random with seed to split 80-10-10
+        rng = np.random.default_rng(seed=42)
+        rng.shuffle(pos_seqs)
+        n = len(pos_seqs)
+        train_pos_seqs = pos_seqs[:int(0.8 * n)]
+        valid_pos_seqs = pos_seqs[int(0.8 * n):int(0.9 * n)]
+        test_pos_seqs = pos_seqs[int(0.9 * n):]
+        return train_pos_seqs, valid_pos_seqs, test_pos_seqs
+
+    # lists that will hold the valid sequences and their neighbours to avoid recalculating them (if needed)
+    valid_seqs_healthy, seqs_healthy_neighbours = list(), list()
+
     train_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "train" + name_metadata, train_ids,
-                                                         dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
-                                                         num_of_healthy=num_of_healthy,
-                                                         filter_to_inflate=filter_to_inflate, verbose=verbose)
+                                                    dataset_type, "ALL", top_percent, top_n_seqs,
+                                                    valid_seqs_healthy, seqs_healthy_neighbours,
+                                                    num_of_patients=num_of_patients, num_of_healthy=num_of_healthy,
+                                                    filter_to_inflate=filter_to_inflate, verbose=verbose)
     # Calculate positive valid sequences
     train_and_valid_ids = np.concatenate((train_ids, valid_ids))
     valid_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "valid" + name_metadata, train_and_valid_ids,
-                                                         dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
-                                                         num_of_healthy=num_of_healthy,
-                                                         filter_to_inflate=filter_to_inflate, verbose=verbose)
+                                                    dataset_type, "ALL", top_percent, top_n_seqs,
+                                                    valid_seqs_healthy, seqs_healthy_neighbours,
+                                                    num_of_patients=num_of_patients, num_of_healthy=num_of_healthy,
+                                                    filter_to_inflate=filter_to_inflate, verbose=verbose)
     valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_ids)]["AASeq"].unique()
     valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
     # Calculate positive test sequences
     train_and_test_ids = np.concatenate((train_ids, test_ids))
     test_pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "test" + name_metadata, train_and_test_ids,
-                                                        dataset_type, "ALL", top_percent, top_n_seqs, num_of_patients=num_of_patients,
-                                                        num_of_healthy=num_of_healthy,
-                                                        filter_to_inflate=filter_to_inflate, verbose=verbose)
+                                                   dataset_type, "ALL", top_percent, top_n_seqs,
+                                                   valid_seqs_healthy, seqs_healthy_neighbours,
+                                                   num_of_patients=num_of_patients, num_of_healthy=num_of_healthy,
+                                                   filter_to_inflate=filter_to_inflate, verbose=verbose)
     test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_ids)]["AASeq"].unique()
     test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
 
@@ -265,7 +286,19 @@ def build_patient_masks(df_bld, unique_patient_ids, positive_seqs, train_ids, va
 
 
 def finalize_pos_neg_seqs(df_bld, train_patient_ids, valid_patient_ids, test_patient_ids,
-                          positive_seqs, train_inds, valid_inds, test_inds):
+                          positive_seqs, train_inds, valid_inds, test_inds, train_pos_seqs, valid_pos_seqs, test_pos_seqs, sweep_loader_mode):
+    if sweep_loader_mode:
+        neg_seqs = np.array(list(set(df_bld['AASeq']) - set(positive_seqs)))
+
+        # create a local random with seed to split 80-10-10
+        rng = np.random.default_rng(seed=42)
+        rng.shuffle(neg_seqs)
+        n = len(neg_seqs)
+        train_neg_seqs = neg_seqs[:int(0.8 * n)]
+        valid_neg_seqs = neg_seqs[int(0.8 * n):int(0.9 * n)]
+        test_neg_seqs = neg_seqs[int(0.9 * n):]
+        return train_pos_seqs, valid_pos_seqs, test_pos_seqs, train_neg_seqs, valid_neg_seqs, test_neg_seqs
+
     # Get the positive sequences for the test and train sets
     test_pos_seqs = np.array(positive_seqs)[test_inds]
     valid_pos_seqs = np.array(positive_seqs)[valid_inds]
@@ -275,18 +308,93 @@ def finalize_pos_neg_seqs(df_bld, train_patient_ids, valid_patient_ids, test_pat
     test_neg_seqs = df_bld[df_bld['patient_id'].isin(test_patient_ids)]['AASeq'].unique()
     valid_neg_seqs = df_bld[df_bld['patient_id'].isin(valid_patient_ids)]['AASeq'].unique()
     # Remove positive sequences from the negative sequences
-    neg_seqs = np.array(list(set(neg_seqs) - set(positive_seqs)))
-    test_neg_seqs = np.array(list(set(test_neg_seqs) - set(positive_seqs)))
-    valid_neg_seqs = np.array(list(set(valid_neg_seqs) - set(positive_seqs)))
+    neg_seqs = np.array(list(set(neg_seqs) - set(train_pos_seqs)))
+    test_neg_seqs = np.array(list(set(test_neg_seqs) - set(test_pos_seqs)))
+    valid_neg_seqs = np.array(list(set(valid_neg_seqs) - set(valid_pos_seqs)))
+
+    # TODO: Not separating between negative sets because we are picking random negatives anyways so there is no need for this
     # Get all sequences that are in valid_neg_seqs and valid_neg_seqs
-    valid_test_neg_seqs = np.array(list(set(test_neg_seqs) & set(valid_neg_seqs)))
-    if len(test_neg_seqs) < len(valid_neg_seqs):
-        # remove valid_test_neg_seqs from valid_neg_seqs
-        valid_neg_seqs = valid_neg_seqs[~np.isin(valid_neg_seqs, valid_test_neg_seqs)]
-    else:
-        # remove valid_test_neg_seqs from test_neg_seqs
-        test_neg_seqs = test_neg_seqs[~np.isin(test_neg_seqs, valid_test_neg_seqs)]
-    # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
-    neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
+    # valid_test_neg_seqs = np.array(list(set(test_neg_seqs) & set(valid_neg_seqs)))
+    # if len(test_neg_seqs) < len(valid_neg_seqs):
+    #     # remove valid_test_neg_seqs from valid_neg_seqs
+    #     valid_neg_seqs = valid_neg_seqs[~np.isin(valid_neg_seqs, valid_test_neg_seqs)]
+    # else:
+    #     # remove valid_test_neg_seqs from test_neg_seqs
+    #     test_neg_seqs = test_neg_seqs[~np.isin(test_neg_seqs, valid_test_neg_seqs)]
+    # # Remove all valid_neg_seqs and test_neg_seqs sequences from the negative sequences
+    # neg_seqs = np.array(list(set(neg_seqs) - set(np.concatenate((valid_neg_seqs, test_neg_seqs)))))
 
     return train_pos_seqs, valid_pos_seqs, test_pos_seqs, neg_seqs, valid_neg_seqs, test_neg_seqs
+
+
+def tcrdb2_threshold_filtering(df, patient_id, top_percent, top_n_seqs, extra_filter=False, data_path='', id='', to_save=True):
+    if data_path != '' and id != '':
+        study_folder = os.path.join(data_path, id, "cache")
+        os.makedirs(study_folder, exist_ok=True)
+    else:
+        to_save = False
+    if to_save and top_n_seqs is None:
+        save_path = os.path.join(study_folder, f"{id}_{patient_id}_top_{top_percent}.parquet")
+
+        # If file exists, load and validate it
+        if os.path.exists(save_path):
+            cached_df = pd.read_parquet(save_path)  # TODO: Fix this part of the code!
+            # Check that all AASeqs in cached_df exist in current df
+            # input_aaseqs = set(df['AASeq'].unique())
+            # cached_aaseqs = set(cached_df['AASeq'].unique())
+            # if not cached_aaseqs.issubset(input_aaseqs):
+                # print("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
+                # raise ValueError("Cached AASeqs are not all present in the input DataFrame. Incompatible input.")
+            return cached_df
+
+    # Keep only CDR3 sequences that start with C and end with F and don't contain stop codons (*)
+    df = df[df['AASeq'].str.match(r'^C[ACDEFGHIKLMNPQRSTVWY]*F$')]
+
+    # Ensure column order and presence
+    required_cols = ['AASeq', 'cloneFraction', 'Vregion', 'Dregion', 'Jregion',
+                     'RunId', 'patient_id', 'tissue', 'cell_type', 'condition', 'study_id']
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    df = df[required_cols]
+
+    if extra_filter:
+        df = df[df['AASeq'].str.len() > 10]  # remove sequences that are too short
+        df = df[df['AASeq'].str.len() < 20]  # remove sequences that are too long
+
+    if top_n_seqs is None and top_percent is None:
+        return df
+
+    # calculate the topxk sequences by cloneFraction
+    if top_n_seqs is not None:
+        topk = int(top_n_seqs * 1000)
+        if len(df) < topk:
+            return df
+        else:
+            df_top = df.nlargest(topk, 'cloneFraction')
+            threshold = df_top['cloneFraction'].min()
+            threshold_df = df[df['cloneFraction'] >= threshold]
+            # if len(threshold_df) > topk + 10000:
+            #     return df.nlargest(topk + 10000, 'cloneFraction')
+            return threshold_df
+
+    if 100 > top_percent > 0:
+        threshold = df['cloneFraction'].quantile((100 - top_percent) / 100)
+        df = df[df['cloneFraction'] >= threshold]
+
+    # Save to disk
+    if to_save and top_n_seqs is None:
+        df.to_parquet(save_path, index=False)
+    return df
+
+
+def filter_df(df, top_percent, top_n_seqs, extra_filter=False, data_path='', id=''):
+    patient_ids = df['patient_id'].unique()
+    df_filtered = []
+    for patient_id in patient_ids:
+        df_per_patient = df[df['patient_id'] == patient_id]
+        df_per_patient = tcrdb2_threshold_filtering(df_per_patient, patient_id, top_percent, top_n_seqs, extra_filter=extra_filter, data_path=data_path, id=id)
+        df_filtered.append(df_per_patient)
+    df = pd.concat(df_filtered, ignore_index=True)
+    return df

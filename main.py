@@ -42,7 +42,7 @@ inference_dict = {
 
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
-              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, dist_loss_type, use_nneighbors_loss, ch_type, neg_partition,
+              scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, use_dist_loss, dist_param, use_recurrence_loss, recurrence_gamma, ch_type, neg_partition,
               use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, sample_plots, optimizer_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
@@ -71,8 +71,10 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "lora": lora,
             "masking": masking,
             "ratio": ratio,
-            "dist_loss_type": dist_loss_type,
-            "use_nneighbors_loss": use_nneighbors_loss,
+            "use_dist_loss": use_dist_loss,
+            "dist_param": dist_param,
+            "use_recurrence_loss": use_recurrence_loss,
+            "recurrence_gamma": recurrence_gamma,
             "ch_type": ch_type,
             "neg_partition": neg_partition,
             "use_similar_negatives": use_similar_negatives,
@@ -87,141 +89,10 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
     return run
 
 
-def sweep_model():
-    wandb.init()
-
-    # Define the sweep configuration
-    model_type = wandb.config.model_type
-    loss_type = wandb.config.loss_type
-    epochs = wandb.config.epochs
-    batch_size = wandb.config.batch_size
-    neg_pos_ratio = wandb.config.neg_pos_ratio
-    pos_weights = wandb.config.pos_weights
-    learning_rate = wandb.config.learning_rate
-    reg_coef = wandb.config.regularization_coefficient
-    freeze_embed_model = wandb.config.freeze_embed_model
-    special_criterion = wandb.config.special_criterion
-    embedding_lr = wandb.config.embedding_lr
-    ch_dropout = wandb.config.classification_dropout
-    log_wandb = not wandb.config.no_wandb_log
-    scheduler_type = wandb.config.scheduler_type.lower()
-    cvc_layers_to_train = wandb.config.cvc_layers_to_train
-    lora = wandb.config.lora
-    masking = wandb.config.masking
-    ratio = wandb.config.ratio
-    dist_loss_type = wandb.config.dist_loss_type
-    neg_partition = wandb.config.negative_partition
-    use_similar_negatives = wandb.config.use_similar_negatives
-    filter_num_of_patients = wandb.config.dataset_filter_num_of_patients
-    filter_num_of_healthy = wandb.config.dataset_filter_num_of_healthy
-    filter_to_inflate = not wandb.config.dataset_filter_dont_inflate
-    remove_seqs_by_len = wandb.config.remove_seqs_by_len
-    top_percent = wandb.config.top_percent
-    top_n_seqs = wandb.config.top_n_seqs
-    extra_filter = wandb.config.extra_filter
-    use_nneighbors_loss = wandb.config.use_nneighbors_loss
-    loss_version = wandb.config.loss_version
-    dataset_type = wandb.config.dataset_type
-    extra_ms_from_pregnant = wandb.config.extra_ms_from_pregnant
-    plus_healthy_mal_id = wandb.config.plus_healthy_mal_id
-    use_healthy_as_ms = wandb.config.use_healthy_as_ms
-    # ch_type = wandb.config.ch_type
-    # changing_negatives = wandb.config.changing_negatives
-    changing_negatives = False
-    sample_plots = wandb.config.sample_plots
-    k_fold = wandb.config.k_fold
-    optimizer_type = 'adam'  # TODO: We can add this to sweep config file!
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    if top_percent == 'None':
-        top_percent = None
-    if top_n_seqs == 'None':
-        top_n_seqs = None
-
-    dataset_type = update_dataset_type(
-        dataset_type,
-        plus_healthy_mal_id=plus_healthy_mal_id,
-        extra_ms_from_pregnant=extra_ms_from_pregnant,
-        use_healthy_as_ms=use_healthy_as_ms,
-        top_percent=top_percent,
-        top_n_seqs=top_n_seqs,
-    )
-
-    # Load the dataset
-    dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=False,
-                                        dist_loss_type=dist_loss_type, neg_partition=neg_partition,
-                                        use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
-                                        filter_num_of_patients=filter_num_of_patients,
-                                        filter_num_of_healthy=filter_num_of_healthy,
-                                        ratio=ratio,
-                                        filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
-                                        top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                        use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version,
-                                        verbose=True)
-    df_bld, df_hlt = dataset_loader.get_dfs()
-    positive_seqs = dataset_loader.positive_seqs
-    train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
-    train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
-    train_masks, valid_masks, test_masks = dataset_loader.get_masks()
-    train_inds = dataset_loader.train_inds
-    unique_patient_ids = dataset_loader.unique_patient_ids
-    patient_id_masks = dataset_loader.patient_id_masks
-    aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
-    aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
-    aaseq_to_nneighbors = dataset_loader.get_aaseq_to_nneighbors_func()
-
-    # Initialize Weights & Biases
-    model = build_model(
-        model_type,
-        positive_seqs=positive_seqs,
-        batch_size=batch_size,
-        ch_dropout=ch_dropout,
-        cvc_layers_to_train=cvc_layers_to_train,
-        freeze_embed_model=freeze_embed_model,
-        lora=lora,
-        ch_type=ch_type,
-        device=device,
-        reshef_negative_part=reshef_negative_part,
-        args=args,
-    )
-
-    # load the model if possible
-    trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
-                                         epochs=epochs,
-                                         lr=learning_rate,
-                                         pos_batch_size=batch_size // neg_pos_ratio,
-                                         neg_pos_ratio=neg_pos_ratio,
-                                         log_wandb=log_wandb,
-                                         model_type=model_type,
-                                         loss_type=loss_type,
-                                         freeze_embed_model=freeze_embed_model,
-                                         special_criterion=special_criterion,
-                                         embedding_lr=embedding_lr,
-                                         reg_coef=reg_coef,
-                                         pos_weights=pos_weights,
-                                         scheduler_type=scheduler_type,
-                                         aaseq_to_ratio=aaseq_to_ratio,
-                                         aaseq_to_dist=aaseq_to_dist,
-                                         aaseq_to_nneighbors=aaseq_to_nneighbors,
-                                         masking=masking,
-                                         ratio=ratio,
-                                         change_negatives=changing_negatives,
-                                         optimizer_type=optimizer_type,
-                                         test_pos_seqs=test_pos_seqs,
-                                         test_neg_seqs=test_neg_seqs,
-                                         args=args,
-                                         )
-
-    from inference.plot_training import plot_output_distributions_per_patient
-    plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
-                                          test_masks, valid_masks, positive_seqs, df_bld,
-                                          df_hlt, model_type, log_wandb, sample_plots, args, device)
-
-
-def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='none', neg_partition=0,
+def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, use_dist_loss=False, dist_param=0.0, neg_partition=0,
                         use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
                         filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False,
-                       use_nneighbors_loss=False, loss_version=0, run_on_full_data=False, verbose=True):
+                       use_recurrence_loss=False, recurrence_gamma=1.0, loss_version=0, run_on_full_data=False, sweep_loader_mode=False, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
@@ -233,7 +104,7 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
         num_test_patients = 8
     if to_k_fold:
         dataset_loader = DatasetLoader(dataset_type=dataset_type, get_only_unique_patient_ids=True, top_percent=top_percent,
-                                       extra_filter=extra_filter, top_n_seqs=top_n_seqs, use_nneighbors_loss=use_nneighbors_loss)
+                                       extra_filter=extra_filter, top_n_seqs=top_n_seqs, use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma)
         df_bld, df_hlt = dataset_loader.get_dfs()
         unique_patient_ids = df_bld["patient_id"].unique()
         unique_patient_ids = np.random.permutation(unique_patient_ids)
@@ -283,13 +154,147 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, dist_loss_type='n
         print(f"Using unique patient IDs for k-fold {k_fold}: {unique_patient_ids}")
 
     dataset_loader = DatasetLoader(dataset_type=dataset_type, unique_patient_ids=unique_patient_ids,
-                                   k_fold=k_fold, dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                   k_fold=k_fold, use_dist_loss=use_dist_loss, dist_param=dist_param, neg_partition=neg_partition,
                                    use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
                                    filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
                                    remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                   use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, num_test_patients=num_test_patients, verbose=verbose)
+                                   use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma, loss_version=loss_version,
+                                   run_on_full_data=run_on_full_data, num_test_patients=num_test_patients, sweep_loader_mode=sweep_loader_mode, verbose=verbose)
     return dataset_loader
+
+
+def sweep_model():
+    wandb.init()
+
+    # Define the sweep configuration
+    model_type = wandb.config.model_type
+    loss_type = wandb.config.loss_type
+    epochs = wandb.config.epochs
+    batch_size = wandb.config.batch_size
+    neg_pos_ratio = wandb.config.neg_pos_ratio
+    pos_weights = wandb.config.pos_weights
+    learning_rate = wandb.config.learning_rate
+    reg_coef = wandb.config.reg_coef
+    freeze_embed_model = wandb.config.freeze_embed_model
+    special_criterion = wandb.config.special_criterion
+    embedding_lr = wandb.config.embedding_lr
+    ch_dropout = wandb.config.classification_dropout
+    log_wandb = not wandb.config.no_wandb_log
+    scheduler_type = wandb.config.scheduler_type.lower()
+    cvc_layers_to_train = wandb.config.cvc_layers_to_train
+    lora = wandb.config.lora
+    masking = wandb.config.masking
+    ratio = wandb.config.ratio
+    use_dist_loss = wandb.config.use_dist_loss
+    dist_param = wandb.config.dist_param if use_dist_loss else 0.0
+    neg_partition = wandb.config.negative_partition
+    use_similar_negatives = wandb.config.use_similar_negatives
+    filter_num_of_patients = wandb.config.dataset_filter_num_of_patients
+    filter_num_of_healthy = wandb.config.dataset_filter_num_of_healthy
+    filter_to_inflate = not wandb.config.dataset_filter_dont_inflate
+    remove_seqs_by_len = wandb.config.remove_seqs_by_len
+    top_percent = wandb.config.top_percent
+    top_n_seqs = wandb.config.top_n_seqs
+    extra_filter = wandb.config.extra_filter
+    use_recurrence_loss = wandb.config.use_recurrence_loss
+    recurrence_gamma = wandb.config.recurrence_gamma if use_recurrence_loss else 1.0
+    loss_version = wandb.config.loss_version
+    dataset_type = wandb.config.dataset_type
+    extra_ms_from_pregnant = wandb.config.extra_ms_from_pregnant
+    plus_healthy_mal_id = wandb.config.plus_healthy_mal_id
+    use_healthy_as_ms = wandb.config.use_healthy_as_ms
+    # ch_type = wandb.config.ch_type
+    # changing_negatives = wandb.config.changing_negatives
+    changing_negatives = False
+    sample_plots = wandb.config.sample_plots
+    k_fold = wandb.config.k_fold
+    sweep_loader_mode = wandb.config.sweep_loader_mode
+    optimizer_type = 'adam'  # TODO: We can add this to sweep config file!
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if top_percent == 'None':
+        top_percent = None
+    if top_n_seqs == 'None':
+        top_n_seqs = None
+
+    dataset_type = update_dataset_type(
+        dataset_type,
+        plus_healthy_mal_id=plus_healthy_mal_id,
+        extra_ms_from_pregnant=extra_ms_from_pregnant,
+        use_healthy_as_ms=use_healthy_as_ms,
+        top_percent=top_percent,
+        top_n_seqs=top_n_seqs,
+        sweep_loader_mode=sweep_loader_mode,
+    )
+
+    # Load the dataset
+    dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=False,
+                                        use_dist_loss=use_dist_loss, dist_param=dist_param, neg_partition=neg_partition,
+                                        use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
+                                        filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
+                                        ratio=ratio, filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
+                                        top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
+                                        use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma, loss_version=loss_version,
+                                        sweep_loader_mode=sweep_loader_mode, verbose=True)
+    df_bld, df_hlt = dataset_loader.get_dfs()
+    positive_seqs = dataset_loader.positive_seqs
+    train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
+    train_patient_inds, valid_patient_inds, test_patient_inds = dataset_loader.get_patient_inds()
+    train_masks, valid_masks, test_masks = dataset_loader.get_masks()
+    train_inds = dataset_loader.train_inds
+    unique_patient_ids = dataset_loader.unique_patient_ids
+    patient_id_masks = dataset_loader.patient_id_masks
+    aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
+    aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
+    aaseq_to_recurrence = dataset_loader.get_aaseq_to_recurrence_func()
+
+    # Initialize Weights & Biases
+    model = build_model(
+        model_type,
+        positive_seqs=positive_seqs,
+        batch_size=batch_size,
+        ch_dropout=ch_dropout,
+        cvc_layers_to_train=cvc_layers_to_train,
+        freeze_embed_model=freeze_embed_model,
+        lora=lora,
+        ch_type=ch_type,
+        device=device,
+        reshef_negative_part=reshef_negative_part,
+        args=args,
+    )
+
+    # load the model if possible
+    trained_model, history = train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
+                                         epochs=epochs,
+                                         lr=learning_rate,
+                                         pos_batch_size=batch_size // neg_pos_ratio,
+                                         neg_pos_ratio=neg_pos_ratio,
+                                         log_wandb=log_wandb,
+                                         model_type=model_type,
+                                         loss_type=loss_type,
+                                         freeze_embed_model=freeze_embed_model,
+                                         special_criterion=special_criterion,
+                                         embedding_lr=embedding_lr,
+                                         reg_coef=reg_coef,
+                                         pos_weights=pos_weights,
+                                         scheduler_type=scheduler_type,
+                                         aaseq_to_ratio=aaseq_to_ratio,
+                                         aaseq_to_dist=aaseq_to_dist,
+                                         aaseq_to_recurrence=aaseq_to_recurrence,
+                                         masking=masking,
+                                         ratio=ratio,
+                                         change_negatives=changing_negatives,
+                                         optimizer_type=optimizer_type,
+                                         test_pos_seqs=test_pos_seqs,
+                                         test_neg_seqs=test_neg_seqs,
+                                         args=args,
+                                         )
+
+    from inference.plot_training import plot_output_distributions_per_patient
+    plot_output_distributions_per_patient(trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
+                                          test_masks, valid_masks, positive_seqs, df_bld,
+                                          df_hlt, model_type, log_wandb, sample_plots, args, device)
 
 
 def do_sweep(sweep_version, project_name='TCRep_Sweeps'):
@@ -329,7 +334,6 @@ def get_arg_parser():
                      'ms_tcrdb2_no_healthy_ms_plus_hlt_article',
                      'article_hiv', 'article_covid19', 'article_influenza',
                      'jia_tcrdb2']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
-    dist_loss_types = ['none', 'v1', 'v2', 'v3', 'v4']
     ch_types = ['none', 'v1', 'v2']
     optimizer_types = ['Adam', 'Adafactor']
 
@@ -360,7 +364,6 @@ def get_arg_parser():
     parser.add_argument('--sweep_version', type=int, default=0, help='Version of the sweep file to use')
     parser.add_argument('--masking', '-mask', action='store_true', help='Use masking for the model. Only for CVC model')
     parser.add_argument('--ratio', '-ratio', action='store_true', help='Incorporate Ratio into the loss of the model during training')
-    parser.add_argument('--dist_loss_type', type=str, choices=dist_loss_types, default='none', help='Type of distribution loss to use')
     parser.add_argument('--ch_type', type=str, choices=ch_types, default='none', help='Type of classification head to use')
     parser.add_argument('--negative_partition', '--neg_partition', type=int, default=0, help='Negative Partition Index (0 for no partitioning of the negative samples)')
     parser.add_argument('--to_ensemble', '--ensemble', '-ensemble', action='store_true', help='Ensemble the models (Only applicable after first training with all 1..5 negative_partitioning)')
@@ -378,7 +381,10 @@ def get_arg_parser():
     parser.add_argument('--extra_ms_from_pregnant', action='store_true', default=False, help='Whether to add extra MS data of pregnant MS study (only for MS dataset)')
     parser.add_argument('--use_healthy_as_ms', action='store_true', default=False, help='Whether to use some of the healthy patients as MS patients (only for MS dataset)')
     parser.add_argument('--extra_filter', action='store_true', default=False, help='Whether to filter the data more than the default filtering (Remove seqs of certain lengths and remove subjects with not a lot of sequences)')
-    parser.add_argument('--use_nneighbors_loss', action='store_true', default=False, help='Add neighbors - common sequences - into loss calculation')
+    parser.add_argument('--use_dist_loss', action='store_true', default=False, help='Type of distribution loss to use')
+    parser.add_argument('--dist_param', type=float, default=0.0, help='Hyperparam for distance loss')
+    parser.add_argument('--use_recurrence_loss', action='store_true', default=False, help='Add recurrence term into loss calculation')
+    parser.add_argument('--recurrence_gamma', type=float, default=1.0, help='Hyperparam for recurrence loss')
     parser.add_argument('--loss_version', type=int, default=0, help='The version of the loss to use')
     parser.add_argument('--sample_plots', type=int, default=0, help='Sampling when plotting instead of running on all sequences')
     parser.add_argument('--classification_v2', action='store_true', default=False, help='Use the new classification model with a different architecture (Version 2)')
@@ -389,13 +395,7 @@ def get_arg_parser():
     parser.add_argument('-run_on_full_data', action='store_true', default=False, help='Whether to save information for Reshef inference or not')
     parser.add_argument('-dont_cache_inference', action='store_true', default=False, help='Whether to cache the inference results or not. If True, it will not cache the results and will run inference every time.')
     parser.add_argument('-filter_uncertain_seqs', action='store_true', default=False, help='Whether to filter uncertain sequences in the inference classification v2 part.')
-
-    # args = parser.parse_args()
-    # model_type = args.model_type.lower()
-    # assert model_type in model_types, f"Model type must be one of {model_types}"
-    # assert loss_type in loss_types, f"Loss type must be one of {loss_types}"
-    # assert scheduler_type in [x.lower() for x in scheduler_types], f"Scheduler type must be one of {scheduler_types}"
-    # assert dataset_type in dataset_types, f"Dataset type must be one of {dataset_types}"
+    parser.add_argument('-sweep_loader_mode', action='store_true', default=False, help='Whether to use dataloader in a simpler way that will calculate positives with all patients and split positives to both test/valid 20% randomly. Useful when we do not want to overfit to a single fold.')
 
     return parser
 
@@ -421,8 +421,6 @@ def validate_config(args):
         "Cannot do k-fold cross-validation and sweep at the same time"
     assert not (args.loss_type == 'ce' and args.dataset_type in ['article', 'article_sle']), \
         "Cannot use ce loss with article or article_sle datasets. Due to Ratio loss"
-    assert not (args.dist_loss_type != 'none' and args.ratio), \
-        "Cannot use dist_loss_type and ratio at the same time"
     assert not ((args.negative_partition > 0) and args.to_sweep), \
         "Cannot use negative partitioning and sweep at the same time"
     assert not ((args.negative_partition > 0) and args.to_ensemble), \
@@ -439,6 +437,8 @@ def validate_config(args):
         "Reshef inference is not applicable if changing negatives"
     assert not (args.reshef_filter_train and not args.reshef_inference), \
         "Reshef filter train must be on when reshef inference is on"
+    assert not (args.sweep_loader_mode and args.k_fold > 0), \
+        "sweep_loader_mode can be true only when k_fold is 0"
 
 
 def update_dataset_type(dataset_type: str,
@@ -447,7 +447,8 @@ def update_dataset_type(dataset_type: str,
                         use_healthy_as_ms: bool = False,
                         top_percent: int | None = None,
                         top_n_seqs: int | None = None,
-                        run_on_full_data: bool = False) -> str:
+                        run_on_full_data: bool = False,
+                        sweep_loader_mode: bool = False) -> str:
     """
     Modify dataset_type string based on options.
     Returns a new dataset_type string (does not mutate inputs).
@@ -465,6 +466,8 @@ def update_dataset_type(dataset_type: str,
             dataset_type += f"_top_{top_n_seqs}k"
         if run_on_full_data:
             dataset_type += "_run_on_full_data"
+        if sweep_loader_mode:
+            dataset_type += "_sweep_loader_mode"
     return dataset_type
 
 
@@ -493,14 +496,16 @@ def print_run_configuration(args):
     print(f"\tUse LoRA: {args.lora}")
     print(f"\tMasking: {args.masking}")
     print(f"\tUsing Ratio: {args.ratio}")
-    print(f"\tDist Loss Type: {args.dist_loss_type}")
     print(f"\tClassification Head Type: {args.ch_type}")
     print(f"\tDataset Filter Number of Patients: {args.dataset_filter_num_of_patients}")
     print(f"\tDataset Filter Number of Healthy: {args.dataset_filter_num_of_healthy}")
     print(f"\tDataset Filter Inflate: {not args.dataset_filter_dont_inflate}")
     print(f"\tChanging Negatives: {args.changing_negatives}")
     print(f"\tLoss Version: {args.loss_version}")
-    print(f"\tUse Neighbors Loss: {args.use_nneighbors_loss}")
+    print(f"\tUse Distance Loss: {args.use_dist_loss}")
+    print(f"\tDistance Loss Parameter: {args.dist_param}")
+    print(f"\tUse Recurrence Loss: {args.use_recurrence_loss}")
+    print(f"\tRecurrence Gamma: {args.recurrence_gamma}")
     print(f"\tSample Plots: {args.sample_plots}")
     print(f"\tRun on Full Data: {args.run_on_full_data}")
     print("\tDevice:", "cuda" if torch.cuda.is_available() else "cpu")
@@ -529,7 +534,7 @@ if __name__ == '__main__':
     neg_pos_ratio = args.neg_pos_ratio
     pos_weights = args.pos_weights
     learning_rate = args.learning_rate
-    reg_coef = args.regularization_coefficient if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
+    reg_coef = args.reg_coef if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
     freeze_embed_model = args.freeze_embed_model if 'cvc' in model_type else False  # Only CVC model can freeze the embedding model
     special_criterion = args.special_criterion
     embedding_lr = args.embedding_lr if special_criterion else 0  # Only used when special_criterion is True
@@ -546,7 +551,8 @@ if __name__ == '__main__':
     lora = args.lora if 'cvc' in model_type else False  # LoRA is only applicable for CVC model
     masking = args.masking if 'cvc' in model_type else False  # Masking is only applicable for CVC model
     ratio = args.ratio
-    dist_loss_type = args.dist_loss_type
+    use_dist_loss = args.use_dist_loss
+    dist_param = args.dist_param if use_dist_loss else 0.0
     ch_type = args.ch_type.lower() if 'cvc' in model_type else 'none'  # Only CVC model can use dist loss
     neg_partition = args.negative_partition
     to_ensemble = args.to_ensemble
@@ -563,7 +569,8 @@ if __name__ == '__main__':
     extra_ms_from_pregnant = args.extra_ms_from_pregnant
     use_healthy_as_ms = args.use_healthy_as_ms
     extra_filter = args.extra_filter
-    use_nneighbors_loss = args.use_nneighbors_loss
+    use_recurrence_loss = args.use_recurrence_loss
+    recurrence_gamma = args.recurrence_gamma if use_recurrence_loss else 1.0
     loss_version = args.loss_version
     sample_plots = args.sample_plots
     classification_v2 = args.classification_v2
@@ -574,6 +581,7 @@ if __name__ == '__main__':
     run_on_full_data = args.run_on_full_data
     dont_cache_inference = args.dont_cache_inference
     filter_uncertain_seqs = args.filter_uncertain_seqs if classification_v2 else False
+    sweep_loader_mode = args.sweep_loader_mode
 
     # Adjust and validate arguments
     args = adjust_args(args)
@@ -586,19 +594,19 @@ if __name__ == '__main__':
         top_percent=args.top_percent,
         top_n_seqs=args.top_n_seqs,
         run_on_full_data=args.run_on_full_data,
+        sweep_loader_mode=args.sweep_loader_mode
     )
     print_run_configuration(args)
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Load the dataset
     dataset_loader = get_dataset_loader(dataset_type, k_fold=k_fold, to_k_fold=to_k_fold,
-                                        dist_loss_type=dist_loss_type, neg_partition=neg_partition,
+                                        use_dist_loss=use_dist_loss, dist_param=dist_param, neg_partition=neg_partition,
                                         use_similar_negatives=use_similar_negatives, neg_pos_ratio=neg_pos_ratio,
                                         filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
-                                        ratio=ratio,
-                                        filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
+                                        ratio=ratio, filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
                                         top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                        use_nneighbors_loss=use_nneighbors_loss, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=True)
+                                        use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=True)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -610,7 +618,7 @@ if __name__ == '__main__':
     patient_id_masks = dataset_loader.patient_id_masks
     aaseq_to_ratio = dataset_loader.get_aaseq_to_ratio_func()
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
-    aaseq_to_nneighbors = dataset_loader.get_aaseq_to_nneighbors_func()
+    aaseq_to_recurrence = dataset_loader.get_aaseq_to_recurrence_func()
 
     # Run VAE if specified
     run_vae(args, dataset_loader, device)
@@ -641,8 +649,10 @@ if __name__ == '__main__':
             lora=lora,
             masking=masking,
             ratio=ratio,
-            dist_loss_type=dist_loss_type,
-            use_nneighbors_loss=use_nneighbors_loss,
+            use_dist_loss=use_dist_loss,
+            dist_param=dist_param,
+            use_recurrence_loss=use_recurrence_loss,
+            recurrence_gamma=recurrence_gamma,
             ch_type=ch_type,
             neg_partition=neg_partition,
             use_similar_negatives=use_similar_negatives,
@@ -674,7 +684,7 @@ if __name__ == '__main__':
         model, args,
         train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         test_pos_seqs, test_neg_seqs,
-        aaseq_to_ratio, aaseq_to_dist, aaseq_to_nneighbors,
+        aaseq_to_ratio, aaseq_to_dist, aaseq_to_recurrence,
         device,
         epochs, learning_rate, batch_size, neg_pos_ratio,
         log_wandb, model_type, loss_type,
@@ -699,7 +709,7 @@ if __name__ == '__main__':
         trained_model, args,
         train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
         test_pos_seqs, test_neg_seqs, df_bld, df_hlt, positive_seqs,
-        test_patient_inds, valid_patient_inds, unique_patient_ids,
+        test_patient_inds, valid_patient_inds, test_patient_ids, valid_patient_ids, unique_patient_ids,
         test_masks, valid_masks, aaseq_to_ratio, aaseq_to_dist,
         batch_size, ch_dropout, cvc_layers_to_train,
         freeze_embed_model, lora, ch_type,

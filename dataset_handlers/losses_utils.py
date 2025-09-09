@@ -10,25 +10,25 @@ from utils.utils import pairwise_scores, levenshtein_dist_non_bin
 
 class LossPreprocessor:
     def __init__(self, df_bld, df_hlt, train_pos_seqs, train_patient_ids, test_patient_ids, valid_patient_ids,
-                 filter_num_of_patients, ratio, dataset_type, dist_loss_type, use_nneighbors_loss, cache_path):
+                 filter_num_of_patients, ratio, dataset_type, use_dist_loss, dist_param, use_recurrence_loss, recurrence_gamma, cache_path):
         self.aaseq_to_ratio = None
         self.aaseq_to_distance = None
-        self.aaseq_to_nneighbors = None
+        self.aaseq_to_recurrence = None
         self.cache_path = cache_path
 
         if ratio and dataset_type not in ['article', 'article_sle']:
-            self.aaseq_to_ratio = self.build_aaseq_to_ratio_func(df_bld, df_hlt, dataset_type)
+            self.aaseq_to_ratio = self.build_aaseq_to_ratio_func(df_bld, df_hlt)
 
-        if dist_loss_type != 'none':
-            self.aaseq_to_distance = self.build_aaseq_to_distance_func(df_bld, df_hlt, train_pos_seqs, dataset_type, dist_loss_type)
+        if use_dist_loss:
+            self.aaseq_to_distance = self.build_aaseq_to_distance_func(df_bld, train_pos_seqs, dataset_type, dist_param)
 
-        if use_nneighbors_loss:
-            self.aaseq_to_nneighbors = self.build_aaseq_to_nneighbors_func(
+        if use_recurrence_loss:
+            self.aaseq_to_recurrence = self.build_aaseq_to_recurrence_func(
                 df_bld,
                 train_patient_ids,
                 test_patient_ids,
                 valid_patient_ids,
-                dist_loss_type,
+                recurrence_gamma,
                 filter_num_of_patients=filter_num_of_patients
             )
 
@@ -137,7 +137,7 @@ class LossPreprocessor:
         os.makedirs(os.path.dirname(df_dist_filename), exist_ok=True)
         df_dist.to_pickle(df_dist_filename)
 
-    def build_aaseq_to_distance_func(self, df_bld, df_hlt, train_pos_seqs, dataset_type, dist_loss_type):
+    def build_aaseq_to_distance_func(self, df_bld, train_pos_seqs, dataset_type, dist_param):
         """Compute distance metrics between sequences (e.g., Levenshtein)."""
 
         self.build_distance_df(df_bld, train_pos_seqs, dataset_type)
@@ -146,7 +146,8 @@ class LossPreprocessor:
             sig = 1 - 1 / (1 + torch.exp(-k * (x - x_0)))
             return a * sig + b
 
-        self._dist_a = {"none": 0, "v1": 1, "v2": 2, "v3": 4, "v4": 6}[dist_loss_type.lower()]
+        # self._dist_a = {"none": 0, "v1": 1, "v2": 2, "v3": 4, "v4": 6}[dist_loss_type.lower()]
+        self._dist_a = dist_param
 
         def aaseq_to_distance(aaseq_array, default_value=1.0, dont_use_function=False):
             lookup_series = self.df_aaseq_to_distance.set_index('AASeq')['distance']
@@ -156,7 +157,7 @@ class LossPreprocessor:
 
     def build_nnegihbours_df(self, dfs):
         """
-            Builds self.df_aaseq_to_nneighbors: a DataFrame with unique AASeqs and their
+            Builds self.df_aaseq_to_recurrence: a DataFrame with unique AASeqs and their
             number of neighbors (i.e., how many times they appear) across a list of DataFrames.
             Counts are aggregated across all provided DataFrames, but duplicates within a
             single patient in a DataFrame are only counted once.
@@ -173,34 +174,33 @@ class LossPreprocessor:
                 all_counts.update(aaseq_list)
 
         # Step 2: Convert Counter to DataFrame
-        self.df_aaseq_to_nneighbors = (
-            pd.DataFrame.from_dict(all_counts, orient='index', columns=['nneighbors'])
+        self.df_aaseq_to_recurrence = (
+            pd.DataFrame.from_dict(all_counts, orient='index', columns=['recurrence'])
             .reset_index()
             .rename(columns={'index': 'AASeq'})
         )
 
-    def build_aaseq_to_nneighbors_func(self, df_bld, train_patient_ids, test_patient_ids, valid_patient_ids,
-                                       loss_version, filter_num_of_patients):
+    def build_aaseq_to_recurrence_func(self, df_bld, train_patient_ids, test_patient_ids, valid_patient_ids,
+                                       recurrence_gamma, filter_num_of_patients):
         """Compute nearest neighbors for each sequence."""
 
-        # Option for AASeq to nneighbors incorporated into loss:
+        # Option for AASeq to recurrence incorporated into loss:
         self.build_nnegihbours_df([df_bld[df_bld['patient_id'].isin(train_patient_ids)],
                                    df_bld[df_bld['patient_id'].isin(test_patient_ids)],
                                    df_bld[df_bld['patient_id'].isin(valid_patient_ids)]])
 
-        def nneighbors_func(x, gamma, k, a=0.7):
+        def recurrence_func(x, gamma, k, a=0.7):
             # return gamma ** (x - k)
             m = gamma
             return m - (m - 1) * (2 / (1 + torch.exp(-a * (x - k))))
 
-        # gamma_options = {0 : 1.2, 1 : 1.3, 2 : 1.4, 3 : 1.5, 4 : 1.6}
-        gamma_options = {0: 1.0, 1: 0.5, 2: 0.0, 3: -1.0, 4: -2.0}
-        default_gamma = gamma_options[loss_version] if loss_version in gamma_options else gamma_options[0]
+        # gamma_options = {0: 1.0, 1: 0.5, 2: 0.0, 3: -1.0, 4: -2.0}
+        # default_gamma = gamma_options[loss_version] if loss_version in gamma_options else gamma_options[0]
 
-        def aaseq_to_nneighbors(aaseq_array, default_value=filter_num_of_patients, gamma=default_gamma):
-            lookup_series = self.df_aaseq_to_nneighbors.set_index('AASeq')['nneighbors']
+        def aaseq_to_recurrence(aaseq_array, default_value=filter_num_of_patients, gamma=recurrence_gamma):
+            lookup_series = self.df_aaseq_to_recurrence.set_index('AASeq')['recurrence']
             result = torch.tensor(pd.Series(aaseq_array).map(lookup_series).fillna(default_value).values)
-            result = nneighbors_func(result, gamma=gamma, k=default_value)
+            result = recurrence_func(result, gamma=gamma, k=default_value)
             result[result < 1.0] = 1.0
             return result
-        return aaseq_to_nneighbors
+        return aaseq_to_recurrence

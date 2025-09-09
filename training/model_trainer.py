@@ -36,7 +36,7 @@ def custom_loss_entropy(logits, labels, R=0.1, n_classes=2):
 
 
 class CustomLossCriterion(nn.Module):
-    def __init__(self, device, loss_type='ce', class_weights=None, R=0.1, n_classes=2, ratio=False, aaseq_to_ratio=None, aaseq_to_dist=None, aaseq_to_nneighbors=None):
+    def __init__(self, device, loss_type='ce', class_weights=None, R=0.1, n_classes=2, ratio=False, aaseq_to_ratio=None, aaseq_to_dist=None, aaseq_to_recurrence=None):
         """
         Flexible loss criterion that supports different loss types and class weights.
 
@@ -55,7 +55,7 @@ class CustomLossCriterion(nn.Module):
         self.ratio = ratio
         self.aaseq_to_ratio = aaseq_to_ratio
         self.aaseq_to_dist = aaseq_to_dist
-        self.aaseq_to_nneighbors = aaseq_to_nneighbors
+        self.aaseq_to_recurrence = aaseq_to_recurrence
         self.device = device
 
     def forward(self, logits, labels, batch_samples):
@@ -74,35 +74,62 @@ class CustomLossCriterion(nn.Module):
             # Ensure class_weights is on the same device as labels
             self.class_weights.to(self.device)
 
+        # Compute base cross-entropy loss per sample
+        per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+
+        # Initialize sample weights as ones
+        sample_weights = torch.ones_like(per_sample_losses, dtype=torch.float32, device=self.device)
+
+        # Apply ratio weighting (only to positive samples)
         if self.ratio:
             batch_sample_ratios = self.aaseq_to_ratio(batch_samples).to(self.device)
-            per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
-            sample_weights = torch.ones_like(per_sample_losses)
             positive_indices = labels == 1
-            sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
-            weighted_losses = per_sample_losses * sample_weights
-            ce_loss = weighted_losses.mean()
-        elif self.aaseq_to_dist is not None:
-            # apply aaseq_to_dist function to get the distance on the batch samples
+            sample_weights[positive_indices] *= batch_sample_ratios[positive_indices].type(torch.float32)
+
+        # Apply distance weighting (only to negative samples)
+        if self.aaseq_to_dist is not None:
             batch_sample_distances = self.aaseq_to_dist(batch_samples).to(self.device)
-            per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
-            sample_weights = batch_sample_distances.type(torch.float32)
             negative_indices = labels == 0
-            sample_weights[negative_indices] = batch_sample_distances[negative_indices].type(torch.float32)
-            weighted_losses = per_sample_losses * sample_weights
-            ce_loss = weighted_losses.mean()
-        elif self.aaseq_to_nneighbors is not None:
-            # apply aaseq_to_nneighbors function to get the number of neighbors on the batch samples
-            batch_sample_nneighbors = self.aaseq_to_nneighbors(batch_samples).to(self.device)
-            per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
-            sample_weights = batch_sample_nneighbors.type(torch.float32)  # Added this line to run on all samples
-            # sample_weights = torch.ones_like(per_sample_losses)
-            # positive_indices = labels == 1
-            # sample_weights[positive_indices] = batch_sample_nneighbors[positive_indices].type(torch.float32)
-            weighted_losses = per_sample_losses * sample_weights
-            ce_loss = weighted_losses.mean()
-        else:
-            ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
+            sample_weights[negative_indices] *= batch_sample_distances[negative_indices].type(torch.float32)
+
+        # Apply recurrence weighting (to all samples)
+        if self.aaseq_to_recurrence is not None:
+            batch_sample_recurrence = self.aaseq_to_recurrence(batch_samples).to(self.device)
+            sample_weights *= batch_sample_recurrence.type(torch.float32)
+
+        # Compute final weighted loss
+        weighted_losses = per_sample_losses * sample_weights
+        ce_loss = weighted_losses.mean()
+
+        # if self.ratio:
+        #     batch_sample_ratios = self.aaseq_to_ratio(batch_samples).to(self.device)
+        #     per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+        #     sample_weights = torch.ones_like(per_sample_losses)
+        #     positive_indices = labels == 1
+        #     sample_weights[positive_indices] = batch_sample_ratios[positive_indices].type(torch.float32)
+        #     weighted_losses = per_sample_losses * sample_weights
+        #     ce_loss = weighted_losses.mean()
+        # elif self.aaseq_to_dist is not None:
+        #     # apply aaseq_to_dist function to get the distance on the batch samples
+        #     batch_sample_distances = self.aaseq_to_dist(batch_samples).to(self.device)
+        #     per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+        #     sample_weights = batch_sample_distances.type(torch.float32)
+        #     negative_indices = labels == 0
+        #     sample_weights[negative_indices] = batch_sample_distances[negative_indices].type(torch.float32)
+        #     weighted_losses = per_sample_losses * sample_weights
+        #     ce_loss = weighted_losses.mean()
+        # elif self.aaseq_to_recurrence is not None:
+        #     # apply aaseq_to_recurrence function to get the number of neighbors on the batch samples
+        #     batch_sample_recurrence = self.aaseq_to_recurrence(batch_samples).to(self.device)
+        #     per_sample_losses = F.cross_entropy(logits, labels, weight=self.class_weights, reduction='none')
+        #     sample_weights = batch_sample_recurrence.type(torch.float32)  # Added this line to run on all samples
+        #     # sample_weights = torch.ones_like(per_sample_losses)
+        #     # positive_indices = labels == 1
+        #     # sample_weights[positive_indices] = batch_sample_recurrence[positive_indices].type(torch.float32)
+        #     weighted_losses = per_sample_losses * sample_weights
+        #     ce_loss = weighted_losses.mean()
+        # else:
+        #     ce_loss = F.cross_entropy(logits, labels, weight=self.class_weights)
 
         if self.loss_type == 'ce':
             return ce_loss
@@ -157,7 +184,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
                 embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, optimizer_type, args,
-                aaseq_to_nneighbors=None, masking=False, ratio=False, scheduler_type='none',
+                aaseq_to_recurrence=None, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False,
                 reshef_inference=False, reshef_filter_train=False, reshef_negative_part=0,
                 test_pos_seqs=None, test_neg_seqs=None):  # pos_batch_size=256
@@ -190,7 +217,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
     # Note: nn.CrossEntropyLoss combines nn.LogSoftmax and nn.NLLLoss, so we use raw logits
     class_weights = torch.tensor([1.0, pos_weights], dtype=torch.float, device=device)  # Weight negatives as 1, positives as pos_weight
 
-    criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, aaseq_to_nneighbors=aaseq_to_nneighbors, device=device)
+    criterion = CustomLossCriterion(loss_type=loss_type, class_weights=class_weights, R=reg_coef, ratio=ratio, aaseq_to_ratio=aaseq_to_ratio, aaseq_to_dist=aaseq_to_dist, aaseq_to_recurrence=aaseq_to_recurrence, device=device)
 
     if optimizer_type == "adam":
         base_optimizer = optim.Adam

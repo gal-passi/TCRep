@@ -110,7 +110,7 @@ def plot_all_training(trained_model, args,
     plot_output_distributions_per_patient(
         trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
         test_masks, valid_masks, positive_seqs, df_bld, df_hlt,
-        args.model_type, args.log_wandb, sample_plots, args, device
+        args.model_type, not args.no_wandb_log, sample_plots, args, device
     )
 
     np.random.seed(42)
@@ -118,7 +118,7 @@ def plot_all_training(trained_model, args,
     plot_average_individual_distributions(
         trained_model, test_patient_inds, valid_patient_inds, unique_patient_ids,
         test_masks, valid_masks, positive_seqs, df_bld, df_hlt,
-        args.model_type, args.log_wandb, args, device
+        args.model_type, not args.no_wandb_log, args, device
     )
 
 

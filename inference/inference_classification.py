@@ -27,8 +27,8 @@ import pickle
 import pandas as pd
 
 
-INFERENCE_BASE_PLOT_DIR = "plots/cvc_model/inference_plots/"
-INFERENCE_V2_BASE_PLOT_DIR = "plots/cvc_model/inference_plots_v2/"
+INFERENCE_BASE_PLOT_DIR = "plots/inference_plots_old/"
+INFERENCE_V2_BASE_PLOT_DIR = "plots/inference_plots_v2/"
 INFERENCE_CONFUSION_MATRIX_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "confusion_matrices/")
 INFERENCE_VECTOR_PLOTS_DIR = os.path.join(INFERENCE_BASE_PLOT_DIR, "vector_plots/")
 INFERENCE_CONFUSION_MATRIX_V2_DIR = os.path.join(INFERENCE_V2_BASE_PLOT_DIR, "confusion_matrices_v2/")

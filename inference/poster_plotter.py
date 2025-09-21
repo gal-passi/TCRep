@@ -477,6 +477,22 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
             out.extend(metric_list[i:i + n_model])
         return out
 
+    # Now adding without inflation:
+    only_ch_no_inf_f1 = ['0.13226', '0.10874', '0.079243', '0.11531', '0.09123', '0.10541', '0.10297', '0.096386']
+    only_ch_no_inf_tpr = ['0.90934', '0.76097', '0.93336', '0.85557', '0.90787', '0.83894', '0.89892', '0.91595']
+    only_ch_no_inf_fnr = [1 - float(x) for x in only_ch_no_inf_tpr]
+    only_ch_no_inf_tnr = ['0.7766', '0.86264', '0.73248', '0.79295', '0.77187', '0.81115', '0.78471', '0.72606']
+    only_ch_no_inf_fpr = [1 - float(x) for x in only_ch_no_inf_tnr]
+    only_ch_no_inf_acc = ['90.93351', '76.09669', '93.33552', '85.55672', '90.78668', '83.89439', '89.89198', '91.5947']
+    only_ch_no_inf_acc = [float(x) / 100 for x in only_ch_no_inf_acc]
+    val_f1 = interleave_untrained(val_f1, [float(x) for x in only_ch_no_inf_f1], n_model=n_models)
+    val_tpr = interleave_untrained(val_tpr, [float(x) for x in only_ch_no_inf_tpr], n_model=n_models)
+    val_fnr = interleave_untrained(val_fnr, only_ch_no_inf_fnr, n_model=n_models)
+    val_tnr = interleave_untrained(val_tnr, [float(x) for x in only_ch_no_inf_tnr], n_model=n_models)
+    val_fpr = interleave_untrained(val_fpr, only_ch_no_inf_fpr, n_model=n_models)
+    val_acc = interleave_untrained(val_acc, only_ch_no_inf_acc, n_model=n_models)
+    n_models += 1
+
     # # Extract each metric column from untrained_vals
     # tmp_f1 = [x[0] for x in untrained_vals]
     # tmp_tpr = [x[1] for x in untrained_vals]
@@ -492,47 +508,48 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
     # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
     # n_models += 1
 
-    # def add_model_results(to_get='embedding'):
-    #     tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = [], [], [], [], []
-    #     dir_content = os.listdir(os.path.join(BASE_PROJECT_PATH, "cache/run_for_poster_results/naive_model_results"))
-    #     dir_content = sorted([x for x in dir_content if 'cvc' in x and '5.45001' in x])
-    #     for cvc_dir in dir_content:
-    #         # list files in cvc_dir and make sure that there are exactly 2 files
-    #         results_files = os.listdir(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir))
-    #         results_files = [x for x in results_files if to_get in x]
-    #         assert len(results_files) == 1, f"Expected 1 files in {cvc_dir}, but found {len(results_files)}"
-    #         for result_file in results_files:
-    #             # load all jsons in result_file with open
-    #             with open(os.path.join(BASE_PROJECT_PATH, "naive_model_results", cvc_dir, result_file), "r") as f:
-    #                 results = json.load(f)
-    #             f1 = results['best_validation_f1']
-    #             tpr = results['test_tpr']
-    #             fnr = results['test_fnr']
-    #             tnr = results['test_tnr']
-    #             fpr = results['test_fpr']
-    #
-    #             tmp_f1.append(f1)
-    #             tmp_fnr.append(fnr)
-    #             tmp_tpr.append(tpr)
-    #             tmp_tnr.append(tnr)
-    #             tmp_fpr.append(fpr)
-    #     return tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr
-    #
-    # tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='embedding')
-    # val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
-    # val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
-    # val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
-    # val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
-    # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
-    # n_models += 1
-    #
-    # tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='onehot')
-    # val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
-    # val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
-    # val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
-    # val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
-    # val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
-    # n_models += 1
+    def add_model_results(to_get='embedding'):
+        tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = [], [], [], [], []
+        dir_path = os.path.join(BASE_PROJECT_PATH, "cache/run_for_poster_results/naive_model_results")
+        dir_content = os.listdir(dir_path)
+        dir_content = sorted([x for x in dir_content if 'cvc' in x and '5.45001' in x])
+        for cvc_dir in dir_content:
+            # list files in cvc_dir and make sure that there are exactly 2 files
+            results_files = os.listdir(os.path.join(dir_path, cvc_dir))
+            results_files = [x for x in results_files if to_get in x]
+            assert len(results_files) == 1, f"Expected 1 files in {cvc_dir}, but found {len(results_files)}"
+            for result_file in results_files:
+                # load all jsons in result_file with open
+                with open(os.path.join(dir_path, cvc_dir, result_file), "r") as f:
+                    results = json.load(f)
+                f1 = results['best_validation_f1']
+                tpr = results['test_tpr']
+                fnr = results['test_fnr']
+                tnr = results['test_tnr']
+                fpr = results['test_fpr']
+
+                tmp_f1.append(f1)
+                tmp_fnr.append(fnr)
+                tmp_tpr.append(tpr)
+                tmp_tnr.append(tnr)
+                tmp_fpr.append(fpr)
+        return tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr
+
+    tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='embedding')
+    val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
+    val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
+    val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
+    val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
+    val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
+    n_models += 1
+
+    tmp_f1, tmp_tpr, tmp_fnr, tmp_tnr, tmp_fpr = add_model_results(to_get='onehot')
+    val_f1 = interleave_untrained(val_f1, tmp_f1, n_model=n_models)
+    val_tpr = interleave_untrained(val_tpr, tmp_tpr, n_model=n_models)
+    val_fnr = interleave_untrained(val_fnr, tmp_fnr, n_model=n_models)
+    val_tnr = interleave_untrained(val_tnr, tmp_tnr, n_model=n_models)
+    val_fpr = interleave_untrained(val_fpr, tmp_fpr, n_model=n_models)
+    n_models += 1
 
     # # Adding only classification head training:  # TODO: Also insert the results of the last 8th fold! (for now, adding dummy values)
     # only_ch_f1 = ['0.22382', '0.16173', '0.1836', '0.19224', '0.15023', '0.15732', '0.23612', '0.19']
@@ -548,23 +565,6 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
     # val_fpr = interleave_untrained(val_fpr, only_ch_fpr, n_model=n_models)
     # n_models += 1
 
-    # Now adding without inflation:
-    only_ch_no_inf_f1 = ['0.13226', '0.10874', '0.079243', '0.11531', '0.09123', '0.10541', '0.10297', '0.096386']
-    only_ch_no_inf_tpr = ['0.90934', '0.76097', '0.93336', '0.85557', '0.90787', '0.83894', '0.89892', '0.91595']
-    only_ch_no_inf_fnr = [1 - float(x) for x in only_ch_no_inf_tpr]
-    only_ch_no_inf_tnr = ['0.7766', '0.86264', '0.73248', '0.79295', '0.77187', '0.81115', '0.78471', '0.72606']
-    only_ch_no_inf_fpr = [1 - float(x) for x in only_ch_no_inf_tnr]
-    only_ch_no_inf_acc = ['90.93351', '76.09669', '93.33552', '85.55672', '90.78668', '83.89439', '89.89198', '91.5947']
-    only_ch_no_inf_acc = [float(x) / 100 for x in only_ch_no_inf_acc]
-
-    val_f1 = interleave_untrained(val_f1, [float(x) for x in only_ch_no_inf_f1], n_model=n_models)
-    val_tpr = interleave_untrained(val_tpr, [float(x) for x in only_ch_no_inf_tpr], n_model=n_models)
-    val_fnr = interleave_untrained(val_fnr, only_ch_no_inf_fnr, n_model=n_models)
-    val_tnr = interleave_untrained(val_tnr, [float(x) for x in only_ch_no_inf_tnr], n_model=n_models)
-    val_fpr = interleave_untrained(val_fpr, only_ch_no_inf_fpr, n_model=n_models)
-    val_acc = interleave_untrained(val_acc, only_ch_no_inf_acc, n_model=n_models)
-    n_models += 1
-
     # Dictionary to select which metric to plot
     metrics = {
         "F1": val_f1,
@@ -572,20 +572,20 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
         "FNR": val_fnr,
         "TNR": val_tnr,
         "FPR": val_fpr,
-        "ACC": val_acc  # Added acc only for no inflation and first data
+        # "ACC": val_acc  # Added acc only for no inflation and first data
     }
 
     # Model labels
     model_labels = [
-        "Naive CVC",
         # "CVC only trained head (with inflation)",
-        # "KNN one-hot",
-        # "KNN untrained CVC",
+        "KNN one-hot",
+        "KNN", # "KNN CVC",
         # "Untrained CVC+Head",
-        "Finetuned CVC",
+        "Zero-shot", # "Naive CVC",
+        "Fine-tuned", # "Fine-tuned CVC",
         "Inflation",
         "Confidence Term",
-        "Recurrence Term"
+        "Inflation" # "Recurrence Term"
     ]
     assert n_models == len(model_labels), "Number of models does not match the number of labels."
 
@@ -593,24 +593,26 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
     def reshape_values(values):
         return np.array(values).reshape(n_folds, n_models)  # n_folds × n_models
 
+    models_to_display = np.array([1, 2, 3, 6])
+
     # Plot all metrics in subplots
     fig, axes = plt.subplots(2, 3, figsize=(15, 8), dpi=600)  # 2 rows, 3 cols (last will be empty)
-    plt.rcParams.update({"font.size": 16})
+    plt.rcParams.update({"font.size": 20})
     axes = axes.flatten()
     for idx, (metric_name, metric_values) in enumerate(metrics.items()):
         ax = axes[idx]
         values = reshape_values(metric_values)
 
         # Boxplots
-        plt.rcParams.update({"font.size": 16})
-        ax.boxplot(values, positions=np.arange(1, n_models + 1), widths=0.5)
+        plt.rcParams.update({"font.size": 20})
+        ax.boxplot(values[:, models_to_display], positions=np.arange(1, len(models_to_display) + 1), widths=0.5)
 
         # Scatter per fold
         for fold in range(n_folds):
-            ax.scatter(np.arange(1, n_models + 1), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
+            ax.scatter(np.arange(1, len(models_to_display) + 1), values[fold, models_to_display], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
 
-        ax.set_xticks(list(range(1, n_models + 1)))
-        ax.set_xticklabels(model_labels, rotation=20, ha="right")
+        ax.set_xticks(list(range(1, len(models_to_display) + 1)))
+        ax.set_xticklabels(np.array(model_labels)[models_to_display], rotation=20, ha="right")
         ax.set_title(metric_name)
         ax.set_ylabel(metric_name)
     # Add legend only once
@@ -619,51 +621,45 @@ def plot_ablation_on_folds(n_folds=8, n_models=4):
     plt.tight_layout()
     plt.show()
 
-    # # Plot all metrics in subplots
-    # fig, axes = plt.subplots(2, 3, figsize=(15, 8))  # 2 rows, 3 cols (last will be empty)
-    # axes = axes.flatten()
-    # for idx, (metric_name, metric_values) in enumerate(metrics.items()):
-    #     ax = axes[idx]
-    #     values = reshape_values(metric_values)
-    #     # Calculate statistics for each model
-    #     positions = np.arange(1, 5)
-    #     for i, pos in enumerate(positions):
-    #         model_values = values[:, i]  # All fold values for this model
-    #
-    #         # Calculate quartiles and mean
-    #         q1 = np.percentile(model_values, 25)
-    #         q3 = np.percentile(model_values, 75)
-    #         mean_val = np.mean(model_values)
-    #
-    #         # Plot mean as red line with black quartile error bars
-    #         ax.errorbar(pos, mean_val,
-    #                     yerr=[[mean_val - q1], [q3 - mean_val]],
-    #                     fmt='_r',
-    #                     ecolor='black',
-    #                     capsize=5,
-    #                     capthick=1,
-    #                     linewidth=1,
-    #                     markersize=20,
-    #                     markeredgewidth=2)
-    #
-    #     # Scatter per fold
-    #     for fold in range(n_folds):
-    #         ax.scatter(np.arange(1, 5), values[fold, :], alpha=0.7, label=f"Fold {fold + 1}" if idx == 0 else None)
-    #
-    #     ax.set_xticks([1, 2, 3, 4])
-    #     ax.set_xlim(0.5, 4.5)
-    #     ax.set_xticklabels(model_labels, rotation=20, ha="right")
-    #     ax.set_title(metric_name)
-    #     ax.set_ylabel(metric_name)
-    # # Add legend only once
-    # # axes[0].legend(bbox_to_anchor=(1.05, 1), loc="upper left")
-    # # Remove the last empty subplot
-    # fig.delaxes(axes[-1])
-    # plt.tight_layout()
-    # plt.show()
+    # Create stacked subplots with no space between them
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(5, 6), dpi=600,
+                                   gridspec_kw={'hspace': 0})  # hspace=0 removes vertical space
+    plt.rcParams.update({"font.size": 20})
+    # TPR subplot (top)
+    tpr_values = reshape_values(metrics["TPR"])
+    ax1.boxplot(tpr_values[:, models_to_display], positions=np.arange(1, len(models_to_display) + 1), widths=0.5)
+    # Scatter per fold for TPR
+    for fold in range(n_folds):
+        ax1.scatter(np.arange(1, len(models_to_display) + 1), tpr_values[fold, models_to_display], alpha=0.7,
+                    label=f"Fold {fold + 1}")
+    # ax1.set_title("TPR")
+    ax1.set_ylabel("TPR", fontsize=20)
+    # Remove x-axis labels from top plot
+    ax1.set_xticks(list(range(1, len(models_to_display) + 1)))
+    ax1.set_xticklabels([])  # No labels on top subplot
+    # TNR subplot (bottom)
+    tnr_values = reshape_values(metrics["TNR"])
+    ax2.boxplot(tnr_values[:, models_to_display], positions=np.arange(1, len(models_to_display) + 1), widths=0.5)
+    # Scatter per fold for TNR
+    for fold in range(n_folds):
+        ax2.scatter(np.arange(1, len(models_to_display) + 1), tnr_values[fold, models_to_display], alpha=0.7)
+    ax2.set_ylabel("TNR", fontsize=20)
+    # Only bottom plot gets x-axis labels
+    ax2.set_xticks(list(range(1, len(models_to_display) + 1)))
+    ax2.set_xticklabels(np.array(model_labels)[models_to_display], rotation=20, ha="right", fontsize=20)
+    # change axis range
+    # Add main title
+    # fig.suptitle("Ablation", fontsize=16)
+    # Focus on the set range
+    ax1.set_ylim(0.18, 1.05)
+    ax2.set_ylim(0.68, 1.03)
+    # Add padding to y ticks
+    # ax1.yaxis.set_major_locator(plt.MaxNLocator(nbins=5, prune='lower'))
+    # ax2.yaxis.set_major_locator(plt.MaxNLocator(nbins=5, prune='lower'))
+    plt.tight_layout()
+    plt.show()
 
     return
-
 
 def load_pickle(path):
     """Load variables from a pickle file into a dictionary."""
@@ -1224,10 +1220,293 @@ def plot_histogram_for_poster(df_bld, trained_model, train_pos_seqs, neg_seqs, t
     plt.show()
 
 
+def plot_dataset_information():
+    dataset_jsonl = os.path.join(BASE_PROJECT_PATH, 'cache/datasets_information/dataset_runs_info.jsonl')
+    from pathlib import Path
+    import math
+
+    def read_dataset_info(filename=dataset_jsonl, backup_dir="backup_logs"):
+        """
+        Read all dataset information from the main JSONL file and backup files.
+
+        Args:
+            filename (str): Name of the main file to read from
+            backup_dir (str): Directory containing backup files
+
+        Returns:
+            list: List of dictionaries containing dataset information
+        """
+        data = []
+        run_ids_seen = set()
+
+        # Read main file first
+        main_file = Path(filename)
+        if main_file.exists():
+            try:
+                with open(main_file, 'r') as f:
+                    for line_num, line in enumerate(f, 1):
+                        line = line.strip()
+                        if line:
+                            try:
+                                entry = json.loads(line)
+                                run_id = entry.get('run_id')
+                                if run_id and run_id not in run_ids_seen:
+                                    data.append(entry)
+                                    run_ids_seen.add(run_id)
+                                elif not run_id:
+                                    # Old format without run_id, include it
+                                    data.append(entry)
+                            except json.JSONDecodeError as e:
+                                print(f"Warning: Skipping malformed JSON on line {line_num}: {e}")
+                print(f"Read {len(data)} entries from main file {filename}")
+            except Exception as e:
+                print(f"Error reading main file {filename}: {e}")
+        else:
+            print(f"Main file {filename} not found")
+
+        # Read backup files
+        backup_path = Path(backup_dir)
+        if backup_path.exists():
+            backup_files = list(backup_path.glob("dataset_info_*.json"))
+            backup_count = 0
+
+            for backup_file in backup_files:
+                try:
+                    with open(backup_file, 'r') as f:
+                        entry = json.load(f)
+                        run_id = entry.get('run_id')
+                        if run_id and run_id not in run_ids_seen:
+                            data.append(entry)
+                            run_ids_seen.add(run_id)
+                            backup_count += 1
+                        elif not run_id:
+                            # Old format without run_id, include it (but this might create duplicates)
+                            data.append(entry)
+                            backup_count += 1
+                except Exception as e:
+                    print(f"Warning: Could not read backup file {backup_file}: {e}")
+
+            if backup_count > 0:
+                print(f"Read {backup_count} additional entries from backup files")
+
+        print(f"Total entries loaded: {len(data)}")
+        return data
+
+    def merge_backup_to_main(main_file=dataset_jsonl, backup_dir="backup_logs"):
+        """
+        Merge all backup files into the main file and clean up backups.
+        Run this periodically to consolidate data.
+        """
+        print("Merging backup files to main file...")
+
+        # Read all data (including backups)
+        all_data = read_dataset_info(main_file, backup_dir)
+
+        if not all_data:
+            print("No data found to merge")
+            return
+
+        # Remove duplicates based on run_id
+        seen_run_ids = set()
+        unique_data = []
+
+        for entry in all_data:
+            run_id = entry.get('run_id')
+            if run_id:
+                if run_id not in seen_run_ids:
+                    unique_data.append(entry)
+                    seen_run_ids.add(run_id)
+            else:
+                # Old format entries without run_id - keep them but might have duplicates
+                unique_data.append(entry)
+
+        print(f"Found {len(unique_data)} unique entries")
+
+        # Write consolidated data to main file
+        main_path = Path(main_file)
+        temp_main = main_path.parent / f".tmp_merge_{main_path.name}"
+
+        try:
+            with open(temp_main, 'w') as f:
+                for entry in unique_data:
+                    json.dump(entry, f)
+                    f.write('\n')
+
+            # Atomic replace
+            if main_path.exists():
+                main_path.unlink()
+            temp_main.rename(main_path)
+
+            # Clean up backup files
+            backup_path = Path(backup_dir)
+            if backup_path.exists():
+                backup_files = list(backup_path.glob("dataset_info_*.json"))
+                for backup_file in backup_files:
+                    try:
+                        backup_file.unlink()
+                    except Exception as e:
+                        print(f"Warning: Could not delete {backup_file}: {e}")
+
+                print(f"Cleaned up {len(backup_files)} backup files")
+
+            print(f"Successfully merged data to {main_file}")
+
+        except Exception as e:
+            print(f"Error during merge: {e}")
+            # Clean up temp file
+            if temp_main.exists():
+                temp_main.unlink()
+
+    def analyze_dataset_runs(filename=dataset_jsonl, backup_dir="backup_logs"):
+        """
+        Analyze the collected dataset information from both main and backup files.
+        """
+        data = read_dataset_info(filename, backup_dir)
+        if not data:
+            return
+
+        # Convert to DataFrame for easier analysis
+        df = pd.DataFrame(data)
+
+        print("=== Dataset Runs Analysis ===\n")
+
+        # Basic statistics
+        print(f"Total number of runs: {len(df)}")
+        if 'timestamp' in df.columns:
+            print(f"Date range: {df['timestamp'].min()} to {df['timestamp'].max()}")
+        if 'machine_id' in df.columns:
+            print(f"Machines used: {df['machine_id'].nunique()} ({list(df['machine_id'].unique())})")
+        print()
+
+        # Configuration analysis
+        print("=== Configuration Summary ===")
+        if 'dataset_type' in df.columns:
+            print("Dataset types used:", df['dataset_type'].value_counts().to_dict())
+        if 'filter_num_of_patients' in df.columns:
+            print("Filter num of patients:", df['filter_num_of_patients'].value_counts().to_dict())
+        if 'filter_num_of_healthy' in df.columns:
+            print("Filter num of healthy:", df['filter_num_of_healthy'].value_counts().to_dict())
+        if 'top_n_seqs' in df.columns:
+            print("Top N sequences:", df['top_n_seqs'].value_counts().to_dict())
+        print()
+
+        # Sequence count statistics
+        print("=== Sequence Count Statistics ===")
+        seq_columns = ['train_pos_seqs_count', 'valid_pos_seqs_count', 'test_pos_seqs_count',
+                       'neg_seqs_count', 'valid_neg_seqs_count', 'test_neg_seqs_count']
+
+        for col in seq_columns:
+            if col in df.columns:
+                print(f"{col}: mean={df[col].mean():.1f}, std={df[col].std():.1f}, "
+                      f"min={df[col].min()}, max={df[col].max()}")
+        print()
+
+        # Patient count statistics
+        print("=== Patient Count Statistics ===")
+        patient_columns = ['train_patients_count', 'valid_patients_count', 'test_patients_count',
+                           'total_disease_patients', 'total_healthy_patients']
+
+        for col in patient_columns:
+            if col in df.columns:
+                print(f"{col}: mean={df[col].mean():.1f}, std={df[col].std():.1f}, "
+                      f"min={df[col].min()}, max={df[col].max()}")
+        print()
+
+        return df
+
+    # Read and analyze the data
+    df_analysis = analyze_dataset_runs()
+
+    # Periodically merge backup files (run this occasionally)
+    # merge_backup_to_main()
+
+    # You can also do custom analysis
+    dataset_type = ['ms_tcrdb2_no_healthy_ms_plus_hlt_article_extra_ms', 'article_sle_plus_hlt_ms_no_healthy_ms'][1]
+    if df_analysis is not None and len(df_analysis) > 0:
+        df_ms_all = df_analysis[
+            df_analysis['dataset_type'].str.contains(
+                dataset_type
+            )
+        ]
+
+        for to_inflate in [True, False]:
+            df_ms = df_ms_all[df_ms_all['filter_to_inflate'] == to_inflate]
+            print(f"=== Heatmaps for MS TCRDB2 (inflate_neg_seqs={to_inflate}) ===")
+            if df_ms.empty:
+                print("No data available for this configuration.")
+                continue
+
+            # Unique values
+            top_n_seqs = sorted(df_ms['top_n_seqs'].unique())
+            nums_healthy = sorted(df_ms['filter_num_of_healthy'].unique())
+            nums_patients = sorted(df_ms['filter_num_of_patients'].unique())
+
+            # Create subplot grid
+            n = len(top_n_seqs)
+            ncols = 3  # adjust depending on how many per row you want
+            nrows = math.ceil(n / ncols)
+
+            fig, axes = plt.subplots(nrows=nrows, ncols=ncols, figsize=(5 * ncols, 4 * nrows))
+            axes = axes.flatten() if n > 1 else [axes]
+
+            for i, top_n_seq in enumerate(top_n_seqs):
+                subset = df_ms[df_ms['top_n_seqs'] == top_n_seq]
+
+                pivot = subset.pivot_table(
+                    index="filter_num_of_healthy",
+                    columns="filter_num_of_patients",
+                    values="train_pos_seqs_count",
+                    aggfunc="first",
+                    fill_value=0
+                )
+                pivot = pivot.reindex(index=nums_healthy, columns=nums_patients, fill_value=0)
+
+                # Print out missing runs (cells where value == 0)
+                for nh in nums_healthy:
+                    for npat in nums_patients:
+                        val = pivot.loc[nh, npat]
+                        if val != 0:
+                            cmd = f"--dataset_type {dataset_type} --top_n_seqs {top_n_seq}"
+                            if not to_inflate:
+                                cmd += " -no_inflate"
+                            cmd += f" --dataset_filter_num_of_patients {npat} --dataset_filter_num_of_healthy {nh}"
+                            print(cmd)
+
+                ax = axes[i]
+                sns.heatmap(pivot, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
+                ax.invert_yaxis()
+                ax.set_title(f"Top N Seqs = {top_n_seq}")
+                ax.set_xlabel("Number of Patients")
+                ax.set_ylabel("Number of Healthy")
+
+            # Remove unused subplots
+            for j in range(i + 1, len(axes)):
+                fig.delaxes(axes[j])
+
+            inflate_str = "With Inflation" if to_inflate else "No Inflation"
+            fig.suptitle(f"Heatmaps for {inflate_str}", fontsize=16)
+            plt.tight_layout(rect=[0, 0, 1, 0.97])
+            plt.show()
+
+        # print("=== Custom Analysis Example ===")
+        # # Group by configuration and see average sequence counts
+        # groupby_cols = ['dataset_type', 'filter_num_of_patients', 'filter_num_of_healthy', 'top_n_seqs']
+        # available_cols = [col for col in groupby_cols if col in df_analysis.columns]
+        #
+        # if available_cols:
+        #     grouped = df_analysis.groupby(available_cols).agg({
+        #         col: ['mean', 'std', 'count'] for col in ['train_pos_seqs_count', 'total_positive_seqs']
+        #         if col in df_analysis.columns
+        #     }).round(2)
+        #     print(grouped)
+    pass
+
+
 if __name__ == '__main__':
     # calculations_for_poster()
     # plot_embeddings()
     # plot_average_embeddings()
     # calculations_for_poster()
-    # plot_ablation_on_folds()
-    plot_classification_ablation()
+    plot_ablation_on_folds()
+    # plot_classification_ablation()
+    # plot_dataset_information()

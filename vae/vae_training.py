@@ -1,13 +1,19 @@
+import os
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
 import seaborn as sns
+from utils.cache_handler import get_model_config_str
+import pickle
 
+CACHE_DIR = 'cache/vae_cache'
+PLOTS_DIR = 'plots/vae'
 
 class ControlVAE(nn.Module):
     """
@@ -15,12 +21,19 @@ class ControlVAE(nn.Module):
     Based on "ControlVAE: Model-Based Learning of Generative Controllers for Physics-Based Characters"
     """
 
-    def __init__(self, input_dim, latent_dim=64, hidden_dim=256, control_dim=32, max_seq_len=30):
+    def __init__(self, input_dim, trained_model, model, latent_dim=64, hidden_dim=256, control_dim=32, max_seq_len=30, embedding_type='onehot'):
         super(ControlVAE, self).__init__()
         self.input_dim = input_dim
+        self.trained_model = trained_model
+        self.model = model
         self.latent_dim = latent_dim
         self.control_dim = control_dim
         self.max_seq_len = max_seq_len
+        self.embedding_type = embedding_type
+
+        # Freeze the trained model parameters
+        self.trained_model.eval()
+        self.model.eval()
 
         # Amino acid vocabulary (20 standard amino acids + padding)
         self.vocab_size = 21
@@ -63,18 +76,29 @@ class ControlVAE(nn.Module):
 
     def encode_sequences(self, sequences):
         """Convert amino acid sequences to one-hot encoded tensors"""
-        batch_size = len(sequences)
-        encoded = torch.zeros(batch_size, self.max_seq_len, self.vocab_size)
+        if self.embedding_type == 'onehot':
+            batch_size = len(sequences)
+            encoded = torch.zeros(batch_size, self.max_seq_len, self.vocab_size)
 
-        for i, seq in enumerate(sequences):
-            seq = seq[:self.max_seq_len]  # Truncate if too long
-            for j, aa in enumerate(seq):
-                if aa in self.aa_to_idx:
-                    encoded[i, j, self.aa_to_idx[aa]] = 1.0
-                else:
-                    encoded[i, j, self.aa_to_idx['X']] = 1.0  # Use padding for unknown AA
+            for i, seq in enumerate(sequences):
+                seq = seq[:self.max_seq_len]  # Truncate if too long
+                for j, aa in enumerate(seq):
+                    if aa in self.aa_to_idx:
+                        encoded[i, j, self.aa_to_idx[aa]] = 1.0
+                    else:
+                        encoded[i, j, self.aa_to_idx['X']] = 1.0  # Use padding for unknown AA
 
-        return encoded.view(batch_size, -1)  # Flatten
+            return encoded.view(batch_size, -1)  # Flatten
+        elif self.embedding_type == 'trained_cvc':
+            with torch.no_grad():
+                embeddings = self.trained_model.get_embeddings(sequences).to(torch.float32)
+            return embeddings
+        elif self.embedding_type == 'untrained_cvc':
+            with torch.no_grad():
+                embeddings = self.model.get_embeddings(sequences).to(torch.float32)
+            return embeddings
+        else:
+            raise ValueError(f"Unknown embedding type: {self.embedding_type}")
 
     def decode_to_sequences(self, x):
         """Convert one-hot encoded tensors back to amino acid sequences"""
@@ -126,12 +150,14 @@ class ControlVAE(nn.Module):
 
 def vae_loss_function(recon_x, x, mu, logvar, beta=1.0):
     """VAE loss function with KL divergence"""
-    BCE = nn.functional.binary_cross_entropy(recon_x, x, reduction='sum')
+    # BCE = nn.functional.binary_cross_entropy(recon_x, x, reduction='sum')
+    recon_loss = nn.functional.mse_loss(recon_x, x, reduction='sum')
     KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-    return BCE + beta * KLD, BCE, KLD
+    # return BCE + beta * KLD, BCE, KLD
+    return recon_loss + beta * KLD, recon_loss, KLD
 
 
-def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, device):
+def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, device, trained_model, untrained_model, model_config_str):
     """
     Train ControlVAE on positive sequences
     """
@@ -140,29 +166,53 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
     # Hyperparameters
     max_seq_len = max(len(seq) for seq in positive_sequences)
     max_seq_len = min(max_seq_len, 21)  # Cap at reasonable length
-    latent_dim = 32
-    control_dim = 16
+    latent_dim = 64
+    control_dim = 32
     hidden_dim = 256
     batch_size = 512
     epochs = 20
     learning_rate = 0.00001
-    beta = 1.0  # KL divergence weight
+    beta = 0.5  # KL divergence weight
+    embedding_type = ['onehot', 'trained_cvc', 'untrained_cvc'][1]  # Choose embedding type
 
     # Initialize model
     vocab_size = 21
-    input_dim = max_seq_len * vocab_size
-    model = ControlVAE(input_dim, latent_dim, hidden_dim, control_dim, max_seq_len).to(device)
+    input_dim = max_seq_len * vocab_size if embedding_type == 'onehot' else 768
+    model = ControlVAE(input_dim, trained_model, untrained_model, latent_dim, hidden_dim, control_dim, max_seq_len, embedding_type).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5, factor=0.5)
 
     print(f"Model parameters: input_dim={input_dim}, latent_dim={latent_dim}, max_seq_len={max_seq_len}")
     print(f"Training on {len(positive_sequences)} positive sequences")
 
-    # Prepare data
-    train_encoded = model.encode_sequences(positive_sequences).to(device)
-    valid_encoded = model.encode_sequences(valid_pos_seqs).to(device)
-    valid_neg_seqs = np.random.choice(valid_neg_seqs, size=min(len(valid_neg_seqs), len(valid_pos_seqs)), replace=False)
-    valid_neg_encoded = model.encode_sequences(valid_neg_seqs).to(device)
+    embedding_cache = os.path.join(CACHE_DIR, f'controlvae_cache/model_{model_config_str}/embedding_{embedding_type}.pkl')
+    if os.path.exists(embedding_cache):
+        print(f"Loading cached embeddings from {embedding_cache}")
+        with open(embedding_cache, 'rb') as f:
+            cached_data = pickle.load(f)
+            positive_sequences = cached_data['positive_sequences']
+            train_encoded = cached_data['train_encoded']
+            valid_pos_seqs = cached_data['valid_pos_seqs']
+            valid_encoded = cached_data['valid_encoded']
+            valid_neg_seqs = cached_data['valid_neg_seqs']
+            valid_neg_encoded = cached_data['valid_neg_encoded']
+    else:
+        # Prepare data
+        train_encoded = model.encode_sequences(positive_sequences).to(device)
+        valid_encoded = model.encode_sequences(valid_pos_seqs).to(device)
+        valid_neg_seqs = np.random.choice(valid_neg_seqs, size=min(len(valid_neg_seqs), len(valid_pos_seqs)), replace=False)
+        valid_neg_encoded = model.encode_sequences(valid_neg_seqs).to(device)
+
+        os.makedirs(os.path.dirname(embedding_cache), exist_ok=True)
+        with open(embedding_cache, 'wb') as f:
+            pickle.dump({
+                'positive_sequences': positive_sequences,
+                'train_encoded': train_encoded,
+                'valid_pos_seqs': valid_pos_seqs,
+                'valid_encoded': valid_encoded,
+                'valid_neg_seqs': valid_neg_seqs,
+                'valid_neg_encoded': valid_neg_encoded
+            }, f)
 
     train_dataset = TensorDataset(train_encoded)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -170,7 +220,6 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
     # Training loop
     train_losses = []
     valid_losses = []
-
     model.train()
     for epoch in range(epochs):
         epoch_loss = 0
@@ -214,12 +263,12 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
 
         scheduler.step(val_loss.item())
 
-        if epoch % 5 == 0:
+        if epoch % 5 == 0 or epoch == epochs - 1:
             print(
                 f'Epoch {epoch:3d}/{epochs}: Loss={avg_loss:.4f} (BCE={avg_bce:.4f}, KLD={avg_kld:.4f}), Val Loss={val_loss.item() / len(valid_encoded):.4f}')
 
     # Save model
-    model_path = f'cache/vae_cache/controlvae_model_{args.dataset_type}.pth'
+    model_path = os.path.join(CACHE_DIR, f'controlvae_model_{args.dataset_type}.pth')
     torch.save({
         'model_state_dict': model.state_dict(),
         'args': args,
@@ -246,15 +295,17 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
     # Generate and analyze latent representations
     model.eval()
     with torch.no_grad():
+        # sample from train the same amount as there is in validation
+        train_encoded = train_encoded[torch.randperm(train_encoded.size(0))[:len(valid_pos_seqs)]]
         train_mu, train_logvar = model.encode(train_encoded)
         valid_mu, valid_logvar = model.encode(valid_encoded)
         neg_mu, neg_logvar = model.encode(valid_neg_encoded)
 
         # Combine for visualization
         all_mu = torch.cat([train_mu, valid_mu, neg_mu], dim=0)
-        labels = ['Train'] * len(train_mu) + ['Validation'] * len(valid_mu) + ['Neg'] * len(neg_mu)
+        labels = ['Train'] * len(train_mu) + ['Validation'] * len(valid_mu) + ['Negative'] * len(neg_mu)
 
-        # PCA visualization  # TODO: Display same amount of negatives as positives here!
+        # PCA visualization
         plt.subplot(1, 2, 2)
         if latent_dim > 2:
             pca = PCA(n_components=2)
@@ -262,7 +313,6 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
         else:
             mu_2d = all_mu.cpu().numpy()
 
-        # colors = ['blue' if l == 'Train' else 'red' for l in labels]
         colors = []
         for l in labels:
             if l == 'Train':
@@ -271,15 +321,20 @@ def train_controlvae(positive_sequences, valid_pos_seqs, valid_neg_seqs, args, d
                 colors.append('green')
             else:
                 colors.append('red')
-        plt.scatter(mu_2d[:, 0], mu_2d[:, 1], c=colors, alpha=0.6, s=20)
+        plt.scatter(mu_2d[:, 0], mu_2d[:, 1], c=colors, alpha=0.4, s=20)
         plt.xlabel('Latent Dim 1')
         plt.ylabel('Latent Dim 2')
         plt.title('Latent Space (PCA)')
-        plt.legend(['Training', 'Validation', 'Negative'])
+        legend_elements = [
+            Line2D([0], [0], marker='o', color='w', label='Train', markerfacecolor='blue', markersize=8, alpha=0.6),
+            Line2D([0], [0], marker='o', color='w', label='Validation', markerfacecolor='green', markersize=8, alpha=0.6),
+            Line2D([0], [0], marker='o', color='w', label='Negative', markerfacecolor='red', markersize=8, alpha=0.6)
+        ]
+        plt.legend(handles=legend_elements, loc='best')
         # plt.grid(True)
 
     plt.tight_layout()
-    plt.savefig(f'cache/vae_cache/controlvae_training_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(PLOTS_DIR, f'controlvae_training_and_pca_model_{model_config_str}_{args.dataset_type}.png'), dpi=300, bbox_inches='tight')
     plt.show()
 
     # TODO: Turned off inference for faster testing
@@ -386,7 +441,7 @@ def perform_vae_inference(model, train_pos_seqs, valid_pos_seqs, args, device):
             plt.grid(True)
 
             plt.tight_layout()
-            plt.savefig(f'cache/vae_cache/controlvae_inference_{args.dataset_type}.png', dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(PLOTS_DIR, f'controlvae_inference_{args.dataset_type}.png'), dpi=300, bbox_inches='tight')
             plt.show()
 
         # 5. Sequence diversity analysis
@@ -409,10 +464,11 @@ def perform_vae_inference(model, train_pos_seqs, valid_pos_seqs, args, device):
         print(f"Original sequence lengths: mean={np.mean(orig_lengths):.1f}, std={np.std(orig_lengths):.1f}")
 
 
-def run_vae_training_and_inference(args, dataset_loader, device):
+def run_vae_training_and_inference(args, dataset_loader, device, trained_model, model):
     """
     Main function to run VAE training and inference
     """
+    model_config_str = get_model_config_str(args)
     print("=== Starting ControlVAE Training and Inference ===")
 
     # Get positive sequences from dataset loader
@@ -424,7 +480,7 @@ def run_vae_training_and_inference(args, dataset_loader, device):
     print(f"Test positive sequences: {len(test_pos_seqs)}")
 
     # Train ControlVAE
-    trained_vae = train_controlvae(train_pos_seqs, valid_pos_seqs, valid_neg_seqs, args, device)
+    trained_vae = train_controlvae(train_pos_seqs, valid_pos_seqs, valid_neg_seqs, args, device, trained_model, model, model_config_str)
 
     print("=== ControlVAE Training and Inference Completed ===")
     exit(0)

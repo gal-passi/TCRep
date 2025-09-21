@@ -130,7 +130,7 @@ def get_positive_negative(df_bld, df_hlt, valid_seqs_healthy_lst, seqs_healthy_n
 
 
 def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, patient_ids, dataset_type, cell_type, top_percent, top_n_seqs,
-                                valid_seqs_healthy=None, seqs_healthy_neighbours=None, num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
+                                valid_seqs_healthy=[], seqs_healthy_neighbours=[], num_of_patients=3, num_of_healthy=3, filter_to_inflate=True, verbose=True):
     if filter_to_inflate:
         lev_dist_accept = 1  # for now its always lev distance 1
         save_folder = cache_sequences_path
@@ -151,7 +151,8 @@ def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, p
             return positive_seqs, negative_seqs
         else:
             df_bld = df_bld[df_bld['patient_id'].isin(patient_ids)]
-            positive_seqs, negative_seqs = get_positive_negative(df_bld, valid_seqs_healthy, seqs_healthy_neighbours, num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, verbose=verbose)
+            positive_seqs, negative_seqs = get_positive_negative(df_bld, df_hlt, valid_seqs_healthy, seqs_healthy_neighbours,
+                                                                 num_of_patients=num_of_patients, num_of_healthy=num_of_healthy, verbose=verbose)
             # Save the positive and negative sequences to a file
             os.makedirs(save_folder, exist_ok=True)
             with open(save_file, 'wb') as f:
@@ -179,9 +180,71 @@ def calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, df_name, p
         return positive_seqs, negative_seqs
 
 
+from scipy.stats import fisher_exact
+def build_disease_panel(df_disease_train, df_healthy_train, min_healthy_patients=3, pval_threshold=0.1, alternative="greater"):
+    """
+    Build a disease-associated sequence panel using enrichment analysis.
+
+    Parameters
+    ----------
+    df_disease_train : pd.DataFrame
+        Training dataframe of disease patients with columns ['patient_id', 'AASeq'].
+    df_healthy_train : pd.DataFrame
+        Training dataframe of healthy patients with columns ['patient_id', 'AASeq'].
+    min_healthy_patients : int, default=3
+        Maximum number of healthy patients allowed to contain a sequence.
+    pval_threshold : float, default=0.1
+        Fisher exact test p-value cutoff.
+    alternative : {"greater","less","two-sided"}, default="greater"
+        Type of Fisher’s exact test.
+
+    Returns
+    -------
+    np.ndarray
+        Array of disease-associated sequences (AASeq).
+    """
+
+    def build_patient_seq_table(df, label):
+        return (
+            df.groupby("AASeq")["patient_id"]
+              .nunique()
+              .reset_index(name=f"{label}_patients")
+        )
+
+    # Count how many patients have each sequence
+    disease_counts = build_patient_seq_table(df_disease_train, "disease")
+    healthy_counts = build_patient_seq_table(df_healthy_train, "healthy")
+
+    # Merge into one table
+    freq_table = pd.merge(disease_counts, healthy_counts,
+                          on="AASeq", how="outer").fillna(0)
+
+    total_disease = df_disease_train['patient_id'].nunique()
+    total_healthy = df_healthy_train['patient_id'].nunique()
+
+    # Fisher enrichment
+    def fisher_pval(row):
+        table = [
+            [row['disease_patients'], total_disease - row['disease_patients']],
+            [row['healthy_patients'], total_healthy - row['healthy_patients']]
+        ]
+        _, pval = fisher_exact(table, alternative=alternative)
+        return pval
+
+    freq_table["pval"] = freq_table.apply(fisher_pval, axis=1)
+
+    # Select panel
+    disease_panel = freq_table[
+        (freq_table["healthy_patients"] < min_healthy_patients) &
+        (freq_table["pval"] < pval_threshold)
+    ]["AASeq"].to_numpy()
+
+    return disease_panel
+
+
 def calculate_positive_sequences(df_bld, df_hlt, dataset_type, cache_sequences_path, train_ids, valid_ids, test_ids,
                                  filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
-                                 extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, verbose):
+                                 extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, fisher_mode, verbose):
     """Compute train/valid/test pos and neg sequences with overlaps resolved."""
     if k_fold > 0:
         name_metadata = f"_fold_{k_fold}"
@@ -203,18 +266,53 @@ def calculate_positive_sequences(df_bld, df_hlt, dataset_type, cache_sequences_p
     if sweep_loader_mode:
         # do calculate positives on all the df_bld train+valid+test parts
         all_ids = np.concatenate((train_ids, valid_ids, test_ids))
+        valid_seqs_healthy, seqs_healthy_neighbours = list(), list()
         pos_seqs, _ = calculate_pos_neg_sequences(df_bld, df_hlt, cache_sequences_path, "all" + name_metadata, all_ids,
                                                   dataset_type, "ALL", top_percent, top_n_seqs,
+                                                  valid_seqs_healthy, seqs_healthy_neighbours,
                                                   num_of_patients=num_of_patients, num_of_healthy=num_of_healthy,
                                                   filter_to_inflate=filter_to_inflate, verbose=verbose)
 
         # create a local random with seed to split 80-10-10
         rng = np.random.default_rng(seed=42)
+        pos_seqs = np.array(sorted(list(pos_seqs)))
         rng.shuffle(pos_seqs)
         n = len(pos_seqs)
         train_pos_seqs = pos_seqs[:int(0.8 * n)]
         valid_pos_seqs = pos_seqs[int(0.8 * n):int(0.9 * n)]
         test_pos_seqs = pos_seqs[int(0.9 * n):]
+        return train_pos_seqs, valid_pos_seqs, test_pos_seqs
+    elif fisher_mode:
+        rng = np.random.default_rng(seed=42)
+        hlt_patient_ids = sorted(df_hlt['patient_id'].unique())
+        rng.shuffle(hlt_patient_ids)
+        num_hlt = len(hlt_patient_ids)
+        num_hlt_valid = num_hlt_test = num_hlt // 5
+        # hlt_valid_ids = set(hlt_patient_ids[:num_hlt_valid])
+        # hlt_test_ids = set(hlt_patient_ids[num_hlt_valid:2 * num_hlt_valid])
+        hlt_train_ids = set(hlt_patient_ids[2 * num_hlt_valid:])
+
+        # Build disease-associated sequence panel from training patients only
+        df_bld_train = df_bld[df_bld['patient_id'].isin(train_ids)]
+        df_hlt_train = df_hlt[df_hlt['patient_id'].isin(hlt_train_ids)]
+
+        # --- TRAIN ---
+        train_pos_seqs = build_disease_panel(df_bld_train, df_hlt_train, min_healthy_patients=3, pval_threshold=0.1)
+
+        # --- VALIDATION ---
+        df_bld_valid = df_bld[df_bld['patient_id'].isin(np.concatenate([train_ids, valid_ids]))]
+        valid_pos_seqs = build_disease_panel(df_bld_valid, df_hlt_train, min_healthy_patients=3, pval_threshold=0.1)
+        # keep only panel sequences that actually appear in validation patients
+        valid_bld_seqs = df_bld[df_bld['patient_id'].isin(valid_ids)]["AASeq"].unique()
+        valid_pos_seqs = np.array(list(set(valid_pos_seqs) & set(valid_bld_seqs)))
+
+        # --- TEST ---
+        df_bld_test = df_bld[df_bld['patient_id'].isin(np.concatenate([train_ids, test_ids]))]
+        test_pos_seqs = build_disease_panel(df_bld_test, df_hlt_train, min_healthy_patients=3, pval_threshold=0.1)
+        # keep only panel sequences that actually appear in test patients
+        test_bld_seqs = df_bld[df_bld['patient_id'].isin(test_ids)]["AASeq"].unique()
+        test_pos_seqs = np.array(list(set(test_pos_seqs) & set(test_bld_seqs)))
+
         return train_pos_seqs, valid_pos_seqs, test_pos_seqs
 
     # lists that will hold the valid sequences and their neighbours to avoid recalculating them (if needed)

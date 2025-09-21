@@ -16,7 +16,7 @@ from dataset_handlers.helpers import helper_function_common_aaseq_analysis, proc
 from dataset_handlers.processing_and_filtering import (apply_extra_filter, validate_required_columns, split_patients,
                                                        calculate_positive_sequences, build_patient_masks, finalize_pos_neg_seqs, filter_df)
 from dataset_handlers.losses_utils import LossPreprocessor
-from dataset_handlers.dataset_builder import build_ms_dataset, build_sle_dataset, build_t1d_dataset, build_other_dataset
+from dataset_handlers.dataset_builder import build_disease_healthy_dataset
 
 
 # TODO: Formatting changes:
@@ -28,7 +28,8 @@ class DatasetLoader:
                  filter_num_of_patients=3, filter_num_of_healthy=3, filter_to_inflate=False, ratio=None,
                  remove_seqs_by_len=False, top_percent=None, top_n_seqs=None, extra_filter=False,
                  use_recurrence_loss=False, recurrence_gamma=1.0, display_extra_plots=False,
-                 loss_version=0, run_on_full_data=False, num_test_patients=8, sweep_loader_mode=False, verbose=True):
+                 loss_version=0, run_on_full_data=False, num_test_patients=8, sweep_loader_mode=False, fisher_mode=False,
+                 extract_dataset_info=False, verbose=True):
         self.dataset_type = dataset_type
         self.top_percent = top_percent
         self.top_n_seqs = top_n_seqs
@@ -44,48 +45,12 @@ class DatasetLoader:
         self.synapse_db_path = "data/db/synapse_Mal_ID"
         self.extra_ms_path = 'data/db/tcrdb/special2'
 
-        print('Loading Disease:')
+        print('Loading Basic DFs:')
         df = self.get_all_usable_disease_data(disease='Multiple sclerosis', dataset_type=dataset_type)
-        print('Loading Healthy:')
         df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
 
-        # load from saved dataset if exists
-        saved_df = None
-        if os.path.exists(self.saved_dataframe_path):
-            with open(self.saved_dataframe_path, 'rb') as f:
-                saved_df = pickle.load(f)
-
-        if saved_df is None:
-            # TODO: Extract following to methods (loading and filtering)
-            dataset = build_ms_dataset(self, df, df_h, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
-            if dataset is None:
-                dataset = build_sle_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
-            if dataset is None:
-                dataset = build_t1d_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
-            if dataset is None:
-                dataset = build_other_dataset(self, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
-            if dataset is None:
-                raise ValueError("Invalid dataset type")
-            elif 'hlt_as_ms' in dataset_type:
-                df_bld, df_excess_hlt, df_hlt = dataset
-                df_excess_hlt = filter_df(df_excess_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
-            else:
-                df_bld, df_hlt = dataset
-
-            # TODO: Check that filtering here will not crash due to large amounts of data
-            # Filtering dataframes
-            df_bld = filter_df(df_bld, top_percent, top_n_seqs, extra_filter=extra_filter)
-            df_hlt = filter_df(df_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
-
-            # Applying additional filtering if needed
-            if extra_filter:
-                df_bld, df_hlt = apply_extra_filter(df_bld, df_hlt, top_n_seqs=top_n_seqs)
-
-            # saving dataframes to file
-            with open(self.saved_dataframe_path, 'wb') as f:
-                pickle.dump((df_bld, df_hlt), f)
-        else:
-            df_bld, df_hlt = saved_df
+        print('Loading Datasets:')
+        df_bld, df_hlt = self.load_dataset(dataset_type, df, df_h, extra_filter, top_percent, top_n_seqs, get_df_excess_hlt=False)
 
         if verbose:
             print('Done loading datasets.')
@@ -95,6 +60,15 @@ class DatasetLoader:
 
         # Display extra plots if needed
         if display_extra_plots:
+            from inference.plot_dataset import display_background_top_n_sequences_model_figure
+            def wrapper_load_dataset(dataset_type_wrap, top_percent_wrap=None, top_n_seqs_wrap=None):
+                return self.load_dataset(dataset_type_wrap, df, df_h, extra_filter, top_percent=top_percent_wrap, top_n_seqs=top_n_seqs_wrap, costume_df_type=True, get_df_excess_hlt=False)
+                # return build_disease_healthy_dataset(self, dataset_type_wrap, df, df_h, top_n_seqs=top_percent_wrap, top_percent=top_n_seqs_wrap)
+            def wrapper_common_aaseq_analysis(df_wrap, num_of_patients_wrap, mode=1, max_combinations=10000, std_val='percent_of_total'):
+                return self.common_aaseq_analysis(df_wrap, num_of_patients_wrap, mode=mode, max_combinations=max_combinations, std_val=std_val, return_raw_std_vals=True)
+            display_background_top_n_sequences_model_figure(wrapper_load_dataset, wrapper_common_aaseq_analysis, df_bld, df_hlt,
+                                                            dataset_type, num_of_patients=filter_num_of_patients, num_of_healthy=filter_num_of_healthy)
+
             # For disease group
             for study_id in df_bld['study_id'].unique():
                 df_study = df_bld[df_bld['study_id'] == study_id]
@@ -131,15 +105,18 @@ class DatasetLoader:
         pos_seqs_res = calculate_positive_sequences(df_bld, df_hlt, dataset_type, self.cache_sequences_path,
                                                     train_patient_ids, valid_patient_ids, test_patient_ids,
                                                     filter_num_of_patients, filter_num_of_healthy, filter_to_inflate,
-                                                    extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, verbose)
+                                                    extra_filter, k_fold, top_percent, top_n_seqs, sweep_loader_mode, fisher_mode, verbose)
         train_pos_seqs, valid_pos_seqs, test_pos_seqs = pos_seqs_res
+        print(f"For {top_n_seqs}k, disease_{filter_num_of_patients}, healthy_{filter_num_of_healthy}, inflate({filter_to_inflate}): "
+              f"Train Pos: {len(train_pos_seqs)}, Valid Pos: {len(valid_pos_seqs)}, Test Pos: {len(test_pos_seqs)}")
 
         # TODO: This code is for the case where we tested adding healthy to the MS dataset and only then running the code. Consider removing now!
         #  It is located in this position of the code because I wanted to calculate positives first
         #  without those injected healthy patients and only then add them to the data.
         if 'tcrdb2' in dataset_type and '_hlt_as_ms' in dataset_type:
             # append df_excess_hlt to the df_bld set and add positives to train accordingly:
-            df_bld = pd.concat([df_bld, df_excess_hlt], axis=0, ignore_index=True)
+            # df_bld = pd.concat([df_bld, df_excess_hlt], axis=0, ignore_index=True)
+            raise NotImplementedError("Check if this part is needed! (Regarding '_hlt_as_ms' in dataset_type and df_excess_hlt)")
 
         # make sure that there is no intersection between train, valid and test sequences
         train_pos_seqs = np.array(list(set(train_pos_seqs) - set(np.concatenate((valid_pos_seqs, test_pos_seqs)))))
@@ -218,6 +195,13 @@ class DatasetLoader:
 
         if verbose:
             print('Done.')
+
+        if extract_dataset_info:
+            from dataset_handlers.cache_dataset_information import extract_dataset_information_function
+            extract_dataset_information_function(dataset_type, filter_num_of_patients, filter_num_of_healthy,
+                                                 filter_to_inflate, top_n_seqs, train_pos_seqs, valid_pos_seqs, test_pos_seqs,
+                                                 neg_seqs, valid_neg_seqs, test_neg_seqs, train_patient_ids, valid_patient_ids, test_patient_ids,
+                                                 df_bld, df_hlt)
 
         if use_similar_negatives:
             neg_seqs = self.use_similar_negatives_handler(neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition)
@@ -317,6 +301,36 @@ class DatasetLoader:
         self.aaseq_to_ratio = self.losses_preprocessor.aaseq_to_ratio
         self.aaseq_to_distance = self.losses_preprocessor.aaseq_to_distance
         self.aaseq_to_recurrence = self.losses_preprocessor.aaseq_to_recurrence
+
+    def load_dataset(self, dataset_type, df, df_h, extra_filter, top_percent, top_n_seqs, costume_df_type=False, get_df_excess_hlt=False):
+        df_excess_hlt = None
+        # load from saved dataset if exists
+        saved_df = None
+        if costume_df_type:
+            saved_dataframe_path = os.path.join(self.cache_dataframes_path, f"{dataset_type}_df.pkl")
+        else:
+            saved_dataframe_path = self.saved_dataframe_path
+        if os.path.exists(saved_dataframe_path):
+            with open(saved_dataframe_path, 'rb') as f:
+                saved_df = pickle.load(f)
+        if saved_df is None:
+            dataset = build_disease_healthy_dataset(self, dataset_type, df, df_h, top_n_seqs, top_percent)
+            if 'hlt_as_ms' in dataset_type:
+                df_bld, df_excess_hlt, df_hlt = dataset
+                df_excess_hlt = filter_df(df_excess_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
+            else:
+                df_bld, df_hlt = dataset
+
+            # Filtering dataframes
+            df_bld = filter_df(df_bld, top_percent, top_n_seqs, extra_filter=extra_filter)
+            df_hlt = filter_df(df_hlt, top_percent, top_n_seqs, extra_filter=extra_filter)
+
+            # saving dataframes to file
+            with open(saved_dataframe_path, 'wb') as f:
+                pickle.dump((df_bld, df_hlt), f)
+        else:
+            df_bld, df_hlt = saved_df
+        return (df_bld, df_hlt) if not get_df_excess_hlt else (df_bld, df_excess_hlt, df_hlt)
 
     def use_similar_negatives_handler(self, neg_seqs, train_pos_seqs, neg_pos_ratio, neg_partition):
         similar_neg_cache_path = os.path.join(self.cache_path, '/similar_negatives')
@@ -471,7 +485,6 @@ class DatasetLoader:
             study_ids = [STUDY_ID4]
         elif disease == 'Multiple sclerosis':
             study_ids = [STUDY_ID8, STUDY_ID6, STUDY_ID7]
-            # study_ids = [STUDY_ID6, STUDY_ID7, STUDY_ID8]  # TODO: Change back to this order!
         elif disease == 'CMV':  # Cytomegalovirus
             study_ids = [STUDY_ID9, STUDY_ID10, STUDY_ID11]
         else:
@@ -721,7 +734,8 @@ class DatasetLoader:
         # The result is a set of valid sequences
         return valid_seqs_set
 
-    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=50000, std_val='percent_of_total'):
+    def common_aaseq_analysis(self, df, num_of_patients, lev_dist_accept=0, mode=1, max_combinations=50000,
+                              std_val='percent_of_total', iqr_instead_std=False, return_raw_std_vals=False):
 
         # Select the unique patients
         unique_patients = df['patient_id'].unique()
@@ -794,9 +808,16 @@ class DatasetLoader:
             'percent_of_max': sum(r['percent_of_max'] for r in results) / len(results)
         }
 
-        # Calculate std for the given value
-        std_values = np.std(values_to_std)
-
+        if return_raw_std_vals:
+            return mean_results, values_to_std
+        if iqr_instead_std:
+            q75, q25 = np.percentile(values_to_std, [75, 25])
+            iqr = q75 - q25
+            robust_std = iqr / 1.349  # convert IQR to "std-like" measure
+            std_values = robust_std
+        else:
+            # Calculate std for the given value
+            std_values = np.std(values_to_std)
         return mean_results, std_values
 
     def get_ms_extra_bld_dataframe(self, top_percent=None, top_n_seqs=None, df_bld=None):

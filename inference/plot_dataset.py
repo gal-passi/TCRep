@@ -4,6 +4,8 @@ import numpy as np
 from itertools import chain
 import matplotlib.pyplot as plt
 import seaborn as sns
+from dataset_handlers.processing_and_filtering import filter_df
+import pickle
 
 
 def display_ratio_figures(df_bld, positive_seqs, neg_seqs, aaseq_to_ratio, dataset_type, dpi=600, bin_num=200, threshold_steps=1000):
@@ -428,4 +430,151 @@ def display_multiple_common_sequences_figure(dataset_loader, df_dict, dataset_ty
     # plt.savefig(os.path.join(base_plot_save_path, 'plot_common_sequences.png'))
     plt.show()
     pass
+
+
+def display_background_top_n_sequences_model_figure(wrapper_load_dataset, wrapper_common_aaseq_analysis, df_bld, df_hlt,
+                                                    dataset_type, num_of_patients=3, num_of_healthy=3,
+                                                    max_combs=15000, value_to_take='percent_of_total', use_pos_per_topn=False, use_num_common_markersize=False):
+    possible_patients = sorted(df_bld['patient_id'].unique())
+    possible_healthy = sorted(df_hlt['patient_id'].unique())
+    # pick 60 random patients from disease and healthy groups (using local np rng variable)
+    rng = np.random.default_rng(42)
+    selected_patients = rng.choice(possible_patients, size=min(60, len(possible_patients)), replace=False)
+    selected_healthy = rng.choice(possible_healthy, size=min(60, len(possible_healthy)), replace=False)
+    positives_per_topn = [(20, 29507), (17, 20311), (15, 17022), (12, 16747), (10, 12273), (7, 11182), (5, 8440)][::-1]
+    use_pos_per_topn = num_of_patients == 3 and num_of_healthy == 3 and use_pos_per_topn and not use_num_common_markersize
+
+    x_diseases = []
+    x_diseases_std = []
+    x_diseases_num_common = []
+    x_healthies = []
+    x_healthies_std = []
+    x_healthies_num_common = []
+    top_n_seqs_lst = [5, 7, 10, 12, 15, 17, 20]
+    for top_n in top_n_seqs_lst:
+        print(f"Top {top_n}k sequences:")
+        dataset_type_tmp = dataset_type[:-3] + f"{top_n}k"
+        dataset_tmp = wrapper_load_dataset(dataset_type_tmp, top_n_seqs_wrap=top_n)
+        df_disease, df_healthy = dataset_tmp
+
+        # filter df_disease and df_healthy to only include selected patients
+        df_disease = df_disease[df_disease['patient_id'].isin(selected_patients)]
+        df_healthy = df_healthy[df_healthy['patient_id'].isin(selected_healthy)]
+
+        x_disease_pair = wrapper_common_aaseq_analysis(df_disease, num_of_patients, mode=1, max_combinations=max_combs, std_val=value_to_take)
+        x_disease_result = x_disease_pair[0]
+        x_disease = x_disease_result[value_to_take]
+        x_disease_std = x_disease_pair[1]
+
+        x_healthy_pair = wrapper_common_aaseq_analysis(df_healthy, num_of_healthy, mode=1, max_combinations=max_combs, std_val=value_to_take)
+        x_healthy_result = x_healthy_pair[0]
+        x_healthy = x_healthy_result[value_to_take]
+        x_healthy_std = x_healthy_pair[1]
+
+        x_diseases.append(x_disease)
+        x_diseases_std.append(x_disease_std)
+        x_diseases_num_common.append(x_disease_result['num_common'])
+        x_healthies.append(x_healthy)
+        x_healthies_std.append(x_healthy_std)
+        x_healthies_num_common.append(x_healthy_result['num_common'])
+
+    # pickle save of x_diseases, x_diseases_std, x_diseases_num_common, x_healthies, x_healthies_std, x_healthies_num_common, top_n_seqs_lst
+    # with open(f"cache/datasets_information/{dataset_type[:-8]}/background_data_d{num_of_patients}.h{num_of_healthy}.pkl", "wb") as f:
+    #     pickle.dump((x_diseases, x_diseases_std, x_diseases_num_common, x_healthies, x_healthies_std, x_healthies_num_common, top_n_seqs_lst), f)
+
+    # plotting
+    plt.figure(figsize=(6, 6), dpi=600)
+    fontsize = 14
+    ax = plt.gca()
+    for spine in ax.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(1.0)
+    if use_pos_per_topn:
+        # like: plt.plot(top_n_seqs_lst, x_diseases, label="Patients", color="#FFA500", marker='o'), but add markersize according to positives_per_topn list
+        marker_sizes = np.array([x[1] for x in positives_per_topn])
+        marker_sizes = marker_sizes - min(marker_sizes)
+        marker_sizes = marker_sizes / max(marker_sizes) * 150 + 50
+        plt.plot(top_n_seqs_lst, x_diseases, label="Patients", color="#FFA500", linewidth=1)  # line only
+        plt.scatter(top_n_seqs_lst, x_diseases, color="#FFA500", s=marker_sizes, zorder=5)  # variable dots
+        plt.plot(top_n_seqs_lst, x_healthies, label="Healthy", color="#7BC8F6", marker='o')
+    elif use_num_common_markersize:
+        marker_sizes_disease = np.array(x_diseases_num_common) - min(x_diseases_num_common)
+        marker_sizes_disease /= max(marker_sizes_disease)
+        marker_sizes_healthy = np.array(x_healthies_num_common) - min(x_healthies_num_common)
+        marker_sizes_healthy /= max(marker_sizes_healthy)
+        marker_sizes_disease = marker_sizes_disease * 150 + 50
+        marker_sizes_healthy = marker_sizes_healthy * 150 + 50
+        plt.plot(top_n_seqs_lst, x_diseases, label="Patients", color="#FFA500", linewidth=1)
+        plt.scatter(top_n_seqs_lst, x_diseases, color="#FFA500", s=marker_sizes_disease, zorder=5)
+        plt.plot(top_n_seqs_lst, x_healthies, label="Healthy", color="#7BC8F6", linewidth=1)
+        plt.scatter(top_n_seqs_lst, x_healthies, color="#7BC8F6", s=marker_sizes_healthy, zorder=5)
+    else:
+        plt.plot(top_n_seqs_lst, x_diseases, label="Patients", color="#FFA500", marker='o', markersize=8)
+        plt.plot(top_n_seqs_lst, x_healthies, label="Healthy", color="#7BC8F6", marker='o', markersize=8)
+    def calc_error(x, q=75):
+        q_upper, q_lower = np.percentile(x, [q, 100 - q])
+        iqr = q_upper - q_lower
+        robust_std = iqr / 1.349  # convert IQR to "std-like" measure
+        return robust_std
+    x_disease_err = np.array([calc_error(x) for x in x_diseases_std])
+    x_healthies_err = np.array([calc_error(x) for x in x_healthies_std])
+    # add error bars as filled area
+    plt.fill_between(top_n_seqs_lst, np.array(x_diseases) - x_disease_err,
+                     np.array(x_diseases) + x_disease_err, color="#FFA500", alpha=0.14)
+    plt.fill_between(top_n_seqs_lst, np.array(x_healthies) - x_healthies_err,
+                     np.array(x_healthies) + x_healthies_err, color="#7BC8F6", alpha=0.15)
+    x_disease_err = np.array([calc_error(x, q=60) for x in x_diseases_std])
+    x_healthies_err = np.array([calc_error(x, q=60) for x in x_healthies_std])
+    plt.fill_between(top_n_seqs_lst, np.array(x_diseases) - x_disease_err,
+                     np.array(x_diseases) + x_disease_err, color="#FFA500", alpha=0.16)
+    plt.fill_between(top_n_seqs_lst, np.array(x_healthies) - x_healthies_err,
+                     np.array(x_healthies) + x_healthies_err, color="#7BC8F6", alpha=0.26)
+    for i, txt in enumerate(x_diseases):
+        if i == 5:
+            offset = (0, -20)
+        else:
+            offset = (0, 10)
+        plt.annotate(f"{txt:.2f}",
+                     (top_n_seqs_lst[i], x_diseases[i]),
+                     textcoords="offset points",
+                     xytext=offset,
+                     ha='center',
+                     fontsize=fontsize)
+    # for i, txt in enumerate(x_diseases):
+    #     plt.annotate(f"{txt:.2f}", (top_n_seqs_lst[i], x_diseases[i]), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=fontsize)
+    for i, txt in enumerate(x_healthies):
+        plt.annotate(f"{txt:.2f}", (top_n_seqs_lst[i], x_healthies[i]), textcoords="offset points", xytext=(0, 10), ha='center', fontsize=fontsize)
+    plt.xlabel("Top N Sequences (Thousands)", fontsize=fontsize + 2)
+    plt.ylabel("Percentage of Common Sequences", fontsize=fontsize + 2)
+    # plt.title("Percentage of Common Sequences vs Top N Sequences", fontsize=fontsize)
+    plt.ylim(-0.025, 0.49)
+    # plt.ylim(min(min(x_diseases), min(x_healthies)) - 0.025, max(max(x_diseases), max(x_healthies)) * 1.1)
+    plt.xticks(top_n_seqs_lst, fontsize=fontsize)
+    plt.yticks(fontsize=fontsize, ticks=np.arange(0, 0.5, 0.1))
+    plt.tight_layout()
+    plt.legend(framealpha=1.0, fontsize=fontsize)
+    os.makedirs(f"plots/common_seqs/{dataset_type[:-8]}", exist_ok=True)
+    if use_num_common_markersize:
+        metadata_name = "_num_common_markersize"
+    elif use_pos_per_topn:
+        metadata_name = "_positives_per_topn_markersize"
+    else:
+        metadata_name = ""
+    plt.savefig(f"plots/common_seqs/{dataset_type[:-8]}/background{metadata_name}_d{num_of_patients}.h{num_of_healthy}.png")
+    plt.show()
+    pass
+    exit(0)
+
+
+# VALUES OF USING MS: (about 5000 combinations max), (d=3,h=3)
+# x_diseases, x_diseases_std, x_diseases_num_common, x_healthies, x_healthies_std, x_healthies_num_common = ([0.2795126057722363, 0.28591238845895617, 0.2959588851055297, 0.2729448900857168, 0.2974419908532758, 0.2869916832830128, 0.27429219762815105], [0.4106126432522795, 0.4060239284024549, 0.37447192838338167, 0.32270263951779926, 0.3097617179307628, 0.2927543883215102, 0.22900267693656562], [58.5596, 86.9002, 135.1578, 176.803, 224.2084, 248.6418, 297.993], [0.05352490380092235, 0.08298810799457529, 0.1189856398313361, 0.15308367546928808, 0.19839663105729516, 0.2287788306440118, 0.3205993793724343], [0.09050303105014607, 0.12292624919562507, 0.17418149410344325, 0.18384742713065522, 0.21929576028669573, 0.20960862482580742, 0.24004790278231955], [15.4466, 34.8018, 87.4318, 185.2924, 303.9572, 422.2288, 670.281])
+# positives_per_topn = [(20, 29507), (17, 20311), (15, 17022), (12, 16747), (10, 12273), (7, 11182), (5, 8440)]
+#
+# Old:
+# x_diseases, x_healthies = ([0.21397144835741966, 0.22693402844148589, 0.23535420194141768, 0.24256527777898937, 0.24961090419707493, 0.25389163380619323, 0.25522848644601787], [0.29821382238721594, 0.29821382238721594, 0.29821382238721594, 0.29821382238721594, 0.29821382238721594, 0.29821382238721594, 0.29821382238721594])
+# x_diseases_std, x_healthies_std = ([0.17001466811852992, 0.16028585981531132, 0.15310538280199465, 0.14844809529730568, 0.14359903000517413, 0.14080844216902985, 0.13951895164505934], [0.19272245882652694, 0.19272245882652694, 0.19272245882652694, 0.19272245882652694, 0.19272245882652694, 0.19272245882652694, 0.19272245882652694])
+
+# VALUES OF USING SLE: (about 5000 combinations max), (d=3,h=3), (No positives_per_topn available)
+# x_diseases, x_diseases_std, x_diseases_num_common, x_healthies, x_healthies_std, x_healthies_num_common = ([0.12215009569840901, 0.1308212874823904, 0.13650884532946492, 0.13949168206511967, 0.14642858503434142, 0.14738740384391869, 0.15938390314288495], [0.07116410360414938, 0.07301962680273916, 0.06907161158086068, 0.06801288698862934, 0.07077520322532871, 0.06881667192026708, 0.0748420265865219], [25.3002, 34.828, 59.4446, 67.1616, 93.1182, 107.5898, 137.1978], [0.1044895062686026, 0.10816588987253895, 0.10223301927474347, 0.10889114804892941, 0.11731117907070536, 0.12238296264571691, 0.1621762253519902], [0.08298392043534074, 0.08068601550842336, 0.06786892516061076, 0.06982497132245372, 0.07158112529311941, 0.07323622408050343, 0.08307317075859771], [23.3208, 30.8388, 62.7952, 75.593, 93.3006, 106.517, 151.1002])
+
 

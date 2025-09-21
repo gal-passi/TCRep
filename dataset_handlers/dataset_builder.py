@@ -2,14 +2,14 @@ import numpy as np
 import pandas as pd
 
 
-def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=None):
+def build_ms_dataset(dataset_loader, df, df_h, dataset_type, top_percent=None, top_n_seqs=None):
     if dataset_type == 'ms' or 'ms_tcrdb2' in dataset_type or dataset_type == 'ms_no_healthy_ms':
         df_bld, df_hlt = df, df_h
         # Special case for TCRDB2 datasets!
         if 'tcrdb2' in dataset_type:
             if 'plus_hlt_article' in dataset_type:
                 # add healthy from article
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_article_hlt = df_article[df_article["condition"] == "Healthy"]
                 if top_n_seqs is not None:
                     topk = int(top_n_seqs * 1000)
@@ -24,7 +24,7 @@ def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=
                 df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
             if 'extra_ms' in dataset_type:
                 # Add to Blood df
-                df_extra_bld = self.get_ms_extra_bld_dataframe(top_percent=top_percent, top_n_seqs=top_n_seqs,
+                df_extra_bld = dataset_loader.get_ms_extra_bld_dataframe(top_percent=top_percent, top_n_seqs=top_n_seqs,
                                                                df_bld=df_bld)
                 df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
             if 'hlt_as_ms' in dataset_type:
@@ -39,7 +39,7 @@ def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=
                 # remove from hlt those patients that were picked
                 df_hlt = df_hlt[~df_hlt['patient_id'].isin(chosen_patient_ids)]
             if 'hlt_article' in dataset_type:
-                df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+                df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
                 df_hlt_tmp = df_article[df_article["condition"] == "Healthy"]
                 if 'plus_hlt_article' in dataset_type:
                     df_hlt = pd.concat([df_hlt, df_hlt_tmp], axis=0, ignore_index=True)
@@ -49,34 +49,34 @@ def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=
     elif dataset_type == 'ms_hlt_article':
         df_bld, df_hlt = df, df_h
         # Only Healthy df from article
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=True, get_all=True)
-        # df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=True, get_all=True)
+        # df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_hlt = df_article[df_article["condition"] == "Healthy"]
     elif dataset_type == 'ms_plus_hlt_article':
         df_bld, df_hlt = df, df_h
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_article_hlt = df_article[df_article["condition"] == "Healthy"]
         df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
     elif dataset_type == 'ms_extra':
         df_bld, df_hlt = df, df_h
         # Add to Blood df
-        df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+        df_extra_bld = dataset_loader.get_ms_extra_bld_dataframe(df_bld)
         df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
     elif dataset_type == 'ms_extra_hlt_article':
         df_bld, df_hlt = df, df_h
         # Add to Blood df
-        df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+        df_extra_bld = dataset_loader.get_ms_extra_bld_dataframe(df_bld)
         df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
         # Only Healthy df from article
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_hlt = df_article[df_article["condition"] == "Healthy"]
     elif dataset_type == 'ms_extra_plus_hlt_article':
         df_bld, df_hlt = df, df_h
         # Add to Blood df
-        df_extra_bld = self.get_ms_extra_bld_dataframe(df_bld)
+        df_extra_bld = dataset_loader.get_ms_extra_bld_dataframe(df_bld)
         df_bld = pd.concat([df_bld, df_extra_bld], axis=0, ignore_index=True)
         # Add to Healthy df
-        df_article = self.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
+        df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_article_hlt = df_article[df_article["condition"] == "Healthy"]
         df_hlt = pd.concat([df_hlt, df_article_hlt], axis=0, ignore_index=True)
     else:
@@ -87,14 +87,14 @@ def build_ms_dataset(self, df, df_h, dataset_type, top_percent=None, top_n_seqs=
 
 def build_sle_dataset(dataset_loader, dataset_type, top_percent=None, top_n_seqs=None):
     df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-    if dataset_type == 'article_sle':
+    if 'article_sle' in dataset_type:
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
-    elif dataset_type == 'article_sle_hlt_ms_no_healthy_ms':
+    elif 'article_sle_hlt_ms_no_healthy_ms' in dataset_type:
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
         df_hlt = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-    elif dataset_type == 'article_sle_plus_hlt_ms_no_healthy_ms':
+    elif 'article_sle_plus_hlt_ms_no_healthy_ms' in dataset_type:
         df_bld = df_article[df_article["condition"] == "Lupus"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
@@ -108,14 +108,14 @@ def build_sle_dataset(dataset_loader, dataset_type, top_percent=None, top_n_seqs
 
 def build_t1d_dataset(dataset_loader, dataset_type, top_percent=None, top_n_seqs=None):
     df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
-    if dataset_type == 't1d':
+    if 't1d' in dataset_type:
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
-    elif dataset_type == 't1d_hlt_ms_no_healthy_ms':
+    elif 't1d_hlt_ms_no_healthy_ms' in dataset_type:
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
         df_hlt = dataset_loader.get_all_usable_healthy_data(dataset_type=f'ms_tcrdb2_no_healthy_ms' + temp_extra_type)
-    elif dataset_type == 't1d_plus_hlt_ms_no_healthy_ms':
+    elif 't1d_plus_hlt_ms_no_healthy_ms' in dataset_type:
         df_bld = df_article[df_article["condition"] == "T1D"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
         temp_extra_type = f'_top_{top_n_seqs}k' if top_n_seqs is not None else ''
@@ -136,21 +136,34 @@ def build_other_dataset(dataset_loader, dataset_type, top_percent=None, top_n_se
         df_hlt = df_cmv[df_cmv["condition"] == "Healthy"]
         return df_bld, df_hlt
 
-    if dataset_type == 'article_hiv':
+    if 'article_hiv' in dataset_type:
         df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "HIV"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
-    elif dataset_type == 'article_covid19':
+    elif 'article_covid19' in dataset_type:
         df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "Covid19"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
-    elif dataset_type == 'article_influenza':
+    elif 'article_influenza' in dataset_type:
         df_article = dataset_loader.get_full_healthy_synapse_mal_id_dataframe(to_recalculate=False, get_all=True)
         df_bld = df_article[df_article["condition"] == "Influenza"]  # condition options: ['HIV' 'Healthy' 'T1D' 'Lupus' 'Covid19']
         df_hlt = df_article[df_article["condition"] == "Healthy"]
-    elif dataset_type == 'jia_tcrdb2':
+    elif 'jia_tcrdb2' in dataset_type:
         raise NotImplementedError("JIA TCRDB2 dataset is not implemented yet!")
     else:
         return None
 
     return df_bld, df_hlt
+
+def build_disease_healthy_dataset(dataset_loader, dataset_type, df, df_h, top_n_seqs, top_percent):
+    dataset = build_ms_dataset(dataset_loader, df, df_h, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+    if dataset is None:
+        dataset = build_sle_dataset(dataset_loader, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+    if dataset is None:
+        dataset = build_t1d_dataset(dataset_loader, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+    if dataset is None:
+        dataset = build_other_dataset(dataset_loader, dataset_type, top_percent=top_percent, top_n_seqs=top_n_seqs)
+    if dataset is None:
+        raise ValueError("Invalid dataset type")
+    return dataset
+

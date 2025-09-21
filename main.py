@@ -43,7 +43,7 @@ inference_dict = {
 def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_ratio, pos_weights,
               learning_rate, reg_coef, freeze_embed_model, special_criterion, embedding_lr, ch_dropout,
               scheduler_type, cvc_layers_to_train, k_fold, lora, masking, ratio, use_dist_loss, dist_param, use_recurrence_loss, recurrence_gamma, ch_type, neg_partition,
-              use_similar_negatives, filter_num_of_patients, filter_to_inflate, change_negatives, sample_plots, optimizer_type, device):
+              use_similar_negatives, filter_num_of_patients, filter_num_of_healthy, filter_to_inflate, change_negatives, sample_plots, optimizer_type, device):
     wandb.login(key="c8ebb98c8047d30555fd4d042ea969052ca18607")  # Replace with your API key
 
     # Start a new wandb run to track this script.
@@ -79,6 +79,7 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
             "neg_partition": neg_partition,
             "use_similar_negatives": use_similar_negatives,
             "filter_num_of_patients": filter_num_of_patients,
+            "filter_num_of_healthy": filter_num_of_healthy,
             "filter_to_inflate": filter_to_inflate,
             "change_negatives": change_negatives,
             "sample_plots": sample_plots,
@@ -92,7 +93,8 @@ def wand_init(model_type, loss_type, dataset_type, epochs, batch_size, neg_pos_r
 def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, use_dist_loss=False, dist_param=0.0, neg_partition=0,
                         use_similar_negatives=False, neg_pos_ratio=10, filter_num_of_patients=None, filter_num_of_healthy=None, ratio=None,
                         filter_to_inflate=False, remove_seqs_by_len=None, top_percent=None, top_n_seqs=None, extra_filter=False,
-                       use_recurrence_loss=False, recurrence_gamma=1.0, loss_version=0, run_on_full_data=False, sweep_loader_mode=False, verbose=True):
+                       use_recurrence_loss=False, recurrence_gamma=1.0, loss_version=0, run_on_full_data=False, sweep_loader_mode=False, fisher_mode=False,
+                       extract_dataset_info=False, verbose=True):
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
@@ -160,7 +162,8 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, use_dist_loss=Fal
                                    ratio=ratio, filter_to_inflate=filter_to_inflate,
                                    remove_seqs_by_len=remove_seqs_by_len, top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
                                    use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma, loss_version=loss_version,
-                                   run_on_full_data=run_on_full_data, num_test_patients=num_test_patients, sweep_loader_mode=sweep_loader_mode, verbose=verbose)
+                                   run_on_full_data=run_on_full_data, num_test_patients=num_test_patients,
+                                   sweep_loader_mode=sweep_loader_mode, fisher_mode=fisher_mode, extract_dataset_info=extract_dataset_info, verbose=verbose)
     return dataset_loader
 
 
@@ -204,7 +207,7 @@ def sweep_model():
     extra_ms_from_pregnant = wandb.config.extra_ms_from_pregnant
     plus_healthy_mal_id = wandb.config.plus_healthy_mal_id
     use_healthy_as_ms = wandb.config.use_healthy_as_ms
-    # ch_type = wandb.config.ch_type
+    ch_type = wandb.config.ch_type
     # changing_negatives = wandb.config.changing_negatives
     changing_negatives = False
     sample_plots = wandb.config.sample_plots
@@ -212,6 +215,7 @@ def sweep_model():
     sweep_loader_mode = wandb.config.sweep_loader_mode
     optimizer_type = 'adam'  # TODO: We can add this to sweep config file!
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    reshef_negative_part = 0
 
     if top_percent == 'None':
         top_percent = None
@@ -315,8 +319,7 @@ def do_sweep(sweep_version, project_name='TCRep_Sweeps'):
             f.write(sweep_id)
         print(f"Created new sweep: {sweep_id}")
 
-    wandb.agent(sweep_id, function=sweep_model, count=50, project=project_name,
-                entity='amir-weinfeld')  # Run sweeps one after the other for count runs
+    wandb.agent(sweep_id, function=sweep_model, count=50, project=project_name, entity='amir-weinfeld')  # Run sweeps one after the other for count runs
 
 
 def get_arg_parser():
@@ -396,6 +399,8 @@ def get_arg_parser():
     parser.add_argument('-dont_cache_inference', action='store_true', default=False, help='Whether to cache the inference results or not. If True, it will not cache the results and will run inference every time.')
     parser.add_argument('-filter_uncertain_seqs', action='store_true', default=False, help='Whether to filter uncertain sequences in the inference classification v2 part.')
     parser.add_argument('-sweep_loader_mode', action='store_true', default=False, help='Whether to use dataloader in a simpler way that will calculate positives with all patients and split positives to both test/valid 20% randomly. Useful when we do not want to overfit to a single fold.')
+    parser.add_argument('-fisher_mode', action='store_true', default=False, help='.') #TODO: ADD!
+    parser.add_argument('--extract_dataset_info', action='store_true', default=False, help='Whether to extract information to cache about num of positives of the dataset with the given parameters.')
 
     return parser
 
@@ -439,6 +444,8 @@ def validate_config(args):
         "Reshef filter train must be on when reshef inference is on"
     assert not (args.sweep_loader_mode and args.k_fold > 0), \
         "sweep_loader_mode can be true only when k_fold is 0"
+    assert not (args.extract_dataset_info and (args.k_fold > 0 or not args.no_wandb_log)), \
+        "extract_dataset_info can be true only when k_fold is 0 and we are not logging to wandb"
 
 
 def update_dataset_type(dataset_type: str,
@@ -448,26 +455,28 @@ def update_dataset_type(dataset_type: str,
                         top_percent: int | None = None,
                         top_n_seqs: int | None = None,
                         run_on_full_data: bool = False,
-                        sweep_loader_mode: bool = False) -> str:
+                        sweep_loader_mode: bool = False,
+                        fisher_mode: bool = False) -> str:
     """
     Modify dataset_type string based on options.
     Returns a new dataset_type string (does not mutate inputs).
     """
-    if "ms_tcrdb2" in dataset_type:
-        if plus_healthy_mal_id:
-            dataset_type += "_plus_hlt_article"
-        if extra_ms_from_pregnant:
-            dataset_type += "_extra_ms"
-        if use_healthy_as_ms:
-            dataset_type += "_hlt_as_ms"
-        if top_percent is not None:
-            dataset_type += f"_top_{top_percent}"
-        if top_n_seqs is not None:
-            dataset_type += f"_top_{top_n_seqs}k"
-        if run_on_full_data:
-            dataset_type += "_run_on_full_data"
-        if sweep_loader_mode:
-            dataset_type += "_sweep_loader_mode"
+    if plus_healthy_mal_id:
+        dataset_type += "_plus_hlt_article"
+    if extra_ms_from_pregnant:
+        dataset_type += "_extra_ms"
+    if use_healthy_as_ms:
+        dataset_type += "_hlt_as_ms"
+    if top_percent is not None:
+        dataset_type += f"_top_{top_percent}"
+    if top_n_seqs is not None:
+        dataset_type += f"_top_{top_n_seqs}k"
+    if run_on_full_data:
+        dataset_type += "_run_on_full_data"
+    if sweep_loader_mode:
+        dataset_type += "_sweep_loader_mode"
+    if fisher_mode:
+        dataset_type += "_fisher_mode"
     return dataset_type
 
 
@@ -534,7 +543,7 @@ if __name__ == '__main__':
     neg_pos_ratio = args.neg_pos_ratio
     pos_weights = args.pos_weights
     learning_rate = args.learning_rate
-    reg_coef = args.reg_coef if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
+    reg_coef = args.regularization_coefficient if loss_type != 'ce' else 0  # Regularization only for 'ce_l2' and 'ce_entropy'
     freeze_embed_model = args.freeze_embed_model if 'cvc' in model_type else False  # Only CVC model can freeze the embedding model
     special_criterion = args.special_criterion
     embedding_lr = args.embedding_lr if special_criterion else 0  # Only used when special_criterion is True
@@ -582,6 +591,8 @@ if __name__ == '__main__':
     dont_cache_inference = args.dont_cache_inference
     filter_uncertain_seqs = args.filter_uncertain_seqs if classification_v2 else False
     sweep_loader_mode = args.sweep_loader_mode
+    fisher_mode = args.fisher_mode
+    extract_dataset_info = args.extract_dataset_info
 
     # Adjust and validate arguments
     args = adjust_args(args)
@@ -594,7 +605,8 @@ if __name__ == '__main__':
         top_percent=args.top_percent,
         top_n_seqs=args.top_n_seqs,
         run_on_full_data=args.run_on_full_data,
-        sweep_loader_mode=args.sweep_loader_mode
+        sweep_loader_mode=args.sweep_loader_mode,
+        fisher_mode=fisher_mode
     )
     print_run_configuration(args)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -606,7 +618,9 @@ if __name__ == '__main__':
                                         filter_num_of_patients=filter_num_of_patients, filter_num_of_healthy=filter_num_of_healthy,
                                         ratio=ratio, filter_to_inflate=filter_to_inflate, remove_seqs_by_len=remove_seqs_by_len,
                                         top_percent=top_percent, top_n_seqs=top_n_seqs, extra_filter=extra_filter,
-                                        use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma, loss_version=loss_version, run_on_full_data=run_on_full_data, verbose=True)
+                                        use_recurrence_loss=use_recurrence_loss, recurrence_gamma=recurrence_gamma,
+                                        loss_version=loss_version, run_on_full_data=run_on_full_data, fisher_mode=fisher_mode,
+                                        extract_dataset_info=extract_dataset_info, verbose=True)
     df_bld, df_hlt = dataset_loader.get_dfs()
     positive_seqs = dataset_loader.positive_seqs
     train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs, test_pos_seqs, test_neg_seqs = dataset_loader.get_seqs()
@@ -620,8 +634,88 @@ if __name__ == '__main__':
     aaseq_to_dist = dataset_loader.get_aaseq_to_distance_func()
     aaseq_to_recurrence = dataset_loader.get_aaseq_to_recurrence_func()
 
+    # TODO: TEST CODE. REMOVE LATER!
+    temp_tests = False
+    if temp_tests:
+        df_bld_train = df_bld[df_bld['patient_id'].isin(train_patient_ids)]
+        df_bld_valid = df_bld[df_bld['patient_id'].isin(np.concatenate([valid_patient_ids, test_patient_ids]))]
+        # df_bld_test = df_bld[df_bld['patient_id'].isin(test_patient_ids)]
+
+        # use seed to split healthy to train/valid/test (20% each for valid/test)
+        rng = np.random.default_rng(seed=42)
+        hlt_patient_ids = sorted(df_hlt['patient_id'].unique())
+        rng.shuffle(hlt_patient_ids)
+        num_hlt = len(hlt_patient_ids)
+        num_hlt_valid = num_hlt_test = num_hlt // 5
+        hlt_valid_ids = set(hlt_patient_ids[:num_hlt_valid])
+        hlt_test_ids = set(hlt_patient_ids[num_hlt_valid:2 * num_hlt_valid])
+        hlt_train_ids = set(hlt_patient_ids[2 * num_hlt_valid:])
+        df_hlt_train = df_hlt[df_hlt['patient_id'].isin(hlt_train_ids)]
+        df_hlt_valid = df_hlt[df_hlt['patient_id'].isin(hlt_valid_ids)]
+        # df_hlt_test = df_hlt[df_hlt['patient_id'].isin(hlt_test_ids)]
+
+        def build_patient_seq_table(df, label):
+            """
+            Build patient-level table:
+            For each AASeq, count how many unique patients have it.
+            """
+            seq_patient_counts = (
+                df.groupby("AASeq")["patient_id"]
+                .nunique()
+                .reset_index(name=f"{label}_patients")
+            )
+            return seq_patient_counts
+        # Disease and healthy patient-level sequence counts
+        disease_counts = build_patient_seq_table(df_bld_train, "disease")
+        healthy_counts = build_patient_seq_table(df_hlt_train, "healthy")
+
+        # Merge into one frequency table
+        freq_table = pd.merge(disease_counts, healthy_counts, on="AASeq", how="outer").fillna(0)
+        total_disease = df_bld_train['patient_id'].nunique()
+        total_healthy = df_hlt_train['patient_id'].nunique()
+
+        from scipy.stats import fisher_exact
+        def fisher_pval(row):
+            table = [
+                [row['disease_patients'], total_disease - row['disease_patients']],
+                [row['healthy_patients'], total_healthy - row['healthy_patients']]
+            ]
+            _, pval = fisher_exact(table, alternative="greater")  # enrichment in disease
+            return pval
+
+        freq_table["pval"] = freq_table.apply(fisher_pval, axis=1)
+        freq_table = freq_table.sort_values("pval")
+
+        # disease_panel = set(freq_table.query("pval < 0.05")["AASeq"].tolist())
+        disease_panel = set(freq_table[(freq_table["healthy_patients"] < 3) & (freq_table["pval"] < 0.1)]["AASeq"].tolist())
+
+        def score_patient(df_patient, disease_panel):
+            seqs = set(df_patient["AASeq"].tolist())
+            overlap = seqs.intersection(disease_panel)
+            return len(overlap), len(overlap) / len(seqs)  # raw count and fraction
+
+        # Score all patients in validation
+        val_scores = []
+        for pid, group in df_bld_valid.groupby("patient_id"):
+            score = score_patient(group, disease_panel)
+            val_scores.append({"patient_id": pid, "label": "disease", "score": score[1]})
+
+        for pid, group in df_hlt_valid.groupby("patient_id"):
+            score = score_patient(group, disease_panel)
+            val_scores.append({"patient_id": pid, "label": "healthy", "score": score[1]})
+
+        val_df = pd.DataFrame(val_scores)
+
+        from sklearn.metrics import roc_auc_score
+
+        y_true = (val_df["label"] == "disease").astype(int)
+        y_scores = val_df["score"]
+
+        auc = roc_auc_score(y_true, y_scores)
+        print("Validation AUC:", auc)
+
     # Run VAE if specified
-    run_vae(args, dataset_loader, device)
+    # run_vae(args, dataset_loader, device)
 
     # Plot dataset information
     plot_all_dataset(dataset_loader, df_bld, df_hlt, dataset_type, train_patient_ids,
@@ -657,6 +751,7 @@ if __name__ == '__main__':
             neg_partition=neg_partition,
             use_similar_negatives=use_similar_negatives,
             filter_num_of_patients=filter_num_of_patients,
+            filter_num_of_healthy=filter_num_of_healthy,
             filter_to_inflate=filter_to_inflate,
             change_negatives=changing_negatives,
             sample_plots=sample_plots,
@@ -694,6 +789,13 @@ if __name__ == '__main__':
         changing_negatives, optimizer_type,
         reshef_inference, reshef_filter_train, reshef_negative_part
     )
+
+    # TODO: Moving here for tests!
+    # Run VAE if specified
+    model_for_vae = build_model(model_type, positive_seqs=positive_seqs, batch_size=batch_size, ch_dropout=ch_dropout,
+                                cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora,
+                                ch_type=ch_type, device=device, reshef_negative_part=reshef_negative_part, args=args)
+    run_vae(args, dataset_loader, device, trained_model, model_for_vae)
 
     # after training
     plot_all_training(

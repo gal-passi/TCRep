@@ -334,7 +334,7 @@ def get_arg_parser():
                      'article_sle', 'article_sle_hlt_ms_no_healthy_ms', 'article_sle_plus_hlt_ms_no_healthy_ms',
                      't1d', 't1d_hlt_ms_no_healthy_ms', 't1d_plus_hlt_ms_no_healthy_ms',
                      'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms', 'ms_tcrdb2_hlt_article',
-                     'ms_tcrdb2_no_healthy_ms_plus_hlt_article',
+                     'ms_tcrdb2_plus_hlt_article', 'ms_tcrdb2_no_healthy_ms_plus_hlt_article',
                      'article_hiv', 'article_covid19', 'article_influenza',
                      'jia_tcrdb2']  # ms is TCRdb Multiple Sclerosis, article is Mal-ID Diabetes Type 1, article 2 is TCR MS CSF dataset, CMV is TCRdb CMV.
     ch_types = ['none', 'v1', 'v2']
@@ -522,6 +522,37 @@ def print_run_configuration(args):
 
 
 if __name__ == '__main__':
+    # import scanpy as sc
+    # import pandas as pd
+    # # Load the dataset
+    # adata = sc.read_h5ad("data/db/zenodo/human_tcr_reference_v2.h5ad")
+    # # Extract only the needed columns
+    # cols = ["CDR3b", "TRBV", "TRBJ", "individual", "number_of_cells"]
+    # df = adata.obs[cols].copy()
+    # # (Optional) remove missing sequences
+    # df = df.dropna(subset=["CDR3b"])
+    # # View the AnnData object structure
+    # print(adata)
+    # meta = pd.read_excel(
+    #     "data/db/zenodo/41421_2025_836_MOESM2_ESM.xlsx",
+    #     skiprows=1
+    # )
+    # # Keep the relevant columns only
+    # meta = meta[["Individual ID", "Tissue", "Disease"]]
+    # # --- Merge metadata into TCR dataframe ---
+    # df = df.merge(
+    #     meta,
+    #     left_on="individual",  # column in df
+    #     right_on="Individual ID",  # column in metadata
+    #     how="left"  # keep all TCR entries
+    # )
+    # # Optionally drop the duplicate key column
+    # df = df.drop(columns=["Individual ID"])
+    # # Count how many unique individuals per disease
+    # unique_counts = df.groupby("Disease")["individual"].nunique().reset_index()
+    # unique_counts = unique_counts.rename(columns={"individual": "num_unique_individuals"})
+    # print(unique_counts)
+
     # Weights & Biases setup
     parser = get_arg_parser()
     args = parser.parse_args()
@@ -714,6 +745,328 @@ if __name__ == '__main__':
         auc = roc_auc_score(y_true, y_scores)
         print("Validation AUC:", auc)
 
+
+    # TODO: The following code is supposed to be code similar to what they did in the Science article of Mal-ID. REMOVE LATER!
+    do_mal_id_training = False
+    if do_mal_id_training:
+        import torch
+        import torch.nn as nn
+        import torch.optim as optim
+        from torch.utils.data import Dataset, DataLoader
+        from sklearn.metrics import roc_auc_score
+        from sklearn.preprocessing import LabelEncoder
+        import numpy as np
+        import pandas as pd
+        from tqdm import tqdm
+        import random
+        import pickle
+
+
+        df_bld_train = df_bld[df_bld['patient_id'].isin(train_patient_ids)]
+        df_bld_valid = df_bld[df_bld['patient_id'].isin(np.concatenate([valid_patient_ids, test_patient_ids]))]
+
+        rng = np.random.default_rng(seed=42)
+        hlt_patient_ids = sorted(df_hlt['patient_id'].unique())
+        rng.shuffle(hlt_patient_ids)
+        num_hlt = len(hlt_patient_ids)
+        num_hlt_valid = num_hlt_test = num_hlt // 5
+        hlt_valid_ids = set(hlt_patient_ids[:num_hlt_valid])
+        hlt_test_ids = set(hlt_patient_ids[num_hlt_valid:2 * num_hlt_valid])
+        hlt_train_ids = set(hlt_patient_ids[2 * num_hlt_valid:])
+        df_hlt_train = df_hlt[df_hlt['patient_id'].isin(hlt_train_ids)]
+        df_hlt_valid = df_hlt[df_hlt['patient_id'].isin(hlt_valid_ids)]
+        # df_hlt_test = df_hlt[df_hlt['patient_id'].isin(hlt_test_ids)]
+
+        # build the model
+        model = build_model(
+            model_type,
+            positive_seqs=positive_seqs,
+            batch_size=batch_size,
+            ch_dropout=ch_dropout,
+            cvc_layers_to_train=cvc_layers_to_train,
+            freeze_embed_model=freeze_embed_model,
+            lora=lora,
+            ch_type=ch_type,
+            device=device,
+            reshef_negative_part=reshef_negative_part,
+            args=args,
+        )
+
+        # ============================================================
+        # 1. Embedding function placeholder
+        # ============================================================
+
+        def sequences_to_onehot(sequences, max_length=None):
+            """Convert amino acid sequences to one-hot encoding"""
+            # Standard amino acids
+            amino_acids = 'ACDEFGHIKLMNPQRSTVWY'
+            aa_to_idx = {aa: idx for idx, aa in enumerate(amino_acids)}
+
+            if max_length is None:
+                max_length = max(len(seq) for seq in sequences)
+
+            encoded_seqs = []
+            for seq in sequences:
+                # Pad or truncate sequence
+                seq = seq[:max_length]
+                seq = seq + 'A' * (max_length - len(seq))  # Pad with 'A'
+
+                # One-hot encoding
+                onehot = np.zeros((max_length, len(amino_acids)))
+                for i, aa in enumerate(seq):
+                    if aa in aa_to_idx:
+                        onehot[i, aa_to_idx[aa]] = 1
+
+                encoded_seqs.append(onehot.flatten())
+
+            return np.array(encoded_seqs)
+
+        def get_tcr_embedding(aa_seq, seq_to_onehot=False) -> np.ndarray:
+            """
+            Placeholder for your embedding model (e.g., ESM-2, ProtBERT, or custom).
+
+            Input:
+                seqs: list of strings, amino acid sequences
+            Output:
+                list of np.ndarray, each of shape (embedding_dim,)
+            """
+            # >>> TODO: replace this with your real embedding model <<<
+            # For now, return a random vector (to allow code to run)
+            if seq_to_onehot:
+                return sequences_to_onehot(aa_seq)
+            with torch.no_grad():
+                return model.get_embeddings(aa_seq).detach().cpu().numpy()
+
+
+        # ============================================================
+        # 2. Dataset class
+        # ============================================================
+
+        class TCRDataset(Dataset):
+            def __init__(self, df, label_encoder, batch_size_embed=330, cache_path=None):
+                """
+                cache_path: optional path to a pickle file for storing/reusing embeddings.
+                """
+                self.df = df.reset_index(drop=True)
+                self.label_encoder = label_encoder
+                self.cache_path = cache_path
+
+                # Determine label: disease = 1, healthy = 0
+                self.labels = [
+                    0 if "health" in str(c).lower() else 1 for c in self.df["condition"]
+                ]
+                self.labels = torch.tensor(self.labels, dtype=torch.float32)
+
+                # Try to load cached embeddings if file exists
+                if cache_path and os.path.exists(cache_path):
+                    print(f"🔁 Loading cached embeddings from: {cache_path}")
+                    with open(cache_path, "rb") as f:
+                        self.embeddings = pickle.load(f)
+
+                    # Sanity check: ensure cache matches dataset
+                    if len(self.embeddings) != len(self.df):
+                        print("⚠️ Cache size mismatch — recomputing embeddings.")
+                        self.embeddings = self._compute_and_cache_embeddings(batch_size_embed)
+                else:
+                    self.embeddings = self._compute_and_cache_embeddings(batch_size_embed)
+
+            def _compute_and_cache_embeddings(self, batch_size_embed):
+                seqs = self.df["AASeq"].tolist()
+                all_embeddings = []
+                print("🧠 Computing embeddings...")
+                for i in tqdm(range(0, len(seqs), batch_size_embed), desc="Embedding sequences"):
+                    batch = seqs[i:i + batch_size_embed]
+                    batch_embs = get_tcr_embedding(batch)
+                    all_embeddings.extend(batch_embs)
+
+                if self.cache_path:
+                    print(f"💾 Saving embeddings to cache: {self.cache_path}")
+                    with open(self.cache_path, "wb") as f:
+                        pickle.dump(all_embeddings, f)
+
+                return all_embeddings
+
+            def __len__(self):
+                return len(self.df)
+
+            def __getitem__(self, idx):
+                emb = torch.tensor(self.embeddings[idx])
+                label = self.labels[idx]
+                trbv_gene = self.df.loc[idx, "Vregion"]
+                patient_id = self.df.loc[idx, "patient_id"]
+                return emb, label, trbv_gene, patient_id
+
+
+        # ============================================================
+        # 3. Simple neural net for sequence-level classification
+        # ============================================================
+
+        class SequenceClassifier(nn.Module):
+            def __init__(self, input_dim=768, hidden_dim=256):
+                super().__init__()
+                self.model = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(0.3),
+                    nn.Linear(hidden_dim, 1),
+                    nn.Sigmoid()
+                )
+
+            def forward(self, x):
+                return self.model(x).squeeze()
+
+
+        # ============================================================
+        # 4. Training utilities
+        # ============================================================
+
+        def train_one_model(train_loader, valid_loader, device="cuda"):
+            model = SequenceClassifier(input_dim=768).to(device)
+            criterion = nn.BCELoss()
+            optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+            best_auc = 0
+            for epoch in range(5):  # keep small for demo
+                model.train()
+                for x, y, _, _ in train_loader:
+                    x, y = x.to(device), y.to(device)
+                    optimizer.zero_grad()
+                    y_pred = model(x)
+                    loss = criterion(y_pred, y)
+                    loss.backward()
+                    optimizer.step()
+
+                # Validation
+                model.eval()
+                preds, labels = [], []
+                with torch.no_grad():
+                    for x, y, _, _ in valid_loader:
+                        x, y = x.to(device), y.to(device)
+                        preds.extend(model(x).cpu().numpy())
+                        labels.extend(y.cpu().numpy())
+
+                auc = roc_auc_score(labels, preds)
+                if auc > best_auc:
+                    best_auc = auc
+                    best_state = model.state_dict()
+
+                print(f"Epoch {epoch + 1}: val ROC-AUC = {auc:.4f}")
+
+            model.load_state_dict(best_state)
+            return model, best_auc
+
+
+        # ============================================================
+        # 5. Stage 1: Train one model per TRBV gene
+        # ============================================================
+
+        def train_stage1(ds_train, ds_valid, unique_trbv, label_encoder, device="cuda"):
+            models_by_trbv = {}
+            auc_by_trbv = {}
+
+            for trbv in unique_trbv:
+                train_subset = [i for i, (_, _, g, _) in enumerate(DataLoader(ds_train, batch_size=1)) if
+                                ds_train.df.loc[i, "Vregion"] == trbv]
+                valid_subset = [i for i, (_, _, g, _) in enumerate(DataLoader(ds_valid, batch_size=1)) if
+                                ds_valid.df.loc[i, "Vregion"] == trbv]
+
+                if len(train_subset) < 5 or len(valid_subset) < 5:
+                    print(f"Skipping {trbv} (too few samples)")
+                    continue
+
+                train_loader = DataLoader(torch.utils.data.Subset(ds_train, train_subset), batch_size=64, shuffle=True)
+                valid_loader = DataLoader(torch.utils.data.Subset(ds_valid, valid_subset), batch_size=64)
+
+                print(f"\nTraining model for TRBV: {trbv}")
+                model, auc = train_one_model(train_loader, valid_loader, device)
+                models_by_trbv[trbv] = model
+                auc_by_trbv[trbv] = auc
+
+            return models_by_trbv, auc_by_trbv
+
+
+        # ============================================================
+        # 6. Stage 2: Aggregate per-patient predictions
+        # ============================================================
+
+        def aggregate_patient_predictions(ds, models_by_trbv, label_encoder, device="cuda"):
+            loader = DataLoader(ds, batch_size=128)
+
+            all_preds = []
+            all_patient_ids = []
+            all_labels = []
+
+            for x, y, g, pid in loader:
+                x = x.to(device)
+                preds = []
+                for i, trbv in enumerate(g):
+                    trbv = trbv
+                    if trbv in models_by_trbv:
+                        model = models_by_trbv[trbv]
+                        model.eval()
+                        with torch.no_grad():
+                            preds.append(model(x[i].unsqueeze(0)).item())
+                    else:
+                        preds.append(0.5)  # neutral if no model
+
+                all_preds.extend(preds)
+                all_patient_ids.extend(pid)
+                all_labels.extend(y.numpy())
+
+            # Aggregate by patient_id
+            df_preds = pd.DataFrame({
+                "patient_id": all_patient_ids,
+                "pred": all_preds,
+                "label": all_labels
+            })
+            patient_grouped = df_preds.groupby("patient_id").agg({"pred": "mean", "label": "first"})
+            auc = roc_auc_score(patient_grouped["label"], patient_grouped["pred"])
+            print(f"Patient-level ROC-AUC: {auc:.4f}")
+            return auc, patient_grouped
+
+
+        # ============================================================
+        # 7. Main script
+        # ============================================================
+
+        def mal_id_main(df_bld_train, df_bld_valid, df_hlt_train, df_hlt_valid):
+            # Combine disease + healthy for both train and validation
+            df_train = pd.concat([df_bld_train, df_hlt_train], ignore_index=True)
+            df_valid = pd.concat([df_bld_valid, df_hlt_valid], ignore_index=True)
+
+            label_encoder = LabelEncoder().fit(df_train["condition"].tolist() + df_valid["condition"].tolist())
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            # Create cached datasets for both
+            ds_train = TCRDataset(
+                df_train,
+                label_encoder,
+                cache_path="cache/train_embeddings.pkl"
+            )
+
+            ds_valid = TCRDataset(
+                df_valid,
+                label_encoder,
+                cache_path="cache/valid_embeddings.pkl"
+            )
+
+            # Stage 1: train TRBV-specific models
+            unique_trbv = sorted(set(df_train["Vregion"]))
+            models_by_trbv, auc_by_trbv = train_stage1(ds_train, ds_valid, unique_trbv, label_encoder, device)
+
+            print("\nTRBV-wise validation AUCs:")
+            for trbv, auc in auc_by_trbv.items():
+                print(f"  {trbv}: {auc:.4f}")
+
+            # Stage 2: aggregate to patient-level
+            print("\nStage 2: patient-level aggregation")
+            auc, patient_grouped = aggregate_patient_predictions(ds_valid, models_by_trbv, label_encoder, device)
+
+            return models_by_trbv, patient_grouped
+        mal_id_main(df_bld_train, df_bld_valid, df_hlt_train, df_hlt_valid)
+        print("Completed Mal-ID style training and evaluation. Exiting.")
+        exit(0)
+
     # Run VAE if specified
     # run_vae(args, dataset_loader, device)
 
@@ -774,6 +1127,10 @@ if __name__ == '__main__':
         args=args,
     )
 
+    from training.model_trainer import display_predicted_healthy_disease_confusion_matrix
+    display_cm = lambda trained_model, epoch: display_predicted_healthy_disease_confusion_matrix(
+        trained_model, epoch, df_bld, df_hlt, train_patient_ids, valid_patient_ids, test_patient_ids)
+
     # load the model if possible
     trained_model = load_or_train_model(
         model, args,
@@ -786,16 +1143,17 @@ if __name__ == '__main__':
         freeze_embed_model, special_criterion,
         embedding_lr, reg_coef, pos_weights,
         scheduler_type, masking, ratio,
-        changing_negatives, optimizer_type,
+        changing_negatives, optimizer_type, display_cm,
         reshef_inference, reshef_filter_train, reshef_negative_part
     )
 
     # TODO: Moving here for tests!
     # Run VAE if specified
-    model_for_vae = build_model(model_type, positive_seqs=positive_seqs, batch_size=batch_size, ch_dropout=ch_dropout,
-                                cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora,
-                                ch_type=ch_type, device=device, reshef_negative_part=reshef_negative_part, args=args)
-    run_vae(args, dataset_loader, device, trained_model, model_for_vae)
+    if args.train_vae:
+        model_for_vae = build_model(model_type, positive_seqs=positive_seqs, batch_size=batch_size, ch_dropout=ch_dropout,
+                                    cvc_layers_to_train=cvc_layers_to_train, freeze_embed_model=freeze_embed_model, lora=lora,
+                                    ch_type=ch_type, device=device, reshef_negative_part=reshef_negative_part, args=args)
+        run_vae(args, dataset_loader, device, trained_model, model_for_vae)
 
     # after training
     plot_all_training(

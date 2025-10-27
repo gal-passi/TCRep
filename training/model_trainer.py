@@ -183,7 +183,7 @@ def get_scheduler(optimizer, scheduler_type, **kwargs):
 
 def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 log_wandb, model_type, loss_type, freeze_embed_model, special_criterion,
-                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, optimizer_type, args,
+                embedding_lr, reg_coef, pos_weights, aaseq_to_ratio, aaseq_to_dist, change_negatives, optimizer_type, display_cm, args,
                 aaseq_to_recurrence=None, masking=False, ratio=False, scheduler_type='none',
                 epochs=10, lr=0.0005, pos_batch_size=30, neg_pos_ratio=10, is_sweep=False,
                 reshef_inference=False, reshef_filter_train=False, reshef_negative_part=0,
@@ -775,6 +775,8 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_fnr": val_fnr,
                 "val_f1": val_f1
             })
+            # displaying confusion matrix in wandb for this epoch
+            # display_cm(model, epoch)  # TODO: Problem with this part! Fix it later! (Removed for now)
 
         # saving the model for this epoch on odd epochs or on last epoch
         # is_odd_or_last_epoch = ((epoch + 1) % 2 == 1 and epoch >= 15) or epoch + 1 == epochs
@@ -935,3 +937,122 @@ def display_training_results(history, model_type, figsize=(15, 10)):
     os.makedirs(f"plots/{model_type}_model", exist_ok=True)
     plt.savefig(f"plots/{model_type}_model/training_results.png")
     plt.show()
+
+
+def display_predicted_healthy_disease_confusion_matrix(trained_model, epoch, df_bld, df_hlt,
+                                                       train_patient_ids, valid_patient_ids, test_patient_ids,
+                                                       chosen_components=2, covariance_type='tied'):
+    from sklearn.mixture import GaussianMixture
+    from sklearn.metrics import confusion_matrix
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+
+    trained_model.eval()
+    def get_probs_by_patient_ids(patient_ids, df, is_train=True):
+        patient_probs = []
+        for patient_id in patient_ids:
+            patient_seqs = df[df['patient_id'] == patient_id]['AASeq']
+            with torch.no_grad():
+                disease_logits = trained_model(patient_seqs)
+            disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
+            patient_probs.append(disease_probs)
+        if is_train:
+            probs_flat = np.concatenate([probs.flatten() for probs in patient_probs])
+            return probs_flat.reshape(-1, 1)
+        else:
+            return patient_probs
+
+    # get train and valid/test probs (for disease)
+    disease_train_probs = get_probs_by_patient_ids(train_patient_ids, df_bld, is_train=True)
+    disease_valid_probs = get_probs_by_patient_ids(np.concatenate([valid_patient_ids, test_patient_ids]), df_bld, is_train=False)
+
+    # get healthy patient ids for train and valid/test
+    healthy_patient_ids = sorted(df_hlt['patient_id'].unique())
+    rng = np.random.default_rng(seed=42)
+    rng.shuffle(healthy_patient_ids)
+    healthy_train_patient_ids = healthy_patient_ids[:len(train_patient_ids)]
+    healthy_valid_patient_ids = healthy_patient_ids[len(train_patient_ids):len(train_patient_ids) * 2]
+    # get train and valid/test probs (for healthy)
+    healthy_train_probs = get_probs_by_patient_ids(healthy_train_patient_ids, df_hlt, is_train=True)
+    healthy_valid_probs = get_probs_by_patient_ids(healthy_valid_patient_ids, df_hlt, is_train=False)
+
+    # fit GMMs
+    final_patient_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
+    final_patient_gmm.fit(disease_train_probs)
+    final_healthy_gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
+    final_healthy_gmm.fit(healthy_train_probs)
+
+    # def fit_multiple_gmms(probabilities):
+    #     gmms = []
+    #     for prob in probabilities:
+    #         prob_reshaped = prob.flatten().reshape(-1, 1)
+    #         gmm = GaussianMixture(n_components=chosen_components, random_state=42, covariance_type=covariance_type)
+    #         gmm.fit(prob_reshaped)
+    #         gmms.append(gmm)
+    #     return gmms
+    #
+    # patient_gmm_models = fit_multiple_gmms(disease_valid_probs)
+    # healthy_gmm_models = fit_multiple_gmms(healthy_valid_probs)
+
+    # continue from here...
+
+    def compute_ll_diff(patient_probs):
+        patient_probs_reshaped = patient_probs.flatten().reshape(-1, 1)
+        patient_ll = np.mean(final_patient_gmm.score_samples(patient_probs_reshaped))
+        healthy_ll = np.mean(final_healthy_gmm.score_samples(patient_probs_reshaped))
+        return patient_ll - healthy_ll
+
+    # Compute LL differences for disease + healthy subjects
+    disease_diffs = np.array([compute_ll_diff(probs) for probs in disease_valid_probs])
+    healthy_diffs = np.array([compute_ll_diff(probs) for probs in healthy_valid_probs])
+
+    # Combine
+    all_diffs = np.concatenate([disease_diffs, healthy_diffs])
+    true_labels = np.array([1] * len(disease_diffs) + [0] * len(healthy_diffs))  # 1 = disease, 0 = healthy
+
+    # --- Case 1: No threshold (100% of patients kept)
+    preds_no_threshold = (all_diffs > 0).astype(int)
+    cm_no_thresh = confusion_matrix(true_labels, preds_no_threshold)
+
+    # --- Case 2: 75th percentile threshold (leave 25% out)
+    abs_diffs = np.abs(all_diffs)
+    threshold_75 = np.percentile(abs_diffs, 25)  # remove 25% closest to 0 → leaving 75%
+    keep_mask = abs_diffs >= threshold_75
+
+    filtered_labels = true_labels[keep_mask]
+    filtered_diffs = all_diffs[keep_mask]
+
+    preds_75 = (filtered_diffs > 0).astype(int)
+    cm_75 = confusion_matrix(filtered_labels, preds_75)
+
+    # ---------------------------------------
+    # Plot only the two confusion matrices
+    # ---------------------------------------
+    # Compute accuracies
+    acc_no_thresh = np.trace(cm_no_thresh) / np.sum(cm_no_thresh)
+    acc_75 = np.trace(cm_75) / np.sum(cm_75)
+
+    fig, axs = plt.subplots(1, 2, figsize=(10, 4))
+
+    # No threshold CM
+    sns.heatmap(cm_no_thresh, annot=True, fmt='d', cmap='Blues',
+                xticklabels=['Healthy', 'Disease'],
+                yticklabels=['Healthy', 'Disease'],
+                ax=axs[0], cbar=False)
+    axs[0].set_title(f'No Threshold\nAccuracy: {acc_no_thresh:.3f}')
+    axs[0].set_xlabel('Predicted Label')
+    axs[0].set_ylabel('True Label')
+
+    # 75th percentile CM
+    sns.heatmap(cm_75, annot=True, fmt='d', cmap='Oranges',
+                xticklabels=['Healthy', 'Disease'],
+                yticklabels=['Healthy', 'Disease'],
+                ax=axs[1], cbar=False)
+    axs[1].set_title(f'75th Percentile\n(Thr={threshold_75:.4f}) | Accuracy: {acc_75:.3f}')
+    axs[1].set_xlabel('Predicted Label')
+    axs[1].set_ylabel('True Label')
+
+    plt.tight_layout()
+    title = f"predicted_healthy_disease_confusion_matrix_epoch_{epoch + 1}"
+    # TODO: There is a problem with this part!!! FIX IT!
+    wandb.log({title: wandb.Image(plt)}, step=epoch)

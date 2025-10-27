@@ -14,6 +14,14 @@ def get_model_config_str(args):
         metadata += f"_npatients-{args.dataset_filter_num_of_patients}"
     if args.dataset_filter_num_of_healthy != args.dataset_filter_num_of_patients and args.dataset_filter_num_of_healthy != -1:
         metadata += f"_nhealthy-{args.dataset_filter_num_of_healthy}"
+    if args.top_percent is not None:
+        metadata += f"_toppercent-{args.top_percent}"
+    if args.top_n_seqs is not None:
+        metadata += f"_topnseqs-{args.top_n_seqs}k"
+    if args.plus_healthy_mal_id:
+        metadata += f"_plushlt-{args.plus_healthy_mal_id}"
+    if args.extra_ms_from_pregnant:
+        metadata += f"_extrams"
 
     config_str = f"{args.model_type}_loss-{args.loss_type}_dataset-{args.dataset_type}{metadata}_epochs-{args.epochs}_" \
                  f"batch-{args.batch_size}_ratio-{args.neg_pos_ratio}_weights-{args.pos_weights}_" \

@@ -22,6 +22,7 @@ STUDY_ID12 = 'PRJNA273698'  # Healthy
 STUDY_ID13 = 'immunoSEQ139'  # Cancer and Healthy
 STUDY_ID14 = 'immunoSEQ21'  # Healthy
 STUDY_ID15 = 'immunoSEQ54'  # Alopecia Areata and Healthy
+STUDY_ID16 = 'immunoSEQ68'  # Cytomegalovirus
 HEALTHY_STUDY_ID = STUDY_ID3  # ONLY CD8
 HEALTHY_STUDY_ID2 = STUDY_ID4  # Both CD8 and CD4
 HEALTHY_STUDY_ID3 = STUDY_ID5  # Larger both CD8 and CD4 (But fewer patients!)
@@ -36,7 +37,7 @@ TCRDB2_PATH = 'data/db/tcrdb2'
 
 
 #  SETUP PARAMETERS
-BASE_DIRECTORY = os.getcwd()
+BASE_DIRECTORY = os.path.dirname(os.getcwd())
 STUDIES_DATABASE = 'data/db'
 TCR_DATABASES = {'tcrdb': 'tcrdb', 'tcrdb2': 'tcrdb2'}
 OBJECTS_DATABASE = 'data/objects'

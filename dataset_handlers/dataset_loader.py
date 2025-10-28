@@ -19,9 +19,6 @@ from dataset_handlers.losses_utils import LossPreprocessor
 from dataset_handlers.dataset_builder import build_disease_healthy_dataset
 
 
-# TODO: Formatting changes:
-#  1. remove redundant unused functions
-#  2. move more code from the init function of the DatasetLoader class (to other files)
 class DatasetLoader:
     def __init__(self, dataset_type: str, unique_patient_ids=None, get_only_unique_patient_ids=False, k_fold=0,
                  use_dist_loss='none', dist_param=0.0, neg_partition=0, use_similar_negatives=False, neg_pos_ratio=10,
@@ -46,8 +43,11 @@ class DatasetLoader:
         self.extra_ms_path = 'data/db/tcrdb/special2'
 
         print('Loading Basic DFs:')
-        df = self.get_all_usable_disease_data(disease='Multiple sclerosis', dataset_type=dataset_type)
-        df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type)
+        df = self.get_all_usable_disease_data(disease='Multiple sclerosis', dataset_type='ms_tcrdb2')  # always loading from tcrdb2 (ms studies)
+        dataset_type_hlt = f"ms_tcrdb2"
+        if 'no_healthy_ms' in dataset_type:
+            dataset_type_hlt += "_no_healthy_ms"
+        df_h = self.get_all_usable_healthy_data(dataset_type=dataset_type_hlt)
 
         print('Loading Datasets:')
         df_bld, df_hlt = self.load_dataset(dataset_type, df, df_h, extra_filter, top_percent, top_n_seqs, get_df_excess_hlt=False)
@@ -467,12 +467,20 @@ class DatasetLoader:
         cache_dir = self.cache_dataframes_path
         os.makedirs(cache_dir, exist_ok=True)
 
-        cache_path = None
-        if dataset_type is not None:
-            cache_path = os.path.join(cache_dir, f"{dataset_type}.pkl")
-            if os.path.exists(cache_path):
-                print(f"Loading cached data from {cache_path}")
-                return pd.read_pickle(cache_path)
+        saved_dataset_type = 'ms_tcrdb2'
+        if disease == 'CMV':
+            saved_dataset_type = 'cmv_tcrdb2'
+        if 'no_healthy_ms' in dataset_type:
+            saved_dataset_type += "_no_healthy_ms"
+        if self.top_n_seqs is not None:
+            saved_dataset_type += f'_top_{self.top_n_seqs}k'
+        if self.top_percent is not None:
+            saved_dataset_type += f'_top_{self.top_percent}'
+
+        cache_path = os.path.join(cache_dir, f"{saved_dataset_type}.pkl")
+        if os.path.exists(cache_path):
+            print(f"Loading cached data from {cache_path}")
+            return pd.read_pickle(cache_path)
 
         studies = []
         if disease == 'Ankylosing spondylitis':
@@ -486,23 +494,16 @@ class DatasetLoader:
         elif disease == 'Multiple sclerosis':
             study_ids = [STUDY_ID8, STUDY_ID6, STUDY_ID7]
         elif disease == 'CMV':  # Cytomegalovirus
-            study_ids = [STUDY_ID9, STUDY_ID10, STUDY_ID11]
+            study_ids = [STUDY_ID9, STUDY_ID10, STUDY_ID11, STUDY_ID16]
         else:
             raise ValueError(f"Invalid disease: {disease}")
 
         for study_id in study_ids:
-            # df = self.load_study_df(study_id, disease)
-            # studies.append(df)
-            # continue
-
             study = Study(study_id)
             usable_samples = study._samples['usable']
             data_source = 'tcrdb2' if 'tcrdb2' in dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition=disease if not get_all else None,
                                    top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
-            # if not get_all:
-            #     df = df[df['condition'] == disease]
-            # df['study_id'] = study_id  # TODO: There is a SettingWithCopyWarning here!
             studies.append(df)
 
         all_df = pd.concat(studies, ignore_index=True)
@@ -512,36 +513,37 @@ class DatasetLoader:
             all_df.to_pickle(cache_path)
         return all_df
 
-    def get_all_usable_healthy_data(self, dataset_type='ms'):
+    def get_all_usable_healthy_data(self, dataset_type='ms_tcrdb2'):
         # Set up cache path
         cache_dir = self.cache_dataframes_healthy_path
         os.makedirs(cache_dir, exist_ok=True)
-        cache_path = None
-        if dataset_type is not None:
-            cache_path = os.path.join(cache_dir, f"{dataset_type}.pkl")
-            if os.path.exists(cache_path):
-                print(f"Loading cached healthy data from {cache_path}")
-                return pd.read_pickle(cache_path)
+
+        saved_dataset_type = 'ms_tcrdb2'
+        if 'no_healthy_ms' in dataset_type:
+            saved_dataset_type += "_no_healthy_ms"
+        if self.top_n_seqs is not None:
+            saved_dataset_type += f'_top_{self.top_n_seqs}k'
+        if self.top_percent is not None:
+            saved_dataset_type += f'_top_{self.top_percent}'
+
+        cache_path = os.path.join(cache_dir, f"{saved_dataset_type}.pkl")
+        if os.path.exists(cache_path):
+            print(f"Loading cached healthy data from {cache_path}")
+            return pd.read_pickle(cache_path)
 
         healthy_study_ids = [HEALTHY_STUDY_ID, HEALTHY_STUDY_ID2, HEALTHY_STUDY_ID3]
-        if not 'no_healthy_ms' in dataset_type:
+        if not 'no_healthy_ms' in saved_dataset_type:
             healthy_study_ids += [HEALTHY_STUDY_ID4, HEALTHY_STUDY_ID5]
-        if 'tcrdb2' in dataset_type:
+        if 'tcrdb2' in saved_dataset_type:
             healthy_study_ids += [HEALTHY_STUDY_ID6, HEALTHY_STUDY_ID7, HEALTHY_STUDY_ID8, HEALTHY_STUDY_ID9]
 
         healthy_studies = []
         for study_id in healthy_study_ids:
-            # df = self.load_study_df(study_id, disease)
-            # healthy_studies.append(df)
-            # continue
-
             study = Study(study_id)
             usable_samples = study._samples['usable']
-            data_source = 'tcrdb2' if 'tcrdb2' in dataset_type else 'tcrdb'
+            data_source = 'tcrdb2' if 'tcrdb2' in saved_dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition='Healthy',
                                    top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
-            # df = df[df['condition'] == 'Healthy']
-            # df['study_id'] = study_id
             healthy_studies.append(df)
         df_concat = pd.concat(healthy_studies, ignore_index=True)
         df_concat = df_concat.dropna(subset=['AASeq'])

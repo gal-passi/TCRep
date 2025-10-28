@@ -776,7 +776,7 @@ def train_model(model, train_pos_seqs, neg_seqs, valid_pos_seqs, valid_neg_seqs,
                 "val_f1": val_f1
             })
             # displaying confusion matrix in wandb for this epoch
-            # display_cm(model, epoch)  # TODO: Problem with this part! Fix it later! (Removed for now)
+            display_cm(model, epoch)
 
         # saving the model for this epoch on odd epochs or on last epoch
         # is_odd_or_last_epoch = ((epoch + 1) % 2 == 1 and epoch >= 15) or epoch + 1 == epochs
@@ -947,12 +947,18 @@ def display_predicted_healthy_disease_confusion_matrix(trained_model, epoch, df_
     import matplotlib.pyplot as plt
     import seaborn as sns
 
+    # set random variable for reproducibility (for sampling sequences per patient)
+    rng = np.random.default_rng(seed=42)
     trained_model.eval()
     def get_probs_by_patient_ids(patient_ids, df, is_train=True):
         patient_probs = []
         for patient_id in patient_ids:
             patient_seqs = df[df['patient_id'] == patient_id]['AASeq']
             with torch.no_grad():
+                # sample 10k or min of the patient seqs (to reduce time)
+                if len(patient_seqs) > 10000:
+                    sampled_indices = rng.choice(len(patient_seqs), size=10000, replace=False)
+                    patient_seqs = patient_seqs.iloc[sampled_indices]
                 disease_logits = trained_model(patient_seqs)
             disease_probs = torch.softmax(disease_logits, dim=1)[:, 1].cpu().numpy()
             patient_probs.append(disease_probs)
@@ -1054,5 +1060,4 @@ def display_predicted_healthy_disease_confusion_matrix(trained_model, epoch, df_
 
     plt.tight_layout()
     title = f"predicted_healthy_disease_confusion_matrix_epoch_{epoch + 1}"
-    # TODO: There is a problem with this part!!! FIX IT!
-    wandb.log({title: wandb.Image(plt)}, step=epoch)
+    wandb.log({title: wandb.Image(fig)}, step=epoch)

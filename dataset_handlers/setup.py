@@ -24,13 +24,13 @@ def create_directories():
 
 def get_study_df(study_id, columns):
     # Read the file (e.x. "db/tcrdb/PRJNA393498.txt")
-    if os.path.exists(os.path.join(STUDIES_DATABASE, TCR_DATABASES['tcrdb'], f"{study_id}.txt")):
+    if os.path.exists(os.path.join(BASE_DIRECTORY, STUDIES_DATABASE, TCR_DATABASES['tcrdb'], f"{study_id}.txt")):
         tcrdb_database = TCR_DATABASES['tcrdb']
-    elif os.path.exists(os.path.join(STUDIES_DATABASE, TCR_DATABASES['tcrdb2'], study_id, f"{study_id}.txt")):
+    elif os.path.exists(os.path.join(BASE_DIRECTORY, STUDIES_DATABASE, TCR_DATABASES['tcrdb2'], study_id, f"{study_id}.txt")):
         tcrdb_database = os.path.join(TCR_DATABASES['tcrdb2'], study_id)
     else:
         raise FileNotFoundError(f"No TCR database found in {STUDIES_DATABASE}. Please download the studies first.")
-    with open(os.path.join(STUDIES_DATABASE, tcrdb_database, f"{study_id}.txt"), "r") as f:
+    with open(os.path.join(BASE_DIRECTORY, STUDIES_DATABASE, tcrdb_database, f"{study_id}.txt"), "r") as f:
         lines = [line.strip() for line in f if line.strip()]  # Remove empty lines
 
     # Parse the data in chunks of len(lines)+1 lines (1 line per attribute)
@@ -141,13 +141,13 @@ if __name__ == '__main__':
     study = build_study(study_id, study_df, "Immune Repertoire Sequencing Using Molecular Identifiers Enables Accurate Clonality Discovery and Clone Size Quantification",
                 [], [], [])
 
-    study_id = "PRJNA318421"
+    study_id = "PRJNA318421"  # CMV
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "Homo sapiens TCR repertoire of CD8 T lymphocytes against CMV-pp65 NLV and Flu-M1 GIL",
                 [], [], [])
 
-    study_id = "PRJNA473147"
+    study_id = "PRJNA473147"  # CMV
     columns = ["Sample ID", "Cell Source", "Cell Type", "Condition", "Comment", "Read Length", "Bases (M)", "LibraryLayout"]
     study_df = get_study_df(study_id, columns)
     study = build_study(study_id, study_df, "Antigen-specific T-cell receptor signatures of cytomegalovirus infection (human)",

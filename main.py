@@ -98,8 +98,8 @@ def get_dataset_loader(dataset_type, k_fold=0, to_k_fold=True, use_dist_loss=Fal
     np.random.seed(42)
     # Load data
     unique_patient_ids = None
-    if dataset_type == 'cmv':
-        num_test_patients = 4
+    if 'cmv' in dataset_type:
+        num_test_patients = 8
     elif 'article_sle' in dataset_type or 't1d' in dataset_type:
         num_test_patients = 10
     else:
@@ -329,8 +329,8 @@ def get_arg_parser():
     scheduler_types = ['None', 'StepLR', 'ReduceLROnPlateau', 'CosineAnnealingLR', 'ExponentialLR']
     dataset_types = ['ms', 'ms_hlt_article', 'ms_plus_hlt_article',
                      'ms_extra', 'ms_extra_hlt_article', 'ms_extra_plus_hlt_article',
-                     'ms_no_healthy_ms',
-                     'article', 'cmv',
+                     'ms_no_healthy_ms', 'article',
+                     'cmv', 'cmv_plus_hlt_ms', 'cmv_plus_hlt_article', 'cmv_plus_hlt_ms_plus_hlt_article',
                      'article_sle', 'article_sle_hlt_ms_no_healthy_ms', 'article_sle_plus_hlt_ms_no_healthy_ms',
                      't1d', 't1d_hlt_ms_no_healthy_ms', 't1d_plus_hlt_ms_no_healthy_ms',
                      'ms_tcrdb2', 'ms_tcrdb2_no_healthy_ms', 'ms_tcrdb2_hlt_article',

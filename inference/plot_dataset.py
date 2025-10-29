@@ -563,6 +563,8 @@ def display_background_top_n_sequences_model_figure(wrapper_load_dataset, wrappe
     plt.savefig(f"plots/common_seqs/{dataset_type[:-8]}/background{metadata_name}_d{num_of_patients}.h{num_of_healthy}.png")
     plt.show()
     pass
+    print(f"saved to: plots/common_seqs/{dataset_type[:-8]}/background{metadata_name}_d{num_of_patients}.h{num_of_healthy}.png")
+    print('Done displaying background top N sequences model figure! Exiting.')
     exit(0)
 
 

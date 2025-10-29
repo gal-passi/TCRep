@@ -1060,4 +1060,4 @@ def display_predicted_healthy_disease_confusion_matrix(trained_model, epoch, df_
 
     plt.tight_layout()
     title = f"predicted_healthy_disease_confusion_matrix_epoch_{epoch + 1}"
-    wandb.log({title: wandb.Image(fig)}, step=epoch)
+    wandb.log({title: wandb.Image(fig)}, step=epoch + 1)

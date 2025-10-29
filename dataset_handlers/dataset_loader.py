@@ -463,19 +463,24 @@ class DatasetLoader:
     def get_masks(self):
         return self.train_masks, self.valid_masks, self.test_masks
 
-    def get_all_usable_disease_data(self, disease='Multiple sclerosis', dataset_type=None, get_all=False):
+    def get_all_usable_disease_data(self, disease='Multiple sclerosis', dataset_type=None, get_all=False, top_percent=None, top_n_seqs=None):
         cache_dir = self.cache_dataframes_path
         os.makedirs(cache_dir, exist_ok=True)
+
+        if top_percent is None:
+            top_percent = self.top_percent
+        if top_n_seqs is None:
+            top_n_seqs = self.top_n_seqs
 
         saved_dataset_type = 'ms_tcrdb2'
         if disease == 'CMV':
             saved_dataset_type = 'cmv_tcrdb2'
         if 'no_healthy_ms' in dataset_type:
             saved_dataset_type += "_no_healthy_ms"
-        if self.top_n_seqs is not None:
-            saved_dataset_type += f'_top_{self.top_n_seqs}k'
-        if self.top_percent is not None:
-            saved_dataset_type += f'_top_{self.top_percent}'
+        if top_n_seqs is not None:
+            saved_dataset_type += f'_top_{top_n_seqs}k'
+        if top_percent is not None:
+            saved_dataset_type += f'_top_{top_percent}'
 
         cache_path = os.path.join(cache_dir, f"{saved_dataset_type}.pkl")
         if os.path.exists(cache_path):
@@ -503,7 +508,7 @@ class DatasetLoader:
             usable_samples = study._samples['usable']
             data_source = 'tcrdb2' if 'tcrdb2' in dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition=disease if not get_all else None,
-                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
+                                   top_percent=top_percent, top_n_seqs=top_n_seqs, data_source=data_source)
             studies.append(df)
 
         all_df = pd.concat(studies, ignore_index=True)
@@ -513,18 +518,23 @@ class DatasetLoader:
             all_df.to_pickle(cache_path)
         return all_df
 
-    def get_all_usable_healthy_data(self, dataset_type='ms_tcrdb2'):
+    def get_all_usable_healthy_data(self, dataset_type='ms_tcrdb2', top_percent=None, top_n_seqs=None):
         # Set up cache path
         cache_dir = self.cache_dataframes_healthy_path
         os.makedirs(cache_dir, exist_ok=True)
 
+        if top_percent is None:
+            top_percent = self.top_percent
+        if top_n_seqs is None:
+            top_n_seqs = self.top_n_seqs
+
         saved_dataset_type = 'ms_tcrdb2'
         if 'no_healthy_ms' in dataset_type:
             saved_dataset_type += "_no_healthy_ms"
-        if self.top_n_seqs is not None:
-            saved_dataset_type += f'_top_{self.top_n_seqs}k'
-        if self.top_percent is not None:
-            saved_dataset_type += f'_top_{self.top_percent}'
+        if top_n_seqs is not None:
+            saved_dataset_type += f'_top_{top_n_seqs}k'
+        if top_percent is not None:
+            saved_dataset_type += f'_top_{top_percent}'
 
         cache_path = os.path.join(cache_dir, f"{saved_dataset_type}.pkl")
         if os.path.exists(cache_path):
@@ -543,7 +553,7 @@ class DatasetLoader:
             usable_samples = study._samples['usable']
             data_source = 'tcrdb2' if 'tcrdb2' in saved_dataset_type else 'tcrdb'
             df = study.read_sample(usable_samples, condition='Healthy',
-                                   top_percent=self.top_percent, top_n_seqs=self.top_n_seqs, data_source=data_source)
+                                   top_percent=top_percent, top_n_seqs=top_n_seqs, data_source=data_source)
             healthy_studies.append(df)
         df_concat = pd.concat(healthy_studies, ignore_index=True)
         df_concat = df_concat.dropna(subset=['AASeq'])

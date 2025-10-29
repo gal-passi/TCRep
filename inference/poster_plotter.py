@@ -1421,7 +1421,7 @@ def plot_dataset_information():
     # merge_backup_to_main()
 
     # You can also do custom analysis
-    dataset_type = ['ms_tcrdb2_no_healthy_ms_plus_hlt_article_extra_ms', 'article_sle_plus_hlt_ms_no_healthy_ms'][1]
+    dataset_type = ['ms_tcrdb2_no_healthy_ms_plus_hlt_article_extra_ms', 'article_sle_plus_hlt_ms_no_healthy_ms'][0]
     if df_analysis is not None and len(df_analysis) > 0:
         df_ms_all = df_analysis[
             df_analysis['dataset_type'].str.contains(
@@ -1488,6 +1488,49 @@ def plot_dataset_information():
             plt.tight_layout(rect=[0, 0, 1, 0.97])
             plt.show()
 
+            def plot_lines():
+                # Filter dataset_type
+                dataset_type = 'ms_tcrdb2_no_healthy_ms_plus_hlt_article_extra_ms'
+                df_ms = df_analysis[
+                    df_analysis['dataset_type'].str.contains(
+                        dataset_type
+                    )
+                ]
+                df_ms = df_ms_all[df_ms_all['filter_to_inflate'] == to_inflate]
+                # Keep only relevant columns, rename as requested
+                df_summary = df_ms[
+                    ['top_n_seqs', 'filter_num_of_healthy', 'filter_num_of_patients', 'train_pos_seqs_count']].copy()
+
+                df_summary = df_summary.rename(columns={
+                    'top_n_seqs': 'topn',
+                    'filter_num_of_healthy': 'num_of_healthy',
+                    'filter_num_of_patients': 'num_of_disease',
+                    'train_pos_seqs_count': 'total_positives'
+                })
+
+                # Sort nicely
+                df_summary = df_summary.sort_values(by=['topn', 'num_of_healthy', 'num_of_disease']).reset_index(
+                    drop=True)
+
+                for topn, group in list(df_summary.groupby("topn"))[1:2]:
+                    plt.figure()
+
+                    # Now grouping by num_of_disease creates separate lines
+                    for disease_val, sub in group.groupby("num_of_disease"):
+                        sub = sub.sort_values("num_of_healthy")  # ensure lines are connected in order
+                        plt.plot(sub["num_of_healthy"], sub["total_positives"], marker='o',
+                                 label=f"{disease_val}")
+
+                    plt.xlabel("Common in Healthy")
+                    plt.ylabel("Total Positive Sequences")
+                    plt.title(f"TopN = {topn}")
+                    plt.legend(title="Common in Disease")
+                    # plt.grid(True)
+                    plt.tight_layout()
+                    plt.show()
+
+            pass
+
         # print("=== Custom Analysis Example ===")
         # # Group by configuration and see average sequence counts
         # groupby_cols = ['dataset_type', 'filter_num_of_patients', 'filter_num_of_healthy', 'top_n_seqs']
@@ -1499,7 +1542,6 @@ def plot_dataset_information():
         #         if col in df_analysis.columns
         #     }).round(2)
         #     print(grouped)
-    pass
 
 
 if __name__ == '__main__':
@@ -1507,6 +1549,6 @@ if __name__ == '__main__':
     # plot_embeddings()
     # plot_average_embeddings()
     # calculations_for_poster()
-    plot_ablation_on_folds()
+    # plot_ablation_on_folds()
     # plot_classification_ablation()
-    # plot_dataset_information()
+    plot_dataset_information()
